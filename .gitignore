@@ -1,0 +1,14 @@
+# Runtime state Wax writes next to itself in an installed game
+runtime/saved/
+runtime/run/
+runtime/enabled.txt
+
+# Third-party pieces that ship in the release zip, not source
+runtime/assets/lucide/
+runtime/bin/
+*.dll
+*.exe
+
+# Build output
+*.vsix
+node_modules/

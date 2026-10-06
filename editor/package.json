@@ -1,0 +1,305 @@
+{
+  "name": "wax-icarus",
+  "displayName": "Wax for Icarus",
+  "description": "Write Lua mods for ICARUS with Wax. It starts new mods for you, completes and checks your code, runs it in the running game, and shows the game's log and errors.",
+  "version": "0.1.1",
+  "license": "MIT",
+  "publisher": "RobertCincotta",
+  "icon": "icon.png",
+  "homepage": "https://wax-icarus.duckdns.org/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bostonstrong567/icarus-wax.git"
+  },
+  "bugs": {
+    "url": "https://github.com/bostonstrong567/icarus-wax/issues"
+  },
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets",
+    "Other"
+  ],
+  "keywords": [
+    "icarus",
+    "wax",
+    "lua",
+    "modding",
+    "mods",
+    "game mods",
+    "ue4ss",
+    "hot reload"
+  ],
+  "main": "./extension.js",
+  "extensionDependencies": [
+    "sumneko.lua"
+  ],
+  "activationEvents": [
+    "onLanguage:lua",
+    "workspaceContains:luamods",
+    "workspaceContains:wax/runtime/Scripts/main.lua",
+    "workspaceContains:Scripts/main.lua",
+    "workspaceContains:mod.lua"
+  ],
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\""
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "wax.newMod",
+        "title": "New Mod",
+        "category": "Wax",
+        "icon": "$(add)"
+      },
+      {
+        "command": "wax.newScript",
+        "title": "New Script",
+        "category": "Wax",
+        "icon": "$(new-file)"
+      },
+      {
+        "command": "wax.setUpEditor",
+        "title": "Set Up Editor Support",
+        "category": "Wax"
+      },
+      {
+        "command": "wax.runFile",
+        "title": "Run File in Game",
+        "category": "Wax",
+        "icon": "$(play)"
+      },
+      {
+        "command": "wax.runSelection",
+        "title": "Run Selection in Game",
+        "category": "Wax",
+        "icon": "$(play)"
+      },
+      {
+        "command": "wax.stopScripts",
+        "title": "Stop Scripts Run from the Editor",
+        "category": "Wax",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "wax.reloadMod",
+        "title": "Reload Mod",
+        "category": "Wax",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "wax.showLog",
+        "title": "Show Log",
+        "category": "Wax",
+        "icon": "$(output)"
+      },
+      {
+        "command": "wax.refreshMods",
+        "title": "Refresh Mods",
+        "category": "Wax",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "wax.enableMod",
+        "title": "Enable Mod",
+        "category": "Wax",
+        "icon": "$(check)"
+      },
+      {
+        "command": "wax.disableMod",
+        "title": "Disable Mod",
+        "category": "Wax",
+        "icon": "$(circle-slash)"
+      },
+      {
+        "command": "wax.openMod",
+        "title": "Open Mod",
+        "category": "Wax",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "wax.openDocs",
+        "title": "Open Documentation",
+        "category": "Wax",
+        "icon": "$(book)"
+      },
+      {
+        "command": "wax.chooseGameFolder",
+        "title": "Choose the ICARUS Folder",
+        "category": "Wax",
+        "icon": "$(folder-opened)"
+      },
+      {
+        "command": "wax.getWax",
+        "title": "Open the Download Page",
+        "category": "Wax",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "wax.addDependency",
+        "title": "Add Dependency to mod.lua",
+        "category": "Wax"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "wax.addDependency",
+          "when": "false"
+        }
+      ],
+      "editor/title/run": [
+        {
+          "command": "wax.runFile",
+          "when": "resourceLangId == lua",
+          "group": "navigation@1"
+        },
+        {
+          "command": "wax.runSelection",
+          "when": "resourceLangId == lua && editorHasSelection",
+          "group": "navigation@2"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "wax.reloadMod",
+          "when": "resourceLangId == lua && wax.editorInMod",
+          "group": "navigation@1"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "wax.runSelection",
+          "when": "editorLangId == lua && editorHasSelection",
+          "group": "wax@1"
+        },
+        {
+          "command": "wax.runFile",
+          "when": "editorLangId == lua",
+          "group": "wax@2"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "wax.newMod",
+          "when": "view == wax.mods",
+          "group": "navigation@1"
+        },
+        {
+          "command": "wax.refreshMods",
+          "when": "view == wax.mods",
+          "group": "navigation@2"
+        },
+        {
+          "command": "wax.showLog",
+          "when": "view == wax.mods",
+          "group": "wax@1"
+        },
+        {
+          "command": "wax.setUpEditor",
+          "when": "view == wax.mods",
+          "group": "wax@2"
+        },
+        {
+          "command": "wax.chooseGameFolder",
+          "when": "view == wax.mods",
+          "group": "wax@3"
+        },
+        {
+          "command": "wax.openDocs",
+          "when": "view == wax.mods",
+          "group": "wax@4"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "wax.reloadMod",
+          "when": "view == wax.mods && viewItem == mod.on",
+          "group": "inline@1"
+        },
+        {
+          "command": "wax.disableMod",
+          "when": "view == wax.mods && viewItem == mod.on",
+          "group": "inline@2"
+        },
+        {
+          "command": "wax.enableMod",
+          "when": "view == wax.mods && viewItem == mod.off",
+          "group": "inline@2"
+        },
+        {
+          "command": "wax.openMod",
+          "when": "view == wax.mods && viewItem =~ /^mod\\./",
+          "group": "inline@3"
+        },
+        {
+          "command": "wax.newScript",
+          "when": "view == wax.mods && viewItem =~ /^mod\\./",
+          "group": "wax@1"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "wax",
+          "title": "Wax",
+          "icon": "media/wax.svg"
+        }
+      ]
+    },
+    "views": {
+      "wax": [
+        {
+          "id": "wax.mods",
+          "name": "Mods"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "wax.mods",
+        "contents": "Wax was not found in ICARUS.\n[Choose the ICARUS Folder](command:wax.chooseGameFolder)\nIf Wax is not installed yet, download it and run \"Install Wax.cmd\".\n[Get Wax](command:wax.getWax)",
+        "when": "!wax.hasRuntime"
+      },
+      {
+        "view": "wax.mods",
+        "contents": "No mods yet.\n[New Mod](command:wax.newMod)\n[Open Documentation](command:wax.openDocs)",
+        "when": "wax.hasRuntime"
+      }
+    ],
+    "configuration": {
+      "title": "Wax",
+      "properties": {
+        "wax.gamePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "order": 1,
+          "markdownDescription": "The folder ICARUS is installed in, for example `C:\\Program Files (x86)\\Steam\\steamapps\\common\\Icarus`. Leave it empty and the extension looks in the open folders, then in your Steam libraries. The command **Wax: Choose the ICARUS Folder** fills it in for you."
+        },
+        "wax.runtimePath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "order": 2,
+          "markdownDescription": "The Wax folder the game loads, the one holding `Scripts` and `mods`: `...\\Icarus\\Icarus\\Binaries\\Win64\\ue4ss\\Mods\\Wax`. Set it only when Wax is somewhere other than in the game folder. It is tried before `wax.gamePath`. Both settings take the ICARUS folder or the Wax folder."
+        },
+        "wax.docsUrl": {
+          "type": "string",
+          "default": "https://wax-icarus.duckdns.org/",
+          "order": 3,
+          "description": "The address of the Wax docs. \"Wax: Open Documentation\" opens it, and the links to single pages start with it."
+        }
+      }
+    },
+    "snippets": [
+      {
+        "language": "lua",
+        "path": "./snippets/wax.json"
+      }
+    ]
+  }
+}

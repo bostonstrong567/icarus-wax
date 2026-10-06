@@ -1,0 +1,84 @@
+{
+  "Wax: window with a button": {
+    "prefix": "wax-window",
+    "description": "A window in the menu (F8) with one button",
+    "body": [
+      "local ${1:window} = ui.Window({ title = \"${2:My Window}\", width = ${3:320}, height = ${4:220} })",
+      "${1:window}:Button(\"${5:Click me}\", function()",
+      "\t${0:print(\"clicked\")}",
+      "end)"
+    ]
+  },
+  "Wax: toggle": {
+    "prefix": "wax-toggle",
+    "description": "A switch on a window, section or overlay",
+    "body": [
+      "${1:window}:Toggle(\"${2:Enabled}\", ${3:false}, function(on)",
+      "\t${0:print(on)}",
+      "end)"
+    ]
+  },
+  "Wax: slider": {
+    "prefix": "wax-slider",
+    "description": "A slider that shows its value",
+    "body": [
+      "${1:window}:Slider(\"${2:Amount}\", { min = ${3:0}, max = ${4:100}, value = ${5:50}, step = ${6:1} }, function(value)",
+      "\t${0:print(value)}",
+      "end)"
+    ]
+  },
+  "Wax: task loop": {
+    "prefix": "wax-loop",
+    "description": "Code that runs again and again while you play. It stops when the mod reloads.",
+    "body": [
+      "task.spawn(function()",
+      "\twhile true do",
+      "\t\t$0",
+      "\t\ttask.wait(${1:1})",
+      "\tend",
+      "end)"
+    ]
+  },
+  "Wax: notification": {
+    "prefix": "wax-notify",
+    "description": "A short message in a corner of the screen",
+    "body": [
+      "ui.Notify(\"${1:Message}\", { title = \"${2:Title}\", kind = \"${3|info,good,warn,bad|}\" })"
+    ]
+  },
+  "Wax: overlay": {
+    "prefix": "wax-overlay",
+    "description": "A panel that stays on screen while you play",
+    "body": [
+      "local ${1:hud} = ui.Overlay({ anchor = \"${2|top-right,top-left,bottom-right,bottom-left,top,bottom,left,right,center|}\", title = \"${3:Title}\" })",
+      "local ${4:field} = ${1:hud}:Field(\"${5:Name}\", ${6:\"value\"})"
+    ]
+  },
+  "Wax: saved settings": {
+    "prefix": "wax-settings",
+    "description": "Settings that are still there the next time the game starts",
+    "body": [
+      "local ${1:settings} = storage.Load(\"${2:settings}\", { ${3:enabled = true} })",
+      "$0",
+      "storage.Save(\"${2:settings}\", ${1:settings})"
+    ]
+  },
+  "Wax: hotkey": {
+    "prefix": "wax-hotkey",
+    "description": "Run code when a key is pressed during play",
+    "body": [
+      "ui.Hotkey(\"${1:F6}\", function()",
+      "\t${0:print(\"pressed\")}",
+      "end)"
+    ]
+  },
+  "Wax: when the map changes": {
+    "prefix": "wax-map",
+    "description": "Run code when the player enters or leaves a prospect",
+    "body": [
+      "game.MapChanged:Connect(function(map_name)",
+      "\t${0:print(\"now on \" .. map_name)}",
+      "end)"
+    ]
+  }
+}
