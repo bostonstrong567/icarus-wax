@@ -46,8 +46,9 @@ Mods go in this folder, one folder per mod:
 
   ...\Binaries\Win64\ue4ss\Mods\Wax\mods
 
-A mod is a folder with an init.lua in it. "Hello" is an example you can read
-and change. The docs explain how to write your own.
+A mod is a folder with an init.lua in it. One mod comes with Wax: Recipe
+Browser, which shows every item and its recipes beside your inventory. The
+docs explain how to write your own.
 
 Wax keeps its settings, and the settings of your mods, in this folder:
 
@@ -73,7 +74,7 @@ By hand:
   Download the newest zip and copy the contents of "game" into Win64 again.
   Say yes when Windows asks to replace files. Your own mods and your settings
   are not in the zip, so they stay. Two things are replaced by the copies from
-  the zip: mods\Hello, and the UE4SS settings files (UE4SS-settings.ini,
+  the zip: mods\RecipeBrowser, and the UE4SS settings files (UE4SS-settings.ini,
   mods.txt, mods.json).
 
 

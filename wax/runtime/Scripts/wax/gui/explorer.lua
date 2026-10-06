@@ -13,12 +13,15 @@ local guard = Wax.import("core.guard")
 local M = {}
 
 M.clock = os.clock
+local function precise() return (Wax.perf and Wax.perf.now or os.clock)() end
 M.VISIBLE = 4           -- rows of the details whose values are read again each frame
-M.TREE_EVERY = 0.25     -- seconds between two rebuilds of the tree's rows
+M.TREE_EVERY = 1        -- seconds between two rebuilds of the tree's rows when the world changed by itself
+M.TREE_FIRST = 0.25     -- and while the world is first being listed or a search is still running
 M.ROWS_EVERY = 0.5      -- and of the details' rows
 M.ROOTS_EVERY = 1       -- seconds between looks at game.Character, game.GameState and the others
 M.KIDS_EVERY = 1.5      -- an open row's children are read again this often, one row at a time
 M.HISTORY, M.CHANGES = 20, 200
+M.worst = { index = 0, list = 0 }       -- the longest the index step and a rebuild of the list took, in seconds
 
 local ROW, GAP = 26, 1
 local ICONS = { player = "user", creature = "paw-print", building = "hammer", item = "package", actor = "box",
@@ -212,11 +215,19 @@ local function rebuild_tree(v)
     local world = v.world
     flat[#flat + 1] = world
     local results = index.results()
+    for entry in pairs(v.world_open) do
+        if entry.gone or not entry.open then v.world_open[entry] = nil end
+    end
     if world.open or narrowed then
-        for i = 1, #results do
-            local entry = results[i]
-            if not entry.gone then
-                if entry.open then add(entry) else flat[#flat + 1] = entry end
+        if next(v.world_open) == nil then
+            -- nothing under the world is open: its rows are taken over in one move, not one by one (20,000 of them)
+            table.move(results, 1, #results, #flat + 1, flat)
+        else
+            for i = 1, #results do
+                local entry = results[i]
+                if not entry.gone then
+                    if entry.open then add(entry) else flat[#flat + 1] = entry end
+                end
             end
         end
     end
@@ -291,7 +302,9 @@ local function open_tree(v, made)
         if not inst then return end
         row.kids, row.open = children(row, inst), true
     end
-    v.tree_dirty, v.tree_due = true, 0
+    -- the world's own rows that are open, so the list knows when it has to be put together row by row
+    if row.key and not row.root then v.world_open[row] = row.open or nil end
+    v.tree_dirty, v.tree_due, v.tree_now = true, 0, true
 end
 
 -- Closes every open row but the world's.
@@ -299,7 +312,7 @@ local function fold_all(v)
     for _, row in ipairs(v.opened) do
         if row.root ~= "World" then row.open = false end
     end
-    v.tree_dirty, v.tree_due = true, 0
+    v.tree_dirty, v.tree_due, v.tree_now = true, 0, true
 end
 
 -- Both sides are laid out alike, so they line up: a heading with its buttons, one small line, a search box,
@@ -314,19 +327,20 @@ local function build_tree(v, side)
     v.search.Typed:Connect(function(text)
         settings.text = text
         apply_query()
-        v.tree_dirty = true
+        v.tree_dirty, v.tree_now = true, true
     end)
     local filters = side:Row()
     v.kind = filters:Dropdown(nil, labels(KINDS), pick(KINDS, settings.kind, 2), function(choice)
         settings.kind = pick(KINDS, choice, 1)
         apply_query()
-        v.tree_dirty = true
+        v.tree_dirty, v.tree_now = true, true
     end)
     v.sort = filters:Dropdown(nil, labels(SORTS), pick(SORTS, settings.sort, 2), function(choice)
         settings.sort = pick(SORTS, choice, 1)
         apply_query()
+        v.tree_now = true
     end)
-    v.tree = side:Grid({ cell = 100000, cell_height = ROW, gap = GAP, batch = 3,
+    v.tree = side:Grid({ cell = 100000, cell_height = ROW, gap = GAP, batch = 3, warm = true,
         make = function(cell)
             local made = {}
             made.line = cell:Item({}, function() press_tree(v, made) end, function() open_tree(v, made) end)
@@ -344,7 +358,7 @@ local function build_tree(v, side)
         settings.near = metres ~= false
         if metres then settings.range = metres end
         apply_query()
-        v.tree_dirty = true
+        v.tree_dirty, v.tree_now = true, true
     end)
     for _, name in ipairs(paths.ROOTS) do
         local row = { root = name, name = name, class_name = "none", kind = name == "World" and "world" or "object", depth = 0,
@@ -449,6 +463,13 @@ end
 
 function refresh_rows(v, top)
     local rows = v.sheet and members.rows(v.sheet) or {}
+    local before = v.shown_rows
+    local same = not top and #rows == #before
+    for at = 1, same and #rows or 0 do
+        if rows[at] ~= before[at] then same = false break end
+    end
+    -- the same lines in the same order: only their values are shown again
+    if same then return v.rows:Refresh() end
     for _, made in ipairs(v.cells) do made.row = nil end
     v.shown_rows = rows
     v.rows:SetItems(rows, not top)
@@ -566,7 +587,7 @@ local function build_details(v, side)
         if not (a_row and a_row.type == "member" and a_row.record.show == "bool") then return end
         if not write(v, a_row.record, on) and made.flag and not made.flag.destroyed then made.flag:Set(not on, true) end
     end
-    v.rows = side:Grid({ cell = 100000, cell_height = ROW, gap = GAP, batch = 2,
+    v.rows = side:Grid({ cell = 100000, cell_height = ROW, gap = GAP, batch = 2, warm = true,
         make = function(cell)
             local made = {}
             made.box, made.cell = cell:Row(), cell
@@ -629,7 +650,8 @@ local function map_changed()
         row.kids, row.address, row.missing, row.class_name = nil, false, true, "none"
         if row.root ~= "World" then row.open = false end
     end
-    v.opened, v.history, v.tree_dirty, v.roots_due, v.tree_due = {}, {}, true, 0, 0
+    v.opened, v.history, v.tree_dirty, v.roots_due, v.tree_due, v.tree_now = {}, {}, true, 0, 0, true
+    v.world_open = {}
     if v.picked then v.picked.frame = nil end
     v.previous:SetEnabled(false)
 end
@@ -637,6 +659,7 @@ end
 local function make(page)
     local v = { page = page, window = page.window, frame = 0, roots = {}, flat = {}, opened = {}, kid_at = 0, tree_cells = {},
         cells = {}, cell_at = 0, history = {}, mode = SHOWS[1], order_by = ORDERS[1], member_text = "", tree_dirty = true,
+        world_open = {},
         tree_due = 0, rows_due = 0,
         roots_due = 0, kids_due = 0, results_version = -1, shown_rows = {} }
     view = v
@@ -687,7 +710,10 @@ local function step()
         index.wake()
         v.roots_due, v.tree_due = 0, 0
     end
+    local timed = precise()
     index.step()
+    local spent = precise() - timed
+    if spent > M.worst.index then M.worst.index = spent end
     local now = M.clock()
     local single = v.split:IsSingle()
     if not single or v.split:Shown() == "left" then
@@ -701,9 +727,22 @@ local function step()
         end
         local _, results_version = index.results()
         if results_version ~= v.results_version then v.results_version, v.tree_dirty = results_version, true end
-        if v.tree_dirty and now >= v.tree_due then
-            v.tree_due = now + M.TREE_EVERY
-            rebuild_tree(v)
+        -- a first listing or a search fills the list in as it goes, and its end shows at once
+        local filling = index.seeding() or index.searching()
+        if v.filling and not filling then v.tree_now = true end
+        v.filling = filling
+        if v.tree_dirty and (v.tree_now or now >= v.tree_due) then
+            -- The list is not re-sorted under the mouse. What went away meanwhile is drawn faint where it stands.
+            if not v.tree_now and not filling and v.tree.widget:IsHovered() then
+                v.tree_due = now + M.TREE_EVERY
+                v.tree:Refresh()
+            else
+                v.tree_due, v.tree_now = now + (filling and M.TREE_FIRST or M.TREE_EVERY), false
+                timed = precise()
+                rebuild_tree(v)
+                spent = precise() - timed
+                if spent > M.worst.list then M.worst.list = spent end
+            end
         end
     end
     if single and v.split:Shown() == "left" then return end
@@ -760,6 +799,7 @@ function M.stats()
         members = sheet and #sheet.records or 0, watched = sheet and #sheet.polled or 0, reads = sheet and sheet.reads or 0,
         failedReads = sheet and sheet.failed or 0, changed = sheet and sheet.changed or 0, rounds = sheet and sheet.rounds or 0,
         changes = #changes, perFrame = { watched = members.POLL, shown = M.VISIBLE },
+        worstMs = { index = M.worst.index * 1000, list = M.worst.list * 1000 },
     }
 end
 

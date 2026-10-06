@@ -159,6 +159,25 @@ t.test("guard: the watchdog stops an endless loop", function()
     t.eq(errors_mentioning("script timeout"), 1)
 end)
 
+t.test("guard: a suspended watchdog lets long work through and says what it was before", function()
+    guard.clear_errors()
+    local saved_timeout, saved_step = guard.timeout_seconds, guard.hook_instructions
+    guard.timeout_seconds, guard.hook_instructions = 0.05, 1000
+    local thread = coroutine.create(function()
+        guard.arm()
+        local was = guard.suspend_watchdog(true)
+        local finish = os.clock() + 0.2
+        while os.clock() < finish do end
+        guard.timeout_seconds = saved_timeout
+        t.eq(guard.suspend_watchdog(was), true)
+        t.eq(was, false)
+    end)
+    local ok, problem = coroutine.resume(thread)
+    guard.timeout_seconds, guard.hook_instructions = saved_timeout, saved_step
+    t.ok(ok, tostring(problem))
+    t.eq(errors_mentioning("script timeout"), 0)
+end)
+
 ------------------------------------------------------------------------------------------------------- co
 t.test("co: create and wrap behave like the standard ones", function()
     local thread = co.create(function(a) local b = coroutine.yield(a + 1) return a + b end)

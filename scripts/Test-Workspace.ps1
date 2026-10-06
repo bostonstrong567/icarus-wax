@@ -159,11 +159,21 @@ else {
     }
     $scratch = Join-Path ([IO.Path]::GetTempPath()) ("wax-tests-" + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Force "$scratch\bridge\run\in", "$scratch\bridge\run\out", "$scratch\bridge\Scripts", "$scratch\mods" | Out-Null
+    # Recipe Browser is staged in a dot folder until it is shown to the user. Its suites skip themselves when it is not here.
+    $recipeMod = (Test-Path (Join-Path $Root 'luamods\RecipeBrowser')) ? 'luamods/RecipeBrowser' : 'luamods/.RecipeBrowser'
     $suites = [ordered]@{
         'core'   = @('wax\tests\offline\core_test.lua')
         'gui'    = @('wax\tests\offline\gui_test.lua')
         'world'  = @('wax\tests\offline\world_test.lua')
         'explorer' = @('wax\tests\offline\explorer_test.lua')
+        'data'   = @('wax\tests\offline\data_test.lua')
+        'recipe-logic' = @('wax\tests\offline\recipe_logic_test.lua', $recipeMod)
+        'recipe-model' = @('wax\tests\offline\recipe_model_test.lua', $recipeMod)
+        'recipe-unlock' = @('wax\tests\offline\recipe_unlock_test.lua', $recipeMod)
+        'recipe-stats' = @('wax\tests\offline\recipe_stats_test.lua', $recipeMod)
+        'recipe-tree' = @('wax\tests\offline\recipe_tree_test.lua', $recipeMod)
+        'recipe-app' = @('wax\tests\offline\recipe_app_test.lua', $recipeMod)
+        'recipe-layout' = @('wax\tests\offline\recipe_layout_test.lua', $recipeMod)
         'mods'   = @('wax\tests\offline\mods_test.lua', ("$scratch\mods" -replace '\\', '/'))
         'bridge' = @('wax\tests\bridge_offline.lua', ("$scratch\bridge" -replace '\\', '/'))
     }
@@ -177,6 +187,27 @@ else {
                 Report FAIL "offline suite '$suite' failed"
                 $out | Where-Object { $_ -match '^FAIL|expected|error' } | Select-Object -First 6 | ForEach-Object { Write-Host "         $_" }
             } else { Report ok "offline suite '$suite': $verdict" }
+        }
+        # The game's tables against what Recipe Browser reads from them: this is what says a weekly patch broke it.
+        $recipeCheck = Join-Path $PSScriptRoot 'recipe_check.py'
+        if (-not (Test-Path $recipeCheck) -or -not (Test-Path (Join-Path $Root 'game-data\data'))) {
+            Report ok "offline suite 'recipe-data': 0 passed (skipped: scripts\recipe_check.py or game-data is not here)"
+        } elseif (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+            Report FAIL "python missing, cannot check the game's tables against the Recipe Browser"
+        } else {
+            $out = python $recipeCheck --mod $recipeMod 2>&1
+            $verdict = "$($out | Where-Object { $_ -match 'passed' } | Select-Object -Last 1)"
+            if ($LASTEXITCODE -ne 0) {
+                Report FAIL "recipe-data: the game's tables no longer fit the Recipe Browser ($verdict)"
+                $out | Where-Object { $_ -match '^FAIL' } | Select-Object -First 8 | ForEach-Object { Write-Host "         $_" }
+            } else {
+                $out = & $lua 'wax\tests\offline\recipe_data_check.lua' $recipeMod 'build/recipe-browser/check' 2>&1
+                $model = "$($out | Where-Object { $_ -match 'passed' } | Select-Object -Last 1)"
+                if ($LASTEXITCODE -ne 0) {
+                    Report FAIL "recipe-data: the mod's model and the check's own join differ ($model)"
+                    $out | Where-Object { $_ -match '^DIFF|^\s+\.\.\. and' } | Select-Object -First 8 | ForEach-Object { Write-Host "         $_" }
+                } else { Report ok "offline suite 'recipe-data': $verdict; $model" }
+            }
         }
     } finally {
         Pop-Location

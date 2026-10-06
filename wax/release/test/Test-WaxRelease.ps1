@@ -79,7 +79,7 @@ function Compare-Tree([hashtable]$Expected, [hashtable]$Actual) {
     , @($out | Sort-Object)
 }
 
-$playerFiles = "$waxPath\mods\MyMod\init.lua", "$waxPath\mods\MyMod\mod.lua", "$waxPath\mods\Hello\init.lua",
+$playerFiles = "$waxPath\mods\MyMod\init.lua", "$waxPath\mods\MyMod\mod.lua", "$waxPath\mods\RecipeBrowser\init.lua",
     "$waxPath\saved\MyMod.settings.lua", "$waxPath\saved\wax.interface.lua", 'ue4ss\Mods\OtherMod\Scripts\main.lua'
 
 function Add-PlayerFiles([string]$Win64) {
@@ -87,7 +87,7 @@ function Add-PlayerFiles([string]$Win64) {
     New-Item -ItemType Directory -Force (Join-Path $wax 'mods\MyMod'), (Join-Path $Win64 'ue4ss\Mods\OtherMod\Scripts') | Out-Null
     Set-Content -LiteralPath (Join-Path $wax 'mods\MyMod\init.lua') -Value 'print("mine")'
     Set-Content -LiteralPath (Join-Path $wax 'mods\MyMod\mod.lua') -Value 'return { name = "MyMod" }'
-    Add-Content -LiteralPath (Join-Path $wax 'mods\Hello\init.lua') -Value '-- changed by the player'
+    Add-Content -LiteralPath (Join-Path $wax 'mods\RecipeBrowser\init.lua') -Value '-- changed by the player'
     Set-Content -LiteralPath (Join-Path $wax 'saved\MyMod.settings.lua') -Value 'return { on = true }'
     Set-Content -LiteralPath (Join-Path $wax 'saved\wax.interface.lua') -Value 'return { scale = 1.25 }'
     Set-Content -LiteralPath (Join-Path $wax 'run\session.log') -Value 'what happened last time'
@@ -135,8 +135,8 @@ function Test-Cycle([string]$Label, [string[]]$Locate, [string]$Win64, [hashtabl
     Check "${Label}: install says what to do next" ($run.Text -match 'Press F8' -and $run.Text.Contains('https://wax-icarus.duckdns.org/'))
     Test-Installed "$Label install" $Win64 $Expected
     $diff = Compare-Tree $Expected (Get-Tree $Win64 -Skip 'Icarus-Win64-Shipping.exe', 'tbb12.dll')
-    Check "${Label}: a first install is the zip's game folder exactly, UE4SS settings and example mod included" ($diff.Count -eq 0) (($diff | Select-Object -First 5) -join '; ')
-    Check "${Label}: the example mod is there" (Test-Path -LiteralPath (Join-Path $wax 'mods\Hello\init.lua'))
+    Check "${Label}: a first install is the zip's game folder exactly, UE4SS settings and Recipe Browser included" ($diff.Count -eq 0) (($diff | Select-Object -First 5) -join '; ')
+    Check "${Label}: Recipe Browser is there" (Test-Path -LiteralPath (Join-Path $wax 'mods\RecipeBrowser\init.lua'))
     Check "${Label}: the version file says $version" ((Get-Content -LiteralPath (Join-Path $wax 'VERSION') -Raw).Trim() -eq $version)
     Check "${Label}: nothing was backed up on a clean game" (-not (Test-Path (Join-Path $Win64 'ue4ss-backup-*')))
 
@@ -225,9 +225,9 @@ foreach ($item in Get-ChildItem -LiteralPath $runtime -Force | Where-Object { $_
 }
 $diff = Compare-Tree $waxSource (Get-Tree (Join-Path $package "game\$waxPath") -Skip 'mods\*', 'VERSION')
 Check "Wax in the zip is wax\runtime, file for file ($($waxSource.Count) files)" ($diff.Count -eq 0) (($diff | Select-Object -First 5) -join '; ')
-$helloSource = Get-Tree (Join-Path $Root 'luamods\Hello') -Skip '.*'
-$diff = Compare-Tree $helloSource (Get-Tree (Join-Path $package "game\$waxPath\mods\Hello"))
-Check 'the example mod is luamods\Hello without editor files' ($diff.Count -eq 0) ($diff -join '; ')
+$bundledSource = Get-Tree (Join-Path $Root 'luamods\RecipeBrowser') -Skip '.*'
+$diff = Compare-Tree $bundledSource (Get-Tree (Join-Path $package "game\$waxPath\mods\RecipeBrowser"))
+Check 'the mod in the zip is luamods\RecipeBrowser without editor files' ($diff.Count -eq 0) ($diff -join '; ')
 Check 'UE4SS loads Wax through enabled.txt' (Test-Path -LiteralPath (Join-Path $package "game\$waxPath\enabled.txt"))
 Check 'the licences are there' ((Get-Content (Join-Path $package 'licenses\UE4SS-LICENSE.txt') -Raw) -match 'MIT License' -and (Get-Content (Join-Path $package 'licenses\Lucide-LICENSE.txt') -Raw) -match 'ISC License')
 

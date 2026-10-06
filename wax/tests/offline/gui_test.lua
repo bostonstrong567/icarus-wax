@@ -500,7 +500,7 @@ t.test("a theme switch recolours what is on screen in place: nothing is rebuilt 
     ui.SetTheme("Daylight")
     t.ok(ui.Theme().good.G ~= good)
     t.eq(fake.last(label.widget, "SetColorAndOpacity")[2].SpecifiedColor.G, ui.Theme().good.G)
-    t.eq(#ui.Themes(), 5)
+    t.eq(#ui.Themes(), 13)
     ui.AddTheme("Mine", { window = "#101010", accent = "#FF00FF" })
     ui.SetTheme("Mine")
     t.ok(ui.Theme().accent.R > 0.9 and ui.Theme().accent.G < 0.1)
@@ -973,6 +973,43 @@ t.test("destroying the owner removes its windows, overlays and every handler", f
     t.eq(stats.windows, 0)
     t.eq(stats.overlays, 0)
     t.eq(stats.handlers, 0)
+end)
+
+t.test("a grid keeps rows ready on both sides, keeps its cells when the list changes, and can be ready before it shows", function()
+    ui.Close()
+    local host
+    scope.run(scope.new("ready grid"), function() host = ui.Window({ title = "Ready", nav = "side", width = 520, height = 400 }) end)
+    local page = host:Page("Ready", { scroll = false })
+    local items, made, shown = {}, 0, {}
+    for index = 1, 1000 do items[index] = index end
+    local grid = page:Grid({ cell = 100000, cell_height = 26, gap = 1, warm = true, view = 270,
+        make = function(cell)
+            made = made + 1
+            return cell:Label("")
+        end,
+        show = function(_, item, index) shown[index] = item end })
+    grid:SetItems(items)
+    frames(60)
+    t.eq(made, 20, "10 rows that show and 5 spare on each side were made while the menu was closed")
+    t.eq(next(shown), nil, "and nothing was shown in them yet")
+    ui.Open()
+    fake.scroll_end, fake.scroll_fraction = 1000 * 27 - 1 - 270, 0.5
+    frames(3)
+    local top = math.floor(0.5 * (1000 * 27 - 1) / 27) + 1
+    t.eq(shown[top], top, "what is in view is shown")
+    t.eq(shown[top - 5], top - 5, "with rows ready above it")
+    t.eq(shown[top + 14], top + 14, "and below it")
+    t.eq(made, 20, "opening made no cell")
+    -- a list that is one shorter, as when something in the world went away
+    shown = {}
+    table.remove(items)
+    grid:SetItems(items, true)
+    fake.scroll_end = 999 * 27 - 1 - 270
+    frames(3)
+    t.eq(made, 20, "a list of another length uses the same cells")
+    t.eq(shown[top], top, "and shows the same rows in them")
+    fake.scroll_end, fake.scroll_fraction = nil, nil
+    host:Destroy()
 end)
 
 t.test("a see-through button draws nothing behind it when it is switched off", function()

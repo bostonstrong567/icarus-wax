@@ -10,6 +10,7 @@ local input = Wax.import("gui.input")
 local picker = Wax.import("gui.picker")
 local item = Wax.import("gui.item")
 local split = Wax.import("gui.split")
+local slots = Wax.import("gui.slots")
 local sched = Wax.import("core.sched")
 local guard = Wax.import("core.guard")
 local scope = Wax.import("core.scope")
@@ -112,6 +113,21 @@ end
 local Container = {}
 Container.__index = Container
 controls.Container = Container
+
+local text_boxes = {}       -- every text box, so a key meant for typing is not taken as a shortcut
+
+-- True while a text box of Wax has the keyboard.
+function controls.typing()
+    for at = #text_boxes, 1, -1 do
+        local box = text_boxes[at]
+        if box.destroyed then
+            table.remove(text_boxes, at)
+        elseif box:HasFocus() then
+            return true
+        end
+    end
+    return false
+end
 
 function controls.container(host, box, options)
     options = options or {}
@@ -232,13 +248,14 @@ local function caption_above(container, caption)
     return column
 end
 
--- options: { dim, color, size, face, family }
+-- options: { dim, color, size, face, family, align = "center" or "right", weight (its share of a row, 1 unless given) }
 function Container:Label(content, options)
     options = options or {}
+    local justify = options.align == "center" and style.Justify.Center or (options.align == "right" and style.Justify.Right) or nil
     local widget = kit.label(content, { wrap = not self.horizontal, color = options.dim and style.theme.dim or options.color,
-        size = options.size, face = options.face, family = options.family })
+        size = options.size, face = options.face, family = options.family, justify = justify })
     if not self.horizontal then wrap_at(self, widget, 1) end
-    place(self, widget)
+    place(self, widget, { weight = options.weight })
     local control = new_control(self, widget)
     function control:Set(value) widget:SetText(kit.text(value)) end
     function control:SetColor(color) style.tint(widget, "text", style.to_color(color)) end
@@ -290,13 +307,14 @@ function Container:Spacer(height)
     return new_control(self, gap)
 end
 
--- options: { primary, stretch = true (false keeps it as wide as its caption), icon, spin }. An icon with no caption makes an icon button.
+-- options: { primary, stretch = true (false keeps it as wide as its caption), icon, spin, tab }. An icon with no caption makes an
+-- icon button. tab = true makes one of a row of tabs: control:SetActive(true) marks it as the chosen one.
 function Container:Button(caption, on_click, options)
     options = options or {}
     local theme = style.theme
     local look = options.primary and { color = style.WHITE, hover = { R = 0.8, G = 0.8, B = 0.8, A = 1 },
         press = { R = 0.62, G = 0.62, B = 0.62, A = 1 } } or {}
-    local button, picture
+    local button, picture, words, mark
     if options.icon then
         look.padding = caption and style.margin(10, 5, 12, 5) or style.margin(7, 6)
         button = kit.button(nil, look)
@@ -304,11 +322,27 @@ function Container:Button(caption, on_click, options)
         local ink = options.primary and theme.on_accent or theme.text
         picture = kit.icon(options.icon, 16, ink)
         kit.slot(content:AddChild(picture), { v = VA.Center, pad = style.margin(0, 0, caption and 7 or 0, 0) })
-        if caption then kit.slot(content:AddChild(kit.label(caption, { color = ink })), { v = VA.Center }) end
+        if caption then
+            words = kit.label(caption, { color = ink })
+            kit.slot(content:AddChild(words), { v = VA.Center })
+        end
         kit.slot(button:SetContent(content), { h = H.Center, v = VA.Center })
     else
-        if options.primary then look.text = theme.on_accent end
-        button = kit.button(caption, look)
+        if options.tab then look.padding = style.margin(4, 5, 4, 3) end
+        button = kit.button(nil, look)
+        if caption and options.tab then
+            -- the caption with a short line under it that shows on the chosen tab
+            words = kit.label(caption, { color = theme.dim })
+            local stack = root.new("Overlay")
+            kit.slot(stack:AddChild(words), { h = H.Center, v = VA.Center, pad = style.margin(0, 0, 0, 5) })
+            mark = kit.image(theme.accent, nil, 18, 2)
+            mark:SetVisibility(V.Collapsed)
+            kit.slot(stack:AddChild(mark), { h = H.Center, v = VA.Bottom })
+            kit.slot(button:SetContent(stack), { h = H.Fill, v = VA.Fill })
+        elseif caption then
+            words = kit.label(caption, { color = options.primary and theme.on_accent or nil })
+            kit.slot(button:SetContent(words), { h = H.Center, v = VA.Center })
+        end
     end
     if options.primary then style.follow(function() button:SetBackgroundColor(style.theme.accent) end) end
     local natural = options.stretch == false or (options.stretch == nil and options.icon ~= nil and caption == nil)
@@ -319,6 +353,15 @@ function Container:Button(caption, on_click, options)
     function control:SetIcon(name)
         if not picture then error("this button was made without an icon", 2) end
         kit.set_icon(picture, name, 16)
+    end
+    function control:SetCaption(text)
+        if not words then error("this button was made without a caption", 2) end
+        words:SetText(kit.text(text))
+    end
+    function control:SetActive(on)
+        if not mark then error("this button was not made as a tab", 2) end
+        mark:SetVisibility(on and V.HitTestInvisible or V.Collapsed)
+        style.tint(words, "text", on and style.theme.text or style.theme.dim)
     end
     local turning = nil
     -- Turns the icon round once, to show that something has started.
@@ -561,6 +604,7 @@ function Container:Input(caption, options, on_commit)
     local last_commit, last_at = nil, -1
     function control:Focus() box:SetKeyboardFocus() end
     function control:HasFocus() return box:HasKeyboardFocus() == true end
+    text_boxes[#text_boxes + 1] = control
     -- Greyed text after what is typed (a preview of a completion). Only a box made with mono = true shows it.
     function control:SetGhost(text)
         if not ghost then return end
@@ -1096,7 +1140,8 @@ end
 local grids = {}
 local MAKE_PER_FRAME = 24
 
--- A grid for any number of items. Only the cells in view exist. options: { cell, cell_height, gap, batch, height, items, make, show }
+-- A grid for any number of items. Only the cells in view exist.
+-- options: { cell, cell_height, gap, batch, height, items, make, show, spare, warm, view }
 function Container:Grid(options)
     options = options or {}
     if type(options.make) ~= "function" or type(options.show) ~= "function" then
@@ -1134,29 +1179,40 @@ function Container:Grid(options)
     while page and not page.holder do page = page.parent end
     if not page and host.nav then page = host.page end
 
+    local spare_given, spare_rows = options.spare, 0     -- rows kept ready above and below what shows
+
+    -- The content is as tall as the whole list.
+    local function resize()
+        local wanted = math.max(1, math.ceil(#items / columns) * pitch - gap)
+        if wanted ~= total then
+            total = wanted
+            content:SetHeightOverride(total)
+        end
+    end
+
     local function measure()
         local width = controls.wrap_width(self) - (fills and 0 or kit.GUTTER)
         columns = math.max(1, math.floor((width + gap) / (least + gap)))
         cell_w = (width - (columns - 1) * gap) / columns
-        total = math.max(1, math.ceil(#items / columns) * pitch - gap)
-        content:SetHeightOverride(total)
         for _, cell in pairs(cells) do
             cell.slot:SetSize({ X = cell_w, Y = cell_h })
             cell.container.fixed_width = cell_w
         end
-        bound, measured = {}, true
+        bound, measured, total = {}, true, nil
+        resize()
     end
 
-    local function cell_at(index)
+    local function cell_at(index, hidden)
         local cell = cells[index]
         if cell then return cell end
         local box = root.new("VerticalBox")
         local slot = canvas:AddChild(box)
         slot:SetAutoSize(false)
         slot:SetSize({ X = cell_w, Y = cell_h })
+        if hidden then box:SetVisibility(V.Collapsed) end
         local container = controls.container(host, box, { parent = self })
         container.fills, container.fixed_width = true, cell_w
-        cell = { box = box, slot = slot, container = container, shown = true }
+        cell = { box = box, slot = slot, container = container, shown = not hidden }
         cells[index] = cell
         control.inners[#control.inners + 1] = container
         local ok, made = as_maker("grid make", options.make, container)
@@ -1164,67 +1220,94 @@ function Container:Grid(options)
         return cell
     end
 
+    -- The rows that show in `view` pixels, and how many more are kept ready on each side.
+    -- Scrolling is seen a frame late, so without spare rows a fast scroll shows empty space.
+    local function rows_for(view)
+        local visible = math.ceil(view / pitch)
+        return visible, spare_given or math.max(2, math.min(6, math.ceil(visible / 2)))
+    end
+
+    local made_now = 0
+    local function bind(row)
+        local place_in_pool = row % pool_rows
+        if bound[place_in_pool] == row then return end
+        local complete = true
+        for column = 0, columns - 1 do
+            local index = place_in_pool * columns + column + 1
+            if not cells[index] then
+                if made_now >= batch then
+                    complete = false
+                    break
+                end
+                made_now = made_now + 1
+            end
+            local cell = cell_at(index)
+            local item_index = row * columns + column + 1
+            local item = items[item_index]
+            if item == nil then
+                if cell.shown then
+                    cell.box:SetVisibility(V.Collapsed)
+                    cell.shown = false
+                end
+            else
+                cell.slot:SetPosition({ X = column * (cell_w + gap), Y = row * pitch })
+                if not cell.shown then
+                    cell.box:SetVisibility(V.Visible)
+                    cell.shown = true
+                end
+                if cell.made ~= nil then as_maker("grid show", options.show, cell.made, item, item_index) end
+            end
+        end
+        if complete then bound[place_in_pool] = row end
+    end
+
     local function step()
         if not measured then measure() end
         -- how much is in view: its own height, or what the engine reports once the page has been laid out
         local view = fixed_view
         if fills then view = math.min(math.max(total - scroller:GetScrollOffsetOfEnd(), pitch), host.height or 600) end
-        local rows = math.ceil(view / pitch) + 2
-        if rows ~= pool_rows then
-            pool_rows, bound = rows, {}
-            for index, cell in pairs(cells) do
-                if index > rows * columns and cell.shown then
-                    cell.box:SetVisibility(V.Collapsed)
-                    cell.shown = false
-                end
-            end
+        local visible, spare = rows_for(view)
+        -- the pool only grows. If it followed every change of the list's length, every row would move to another cell
+        if visible + 2 * spare > pool_rows then
+            pool_rows, spare_rows, bound = visible + 2 * spare, spare, {}
         end
-        local first = math.max(0, math.floor(scroller:GetViewOffsetFraction() * total / pitch) - 1)
+        local row_count = math.ceil(#items / columns)
         -- after the list got shorter the engine may still report the old place, which is past the end
-        first = math.max(0, math.min(first, math.ceil(#items / columns) - pool_rows + 2))
-        local made_now = 0
-        for row = first, first + pool_rows - 1 do
-            local place_in_pool = row % pool_rows
-            if bound[place_in_pool] ~= row then
-                local complete = true
-                for column = 0, columns - 1 do
-                    local index = place_in_pool * columns + column + 1
-                    if not cells[index] then
-                        if made_now >= batch then
-                            complete = false
-                            break
-                        end
-                        made_now = made_now + 1
-                    end
-                    local cell = cell_at(index)
-                    local item_index = row * columns + column + 1
-                    local item = items[item_index]
-                    if item == nil then
-                        if cell.shown then
-                            cell.box:SetVisibility(V.Collapsed)
-                            cell.shown = false
-                        end
-                    else
-                        cell.slot:SetPosition({ X = column * (cell_w + gap), Y = row * pitch })
-                        if not cell.shown then
-                            cell.box:SetVisibility(V.Visible)
-                            cell.shown = true
-                        end
-                        if cell.made ~= nil then as_maker("grid show", options.show, cell.made, item, item_index) end
-                    end
-                end
-                if complete then bound[place_in_pool] = row end
+        local top = math.max(0, math.min(math.floor(scroller:GetViewOffsetFraction() * total / pitch), row_count - 1))
+        local first = math.max(0, math.min(top - spare_rows, row_count - pool_rows))
+        local last = first + pool_rows - 1
+        local bottom = math.min(top + visible, last)
+        made_now = 0
+        -- what shows first, then what is kept ready below it and above it
+        for row = top, bottom do bind(row) end
+        for row = bottom + 1, last do bind(row) end
+        for row = top - 1, first, -1 do bind(row) end
+    end
+
+    -- Makes one cell that is not there yet, hidden, so the list is ready before it is first shown. True when one was made.
+    local function warm()
+        if not measured then measure() end
+        if pool_rows == 0 then
+            local visible, spare = rows_for(options.view or (fills and (host.height or 600) or fixed_view))
+            pool_rows, spare_rows = visible + 2 * spare, spare
+        end
+        for index = 1, pool_rows * columns do
+            if not cells[index] then
+                cell_at(index, true)
+                return true
             end
         end
+        return false
     end
 
     host.resizers = host.resizers or {}
     host.resizers[#host.resizers + 1] = style.claim({ apply = function() measured = false end })
-    grids[#grids + 1] = { control = control, host = host, page = page, step = step }
+    grids[#grids + 1] = { control = control, host = host, page = page, step = step, warm = options.warm and warm or nil }
     -- Any list, of any length. The grid goes back to the top, unless `keep` says to stay where it is scrolled to.
     function control:SetItems(list, keep)
         items = list or {}
-        measured = false
+        if measured then resize() end
+        bound = {}
         if not keep then scroller:ScrollToStart() end
     end
     -- Shows every cell again (after the items themselves changed).
@@ -1259,6 +1342,18 @@ events.seen = function(delegate, address)
     if not (own and own[address]) then close_list() end
 end
 
+-- Every frame, menu open or not: one cell of one grid that asked to be ready before it is first shown.
+function controls.warm()
+    for index = 1, #grids do
+        local grid = grids[index]
+        if grid.warm and not grid.warmed and not grid.control.destroyed and not grid.host.destroyed then
+            local ok, more = guard.call("grid warm", grid.warm)
+            if ok and more then return end
+            grid.warmed = true
+        end
+    end
+end
+
 -- Once per frame while the menu shows: grids follow their scrolling, and a click the game saw closes an open list.
 function controls.step()
     for index = #grids, 1, -1 do
@@ -1285,6 +1380,7 @@ local tools = { place = place, new_control = new_control, listen = listen, capti
 picker.install(Container, tools)
 item.install(Container, tools)
 split.install(Container, tools)
+slots.install(Container, tools)
 
 -- Every builder above runs as the build of one control, so what it paints is owned by that control.
 for name, make in pairs(Container) do

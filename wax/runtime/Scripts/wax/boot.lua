@@ -65,6 +65,7 @@ function boot.start()
             track.start()
             Wax.import("world.creatures").start()
             Wax.import("world.players").start()
+            Wax.import("world.crafting").start()
             highlight = Wax.import("world.highlight")
             highlight.start()
         end, debug.traceback)
@@ -72,6 +73,8 @@ function boot.start()
             track, highlight = nil, nil
             core_log:error("the world helpers failed to start: %s", tostring(world_err))
         end
+        local data_ok, data_err = xpcall(function() Wax.import("data.tables").start() end, debug.traceback)
+        if not data_ok then core_log:error("game.Data failed to start: %s", tostring(data_err)) end
     else
         game = nil
         core_log:error("the game object model failed to start: %s", tostring(err))

@@ -19,7 +19,7 @@
 ---@alias WaxAnchor "top-left"|"top"|"top-right"|"left"|"center"|"right"|"bottom-left"|"bottom"|"bottom-right"
 ---@alias WaxNav "side"|"top"
 ---@alias WaxFontFamily "ui"|"mono"|"plain"
----@alias WaxThemeName "Midnight"|"Graphite"|"Abyss"|"Dune"|"Daylight"|string
+---@alias WaxThemeName "Midnight"|"Graphite"|"Abyss"|"Dune"|"Prospector"|"Ember"|"Aurora"|"Nebula"|"Rosewood"|"Terminal"|"Daylight"|"Glacier"|"Sandstone"|string
 
 ---@alias WaxShape
 ---| "frame6"
@@ -234,6 +234,7 @@ function StatusBar:Clear() end
 
 ---A panel pinned to the screen that stays up during play and never takes the mouse.
 ---@class WaxOverlay: WaxContainer
+---@field Scrolled WaxSignal<fun(steps: integer)> On a panel made with ui.Panel: the wheel was turned over it, 1 for down and -1 for up. The game does not see the wheel while the mouse is over a panel.
 local Overlay = {}
 
 ---Shows or hides the overlay.
@@ -252,6 +253,58 @@ function Overlay:SetAnchor(anchor, x, y) end
 
 ---Removes the overlay and everything on it.
 function Overlay:Destroy() end
+
+---Moves it without changing its anchor. x and y keep their values when omitted.
+---@param x? number
+---@param y? number
+function Overlay:SetOffset(x, y) end
+
+---True while it is really on screen: switched on, and what it waits for (the menu, the mouse) is there.
+---@return boolean
+function Overlay:IsShowing() end
+
+---@class WaxPanelOptions: WaxOverlayOptions
+---@field when? "cursor"|"menu"|"always" When it shows: "cursor" (the default) while the Wax menu is open or one of the game's own screens has the mouse, "menu" only with the Wax menu, "always" whenever it is switched on.
+---@field padding? number Space between its edge and its controls.
+---@field height? number A fixed height. As tall as its controls when omitted.
+---@field zoom? number Draws everything in it this much larger (1.25 is a quarter larger). Text stays sharp.
+---@field opacity? number How solid its background is, 0 to 1. 0.96 when omitted.
+---@field visible? boolean False makes it hidden until SetVisible(true).
+---@field on_press? fun() Runs when the panel is pressed where it has no control.
+
+---@class WaxFitOptions: WaxOptions
+---@field scale? number How large the game's menus are drawn, 0.5 to 1. 0.85 when omitted.
+---@field corner? WaxAnchor The corner they shrink towards. "bottom-left" when omitted, which frees the right and the top.
+---@field x? number Moves them sideways after they are made smaller, as a share of the screen. Right is positive.
+---@field y? number Moves them up or down after they are made smaller, as a share of the screen. Down is positive.
+---@field enabled? boolean False makes the request wait for SetEnabled(true).
+
+---A request to draw the game's own menus smaller.
+---@class WaxFit
+local Fit = {}
+
+---@param scale number
+---@param x? number Keeps its value when omitted.
+---@param y? number Keeps its value when omitted.
+function Fit:Set(scale, x, y) end
+
+---@param on boolean
+function Fit:SetEnabled(on) end
+
+---Gives the game's menus their own size back.
+function Fit:Remove() end
+
+---@class WaxPictures
+local Pictures = {}
+
+---The game path of a picture as it can be shown ("/Game/.../ITEM_Wood.ITEM_Wood"), or nil when the text is not one.
+---@param path string
+---@return string?
+function Pictures.Check(path) end
+
+---How many game pictures were loaded, failed, are waiting and are kept in memory.
+---@return { loaded: integer, failed: integer, waiting: integer, pinned: integer, worst_ms: number }
+function Pictures.Stats() end
 
 ---@class WaxNotifyOptions: WaxOptions
 ---@field title? string A bold line above the text.
@@ -346,10 +399,12 @@ function Debug.Show() end
 ---@field Icons WaxIcons
 ---@field Notifications WaxNotifications
 ---@field Debug WaxDebugPanel
+---@field Pictures WaxPictures
 ui = {}
 
 ---Opens the menu: windows appear and the mouse is freed to use them.
-function ui.Open() end
+---@param options? { windows: boolean? } `windows = false` frees the mouse for panels only and leaves the windows hidden.
+function ui.Open(options) end
 
 ---Closes the menu and gives the mouse back to the game.
 function ui.Close() end
@@ -390,6 +445,39 @@ function ui.Window(options) end
 ---@param options? WaxOverlayOptions
 ---@return WaxOverlay
 function ui.Overlay(options) end
+
+---Creates a panel whose controls take the mouse. It has no title bar and shows beside the game's own screens.
+---@param options? WaxPanelOptions
+---@return WaxOverlay
+function ui.Panel(options) end
+
+---The value of the slot under the mouse, then its look and its Slots control. Nothing when no slot is under it.
+---@return any value
+---@return WaxSlotLook? look
+---@return WaxSlots? control
+function ui.Hovered() end
+
+---True while a text box of Wax has the keyboard.
+---@return boolean
+function ui.IsTyping() end
+
+---The size of the screen in the units windows and panels are laid out in.
+---@return number width
+---@return number height
+function ui.ScreenSize() end
+
+---Draws the game's own menus (inventory, crafting, benches) smaller, which leaves room beside them for panels.
+---They keep working as before. The request ends when the mod reloads.
+---@param options? WaxFitOptions
+---@return WaxFit
+function ui.FitGame(options) end
+
+---The game's own menu screen that is showing now: "UMG_MainMenu", "UMG_EscapeMenu", or a bench or container such as
+---"UMG_Processor_C". For the main menu the second value is its tab: 0 inventory, 1 crafting, 2 tech tree, 3 talents, 4 map.
+---Nothing when none shows.
+---@return string? name
+---@return integer? tab
+function ui.GameScreen() end
 
 ---@class WaxTagOptions: WaxOptions
 ---@field text? string
@@ -435,6 +523,8 @@ function ui.Windows() end
 
 ---@class WaxHotkeyOptions : WaxOptions
 ---@field in_menu? boolean Also reacts while the menu is open (off by default, so that typing in a box does not trigger it).
+---@field typing? boolean Also reacts while a text box has the keyboard (for a key meant for the box, such as Tab).
+---@field hover? boolean Makes it a key for the slot under the mouse: it only reacts while a slot is under it.
 
 ---@class WaxHotkey
 local Hotkey = {}
@@ -447,7 +537,7 @@ function Hotkey.Disconnect() end
 function Hotkey:SetKey(key) end
 
 ---Runs `callback` when the key is pressed during play. The hotkey is removed when the mod reloads.
----@param key string An engine key name such as "F6", "K" or "MiddleMouseButton" (a Keybind control gives you these).
+---@param key string An engine key name such as "F6", "K" or "MiddleMouseButton" (a Keybind control gives you these). It can be held with Ctrl, Shift or Alt: "Ctrl+Three", "Ctrl+Shift+K".
 ---@param callback fun()
 ---@param options? WaxHotkeyOptions
 ---@return WaxHotkey

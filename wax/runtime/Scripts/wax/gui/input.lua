@@ -12,6 +12,7 @@ local key_structs = {}
 local cursor = nil          -- { address, stacked, was_shown } while cursor mode is on
 local capture = nil
 local swallow = 0           -- frames left in which a captured key press is not treated as a shortcut
+local capture_alone = nil   -- Ctrl, Shift or Alt pressed during a capture, until another key joins it or it comes up
 
 local CAPTURE_KEYS = {
     "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
@@ -42,14 +43,62 @@ local function key_struct(key)
     return struct
 end
 
+-- A key can be held with Ctrl, Shift or Alt: "Ctrl+Three", "Ctrl+Shift+K". The last part is the key itself.
+local MODIFIERS = { ctrl = { "LeftControl", "RightControl" }, shift = { "LeftShift", "RightShift" }, alt = { "LeftAlt", "RightAlt" } }
+local MODIFIER_OF = { LeftControl = "ctrl", RightControl = "ctrl", LeftShift = "shift", RightShift = "shift", LeftAlt = "alt",
+    RightAlt = "alt" }
+local WORDS = { ctrl = "ctrl", control = "ctrl", shift = "shift", alt = "alt" }
+local parsed = {}
+
+-- "Ctrl+Three" as { key = "Three", ctrl = true, shift = false, alt = false, held = true }. A plain key has held = false.
+function input.parse(name)
+    local known = parsed[name]
+    if known then return known end
+    local out = { key = name, ctrl = false, shift = false, alt = false, held = false }
+    local parts = {}
+    for part in tostring(name):gmatch("[^+]+") do parts[#parts + 1] = part end
+    if #parts > 1 then
+        out.key = parts[#parts]
+        for at = 1, #parts - 1 do
+            local which = WORDS[parts[at]:lower()]
+            if not which then error("'" .. parts[at] .. "' is not Ctrl, Shift or Alt (in the key '" .. tostring(name) .. "')", 3) end
+            out[which], out.held = true, true
+        end
+    end
+    parsed[name] = out
+    return out
+end
+
+local function down(player, which)
+    local keys = MODIFIERS[which]
+    return player:IsInputKeyDown(key_struct(keys[1])) == true or player:IsInputKeyDown(key_struct(keys[2])) == true
+end
+
+-- Which of Ctrl, Shift and Alt are held right now.
+function input.modifiers()
+    local player = input.controller()
+    if not player then return false, false, false end
+    return down(player, "ctrl"), down(player, "shift"), down(player, "alt")
+end
+
+-- True in the frame the key goes down. A key written with Ctrl, Shift or Alt counts only with exactly those held.
 function input.just_pressed(key)
     local player = input.controller()
     if not player then return false end
-    return player:WasInputKeyJustPressed(key_struct(key)) == true
+    local want = input.parse(key)
+    if player:WasInputKeyJustPressed(key_struct(want.key)) ~= true then return false end
+    if not want.held then return true end
+    return down(player, "ctrl") == want.ctrl and down(player, "shift") == want.shift and down(player, "alt") == want.alt
+end
+
+function input.just_released(key)
+    local player = input.controller()
+    if not player then return false end
+    return player:WasInputKeyJustReleased(key_struct(key)) == true
 end
 
 -- callback(key) runs with the next key pressed, or with nil if Escape cancels.
-function input.capture(callback) capture = callback end
+function input.capture(callback) capture, capture_alone = callback, nil end
 function input.capturing() return capture ~= nil or swallow > 0 end
 
 local function has_ui_stack(player)
@@ -167,12 +216,27 @@ function input.step()
         return
     end
     for i = 1, #CAPTURE_KEYS do
-        if player:WasInputKeyJustPressed(key_struct(CAPTURE_KEYS[i])) == true then
-            local callback = capture
-            capture, swallow = nil, 2
-            callback(CAPTURE_KEYS[i])
-            return
+        local key = CAPTURE_KEYS[i]
+        if player:WasInputKeyJustPressed(key_struct(key)) == true then
+            if MODIFIER_OF[key] then
+                -- Ctrl, Shift or Alt may be the start of "Ctrl+3": it is taken on its own only once it comes up alone
+                capture_alone = key
+            else
+                local name = key
+                if down(player, "alt") then name = "Alt+" .. name end
+                if down(player, "shift") then name = "Shift+" .. name end
+                if down(player, "ctrl") then name = "Ctrl+" .. name end
+                local callback = capture
+                capture, swallow, capture_alone = nil, 2, nil
+                callback(name)
+                return
+            end
         end
+    end
+    if capture_alone and player:WasInputKeyJustReleased(key_struct(capture_alone)) == true then
+        local callback, key = capture, capture_alone
+        capture, swallow, capture_alone = nil, 2, nil
+        callback(key)
     end
 end
 

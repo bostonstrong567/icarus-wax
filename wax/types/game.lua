@@ -312,6 +312,7 @@ function Highlight:Configure(options) end
 ---| "Players"
 ---| "Creatures"
 ---| "Highlight"
+---| "Data"
 ---| "MapChanged"
 
 ---The root every mod starts from. It is read-only, and reading a member it does not have raises an error.
@@ -329,6 +330,8 @@ function Highlight:Configure(options) end
 ---@field Players WaxPlayers
 ---@field Creatures WaxCreatures
 ---@field Highlight WaxHighlight
+---@field Data WaxData The game's data tables as plain Lua values.
+---@field Crafting WaxCrafting The bench or crafting screen that is open.
 ---@field MapChanged WaxSignal<fun(name: string)> Fires with the new map's name when the world changes.
 game = {}
 
@@ -362,6 +365,49 @@ function game:Library(name) end
 ---@param tag string
 ---@return WaxInstance[]
 function game:GetTagged(tag) end
+
+---One recipe a bench or the crafting screen lists.
+---@class WaxListedRecipe
+---@field row string The recipe's row name in D_ProcessorRecipes.
+---@field valid boolean The game's own answer to "can this be made right now".
+
+---The bench or crafting screen that is open: the recipes it lists, and choosing one of them.
+---@class WaxCrafting
+local Crafting = {}
+
+---The recipes the open screen lists, in the game's order. Nothing when no bench and no crafting tab is open.
+---@return WaxListedRecipe[]? recipes
+---@return integer? screen A number that stays the same while that screen stays open.
+---@return "bench"|"crafting"|"menu"? kind "menu" is another tab of the game's menu: the list is then what can be made by hand.
+function Crafting:GetRecipes() end
+
+---The number of the screen that is open, without reading its recipes. Nothing when none is.
+---@return integer? screen
+---@return "bench"|"crafting"|"menu"? kind
+function Crafting:GetScreen() end
+
+---What the mouse is over in the game's own screens: "item" and its row name in D_ItemsStatic for a slot of the
+---inventory or of a bench, "recipe" and its row name in D_ProcessorRecipes for a recipe tile. Nothing otherwise.
+---It walks the open screen's slots, so ask when a key is pressed, not every frame.
+---@return "item"|"recipe"? kind
+---@return string? row
+function Crafting:GetHovered() end
+
+---Goes from another tab of the game's menu to its crafting tab, the way the game's own key for crafting does. True
+---when the crafting tab was asked for or is showing already, false on any other screen.
+---@return boolean
+function Crafting:OpenTab() end
+
+---Chooses a recipe on the open screen, as a click on its tile does. False when the screen does not list it.
+---@param row string
+---@return boolean
+function Crafting:Select(row) end
+
+---Hides the game's own recipe list on the open screen, or shows it again. Hidden, it keeps its place and takes no clicks.
+---A screen opened later has its list again. It is shown again when the mod reloads.
+---@param on boolean
+---@return boolean
+function Crafting:SetListHidden(on) end
 
 ---The top of the tree: World, GameInstance, GameState, GameMode, LocalPlayer, Engine and Viewport, where they exist.
 ---@return WaxInstance[]

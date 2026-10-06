@@ -5,7 +5,7 @@ if Wax.debug_panel then pcall(Wax.debug_panel.stop) end
 Wax.debug_panel = nil
 if Wax.ui then pcall(Wax.ui.stop) end
 Wax.ui = nil
-for _, name in ipairs({ "root", "icons", "style", "kit", "events", "tween", "input", "picker", "tags", "item", "split", "controls", "window",
+for _, name in ipairs({ "root", "icons", "style", "kit", "events", "tween", "input", "picker", "tags", "pictures", "item", "split", "slots", "tip", "fit", "controls", "window",
     "overlay", "notify", "init", "explorer_index", "explorer_path", "explorer_members", "explorer", "debug" }) do
     Wax.modules["gui." .. name] = nil
 end

@@ -15,6 +15,7 @@ local REFRESH_SECONDS = 0.5
 local LEVEL_COLOR = { error = "bad", warn = "warn", info = "text", debug = "dim", trace = "dim" }
 local window, mods_page, mods_note, console, opened, status
 local mod_rows, mods_signature, mod_filter, scan_tick, log_lines = {}, nil, "", 0, 0
+local mods_open = {}        -- mod id -> whether the user left its card open, for this session
 local filters = { error = true, warn = true, info = true }
 local search, follow = "", true
 local log_stamp, last_refresh = nil, 0
@@ -294,12 +295,20 @@ local function filter_mods()
 end
 
 local function rebuild_mods(list)
-    for _, row in ipairs(mod_rows) do row.control:Destroy() end
+    for _, row in ipairs(mod_rows) do
+        -- a card the user opened or closed by hand stays that way for the session
+        if row.section:IsOpen() ~= row.built_open then mods_open[row.mod.id] = row.section:IsOpen() end
+        row.control:Destroy()
+    end
     mod_rows = {}
     in_core_scope(function()
         for index, mod in ipairs(list) do
             local healthy, off = mod.status == "loaded", mod.status == "disabled"
-            local section = mods_page:Section(("%s  %s"):format(mod.name, mod.version or ""))
+            -- cards start closed, so the list stays short. One with a problem starts open, and a closed one says its state
+            local open = mods_open[mod.id]
+            if open == nil then open = mod.error ~= nil or mod.waiting ~= nil end
+            local state = off and " (switched off)" or (not healthy and (" (%s)"):format(mod.status) or "")
+            local section = mods_page:Section(("%s  %s%s"):format(mod.name, mod.version or "", state), { open = open })
             section:Field("Status", healthy and "loaded" or (off and (mod.fresh and "new: switched off until you enable it" or "switched off") or mod.status))
                 :SetColor(healthy and style.theme.good or (off and (mod.fresh and style.theme.warn or style.theme.dim) or style.theme.bad))
             if mod.error then section:Label(mod.error, { color = style.theme.bad, size = style.theme.small_size }) end
@@ -331,7 +340,7 @@ local function rebuild_mods(list)
             end, { icon = "trash-2", stretch = false })
             ask:Button("Keep", function() ask.control:SetVisible(false) end, { stretch = false })
             ask.control:SetVisible(false)
-            mod_rows[#mod_rows + 1] = { control = section.control, mod = mod, visible = true }
+            mod_rows[#mod_rows + 1] = { control = section.control, section = section, built_open = open, mod = mod, visible = true }
         end
     end)
     filter_mods()

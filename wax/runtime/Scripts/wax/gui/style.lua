@@ -174,8 +174,25 @@ local PALETTES = {
         "#A89B80", "#E0A030", "#F2BC57", "#8FBF4D", "#E0A030", "#E5604A" },
     Daylight = { "#F6F7F9", "#B9C0CA", "#E9ECF0", "#EEF0F3", "#D5D9E0", "#DDE1E7", "#CDD3DB", "#B9C0CA", "#D5D9E0", "#1B2028",
         "#5D6672", "#1F6FEB", "#3B82F6", "#1A7F37", "#9A6700", "#CF222E" },
+    Prospector = { "#15170F", "#5A6040", "#1E2116", "#1B1E14", "#343926", "#2A2E1F", "#3A3F2A", "#50573A", "#343926", "#EEF0DC",
+        "#A3A886", "#8E9A3C", "#A6B34D", "#7FC96B", "#F0B840", "#E5604A" },
+    Ember = { "#14100E", "#4A3A32", "#1D1714", "#1A1512", "#33271F", "#2A201B", "#3A2C24", "#54402F", "#33271F", "#F3E9E2",
+        "#A8958A", "#E8641C", "#FF8A47", "#6FCB6A", "#F2B33D", "#F0554A" },
+    Aurora = { "#0B1016", "#2E4A57", "#111A22", "#0F171E", "#1F2F3A", "#18242E", "#22323F", "#2F4656", "#1F2F3A", "#E4F1F5",
+        "#7F9AA6", "#7C5CFF", "#9C84FF", "#3DDC97", "#F5C150", "#FF6B81" },
+    Nebula = { "#0E0B1A", "#3B3360", "#151127", "#120F22", "#272043", "#1E1936", "#2A2349", "#3B3266", "#272043", "#ECE8FA",
+        "#9189B5", "#B845F5", "#D07BFF", "#4ADE80", "#FACC15", "#FB7185" },
+    Rosewood = { "#140D12", "#4D3442", "#1D131A", "#1A1117", "#33212C", "#2A1B24", "#3A2632", "#523646", "#33212C", "#F5E8EE",
+        "#A98C9B", "#D93B72", "#F06B98", "#5FCB8B", "#EDB44A", "#FF5C5C" },
+    Terminal = { "#060A07", "#1F3B26", "#0B120D", "#09100B", "#162419", "#101C13", "#18291C", "#234029", "#162419", "#D6F5DC",
+        "#6E9A78", "#1F9D48", "#3CCB6A", "#3CCB6A", "#D9B13B", "#E5534B" },
+    Glacier = { "#EEF3F8", "#A9B8C8", "#E1E9F1", "#E7EEF5", "#C9D5E1", "#D3DEE9", "#C2D0DE", "#A9BBCD", "#C9D5E1", "#15222E",
+        "#54677A", "#0E7FC2", "#2B97D8", "#15803D", "#A16207", "#C8233A" },
+    Sandstone = { "#F5EFE4", "#C9B99A", "#EBE2D2", "#F0E8DA", "#D9CCB4", "#E0D4BD", "#D2C4A8", "#BFAF8F", "#D9CCB4", "#2A2318",
+        "#6F6250", "#B5541C", "#CF6A2E", "#3F7D2A", "#9A6700", "#B42318" },
 }
-local THEME_ORDER = { "Midnight", "Graphite", "Abyss", "Dune", "Daylight" }
+local THEME_ORDER = { "Midnight", "Graphite", "Abyss", "Dune", "Prospector", "Ember", "Aurora", "Nebula", "Rosewood", "Terminal",
+    "Daylight", "Glacier", "Sandstone" }
 local custom_themes = {}
 
 local function palette(name)

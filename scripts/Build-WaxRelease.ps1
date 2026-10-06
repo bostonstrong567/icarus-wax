@@ -3,8 +3,8 @@
 .SYNOPSIS
   Builds the player download for Wax: build\Wax-<version>.zip.
 .DESCRIPTION
-  The zip holds a "game" folder (the UE4SS build Wax is tested on, with Wax at ue4ss\Mods\Wax and the example mod
-  at ue4ss\Mods\Wax\mods\Hello), the installer files from wax\release\payload, README.txt and the licences.
+  The zip holds a "game" folder (the UE4SS build Wax is tested on, with Wax at ue4ss\Mods\Wax and Recipe Browser
+  at ue4ss\Mods\Wax\mods\RecipeBrowser), the installer files from wax\release\payload, README.txt and the licences.
   Everything in it is a real file: no junctions are followed or copied. The version comes from wax\VERSION.
   Every Lua file that goes in is compiled with tools\lua\lua54\lua.exe first, and the build fails if one does not.
 .EXAMPLE
@@ -19,12 +19,12 @@ param([switch]$KeepStage)
 $ue4ssZip = Join-Path $ToolsDir 'ue4ss\UE4SS_v3.0.1-1152-ge3ba1016.zip'
 $runtime  = Join-Path $Root 'wax\runtime'
 $payload  = Join-Path $Root 'wax\release\payload'
-$hello    = Join-Path $Root 'luamods\Hello'
+$bundled  = Join-Path $Root 'luamods\RecipeBrowser'
 $lua      = Join-Path $ToolsDir 'lua\lua54\lua.exe'
 
 $version = (Get-Content (Join-Path $Root 'wax\VERSION') -Raw).Trim()
 if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "wax\VERSION should hold a version like 0.1.0, not '$version'." }
-foreach ($needed in $ue4ssZip, (Join-Path $runtime 'Scripts\main.lua'), (Join-Path $hello 'init.lua'), $lua) {
+foreach ($needed in $ue4ssZip, (Join-Path $runtime 'Scripts\main.lua'), (Join-Path $bundled 'init.lua'), $lua) {
     if (-not (Test-Path -LiteralPath $needed)) { throw "Missing: $needed" }
 }
 
@@ -50,13 +50,13 @@ foreach ($item in Get-ChildItem -LiteralPath $runtime -Force) {
     Copy-Item -LiteralPath $item.FullName -Destination $wax -Recurse
     $copied += $item.Name
 }
-foreach ($folder in 'saved', 'run\in', 'run\out', 'mods\Hello') { New-Item -ItemType Directory -Force (Join-Path $wax $folder) | Out-Null }
+foreach ($folder in 'saved', 'run\in', 'run\out', 'mods\RecipeBrowser') { New-Item -ItemType Directory -Force (Join-Path $wax $folder) | Out-Null }
 if (-not (Test-Path -LiteralPath (Join-Path $wax 'enabled.txt'))) { Set-Content -LiteralPath (Join-Path $wax 'enabled.txt') -Value '' }
 [System.IO.File]::WriteAllText((Join-Path $wax 'VERSION'), "$version`r`n", [System.Text.Encoding]::ASCII)
 
-# The example mod, without editor files that point into this workspace.
-foreach ($item in Get-ChildItem -LiteralPath $hello -Force | Where-Object { -not $_.Name.StartsWith('.') }) {
-    Copy-Item -LiteralPath $item.FullName -Destination (Join-Path $wax 'mods\Hello') -Recurse
+# The mod that comes with Wax, without editor files that point into this workspace.
+foreach ($item in Get-ChildItem -LiteralPath $bundled -Force | Where-Object { -not $_.Name.StartsWith('.') }) {
+    Copy-Item -LiteralPath $item.FullName -Destination (Join-Path $wax 'mods\RecipeBrowser') -Recurse
 }
 
 $links = @(Get-ChildItem -LiteralPath $stage -Recurse -Force -Attributes ReparsePoint)
@@ -117,7 +117,7 @@ try {
         'licenses/UE4SS-LICENSE.txt', 'licenses/Lucide-LICENSE.txt', 'game/dwmapi.dll', 'game/ue4ss/UE4SS.dll',
         'game/ue4ss/UE4SS-settings.ini', 'game/ue4ss/Mods/mods.txt', 'game/ue4ss/Mods/Wax/enabled.txt',
         'game/ue4ss/Mods/Wax/VERSION', 'game/ue4ss/Mods/Wax/Scripts/main.lua', 'game/ue4ss/Mods/Wax/bin/waxco.dll',
-        'game/ue4ss/Mods/Wax/mods/Hello/init.lua', 'game/ue4ss/Mods/Wax/saved/', 'game/ue4ss/Mods/Wax/run/in/',
+        'game/ue4ss/Mods/Wax/mods/RecipeBrowser/init.lua', 'game/ue4ss/Mods/Wax/saved/', 'game/ue4ss/Mods/Wax/run/in/',
         'game/ue4ss/Mods/Wax/run/out/'
     $missing = @($must | Where-Object { $_ -notin $names })
     if ($missing.Count) { throw "The zip is missing: $($missing -join ', ')" }

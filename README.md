@@ -62,7 +62,8 @@ technique of its own. If you would rather not trust the zip, build it from this 
 | [`wax/cli`](wax/cli) | Command-line tools that talk to the running game: run Lua, read the log, measure frame time. |
 | [`wax/release`](wax/release) | The installer and its tests. |
 | [`wax/tests`](wax/tests) | Tests that run without the game (`offline`) and tests that are sent to the running game (`live`). |
-| [`luamods`](luamods) | Two mods to read: `Hello`, the example in the download, and `EntityESP`. |
+| [`luamods`](luamods) | Two mods to read: `RecipeBrowser`, which comes with the download from version 0.2.0, and `EntityESP`. |
+| [`wax/examples`](wax/examples) | `Hello`, a small mod to start from. |
 | [`scripts`](scripts) | The build and test scripts. |
 
 ## Build it yourself

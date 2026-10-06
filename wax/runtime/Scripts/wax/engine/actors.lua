@@ -33,13 +33,18 @@ local function ended_now(parameter, reason_parameter)
     instance.retire(address)
 end
 
+-- The engine calls these during a map load, seconds after the last frame: that is not a runaway script.
 local function on_began(parameter)
+    local was = guard.suspend_watchdog(true)
     local ok, problem = pcall(began_now, parameter)
+    guard.suspend_watchdog(was)
     if not ok then guard.report(tostring(problem), "actors.began") end
 end
 
 local function on_ended(parameter, reason_parameter)
+    local was = guard.suspend_watchdog(true)
     local ok, problem = pcall(ended_now, parameter, reason_parameter)
+    guard.suspend_watchdog(was)
     if not ok then guard.report(tostring(problem), "actors.ended") end
 end
 

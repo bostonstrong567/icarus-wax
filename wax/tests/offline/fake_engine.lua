@@ -2,11 +2,16 @@
 -- It cannot catch wrong argument types (only the game can), but it runs all of the GUI's own logic.
 
 local fake = { hooks = {}, objects = 0, calls = {}, pressed = false, mouse = { X = 0, Y = 0 }, screen_scale = 1,
-    dead_touches = 0, dead_last = nil }
+    dead_touches = 0, dead_last = nil,
+    touches = 0,        -- every member read or written on any object, whatever answers it
+    react = {},         -- react[name] = function(self, ...) stands in for the engine function of that name
+    keys = {},          -- keys.R = true: WasInputKeyJustPressed answers true for R (fake.key_pressed still works)
+    focused = nil }     -- the widget that has the keyboard, for HasKeyboardFocus and HasFocusedDescendants
 
 local OBJECT = {}
 local next_address = 0x1000
 local all = {}      -- every object, in the order it was made
+local hovered_widget = nil
 
 -- An object the engine has freed: the library must never use one again. Each use is counted.
 local function touched(object, key)
@@ -19,11 +24,17 @@ local function touched(object, key)
 end
 
 local ANSWERS = {
-    IsValid = function() return true end,
+    IsValid = function(self) return not (self and rawget(self, "__gone")) end,
     IsA = function() return false end,
     IsInViewport = function() return true end,
     IsPressed = function() return fake.pressed end,
-    WasInputKeyJustPressed = function(_, key) return fake.key_pressed ~= nil and key.KeyName == fake.key_pressed end,
+    WasInputKeyJustPressed = function(_, key)
+        local name = key.KeyName
+        if fake.key_pressed ~= nil and name == fake.key_pressed then return true end
+        return fake.keys ~= nil and fake.keys[name] == true
+    end,
+    HasKeyboardFocus = function(self) return fake.focused ~= nil and rawequal(self, fake.focused) end,
+    HasFocusedDescendants = function(self) return fake.focused ~= nil and not rawequal(self, fake.focused) end,
     GetArrayNum = function(self)
         local count = 0
         for key in pairs(rawget(self, "__members")) do
@@ -34,7 +45,10 @@ local ANSWERS = {
     GetDesiredSize = function() return { X = 120, Y = 48 } end,
     GetScrollOffset = function() return fake.scroll_offset or 0 end,
     GetViewOffsetFraction = function() return fake.scroll_fraction or 0 end,
-    IsHovered = function() return fake.hovered or false end,
+    IsHovered = function(self)
+        if hovered_widget ~= nil then return rawequal(self, hovered_widget) end
+        return fake.hovered or false
+    end,
     K2_GetWorldSettings = function() return fake.world_settings end,
     GetScrollOffsetOfEnd = function() return fake.scroll_end or 1000 end,
     GetViewportSize = function() return { X = 1920, Y = 1080 } end,
@@ -69,8 +83,36 @@ function fake.last(object, member)
 end
 function fake.writes(object) return rawget(object, "__writes") or 0 end
 
+-- IsValid() answers false for this object from now on.
+function fake.invalidate(object) rawset(object, "__gone", true) end
+
+-- IsHovered() is true for this widget only. fake.hover(nil) goes back to fake.hovered for every widget.
+function fake.hover(widget) hovered_widget = widget end
+
+-- A value Lua owns, such as a soft reference: type() answers its kind and fake.free never marks it dead.
+local VALUE_KINDS = { soft = "TSoftObjectPtrUserdata", soft_class = "TSoftClassPtrUserdata", name = "FName", text = "FText",
+                      string = "FString" }
+local VALUE = {}
+VALUE.__index = function(self, key)
+    if key == "type" then return function() return rawget(self, "__kind") end end
+    if key == "IsValid" then return function() return not rawget(self, "__gone") end end
+    return nil
+end
+VALUE.__tostring = function(self) return "value(" .. tostring(rawget(self, "__kind")) .. ")" end
+function fake.value(kind)
+    -- __props is what fake_world.as_userdata() looks for, so the value counts as userdata there too
+    return setmetatable({ __kind = VALUE_KINDS[kind] or kind or "TSoftObjectPtrUserdata", __props = {} }, VALUE)
+end
+
 OBJECT.__index = function(self, key)
     touched(self, key)
+    fake.touches = fake.touches + 1
+    local react = fake.react[key]
+    if react then return react end
+    if key == "type" then
+        local kind = rawget(self, "__kind") or "UObject"
+        return function() return kind end
+    end
     if key == "GetAddress" then return function() return rawget(self, "__address") end end
     if key == "GetSize" then return function() return rawget(self, "__size") or { X = 0, Y = 0 } end end
     if key == "GetPosition" then return function() return rawget(self, "__position") or { X = 0, Y = 0 } end end
@@ -100,6 +142,7 @@ end
 
 OBJECT.__newindex = function(self, key, value)
     touched(self, key)
+    fake.touches = fake.touches + 1
     rawset(self, "__writes", (rawget(self, "__writes") or 0) + 1)
     rawget(self, "__members")[key] = value
 end

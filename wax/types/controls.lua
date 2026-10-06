@@ -22,6 +22,8 @@ function Control:SetEnabled(enabled) end
 ---@field size? number
 ---@field face? string Typeface of the "ui" family: "Book", "Medium", "Bold" ...
 ---@field family? WaxFontFamily "ui" (the game's own interface font) when omitted.
+---@field align? "center"|"right" Where the text sits in its line. Left when omitted.
+---@field weight? number In a row: its share of the width beside the other controls. 1 when omitted.
 
 ---@class WaxLabel: WaxControl
 local Label = {}
@@ -46,6 +48,7 @@ function Heading:Set(value) end
 ---@field stretch? boolean A button with a caption is as wide as its container. False keeps it as wide as its caption. An icon-only button is small unless this is true.
 ---@field icon? string Icon name shown before the caption. The menu's Icons page lists the names.
 ---@field spin? boolean The icon turns round once on every click, to show that something has started.
+---@field tab? boolean Makes it one of a row of tabs: SetActive marks the chosen one.
 
 ---@class WaxButton: WaxControl
 ---@field Activated WaxSignal<fun()> Fires on each click, after on_click.
@@ -58,6 +61,14 @@ function Button:SetIcon(name) end
 
 ---Turns the icon round once.
 function Button:Spin() end
+
+---Replaces the caption of a button that was made with one.
+---@param text any
+function Button:SetCaption(text) end
+
+---Marks a button made with `tab = true` as the chosen tab, or as one of the others.
+---@param on boolean
+function Button:SetActive(on) end
 
 ---@class WaxIconOptions: WaxOptions
 ---@field size? number Default 20.
@@ -368,6 +379,9 @@ function Container:Color(caption, color, on_change) end
 ---@field gap? number The space between cells. Default: the theme's spacing.
 ---@field batch? integer How many cells are made in one frame. Default 24. Use fewer for cells with a lot in them.
 ---@field height? number Default 300. On a page made with scroll = false the grid takes the space left when omitted.
+---@field spare? integer Rows kept ready above and below the ones that show, so a fast scroll does not show empty space. Default: half of what shows, between 2 and 6.
+---@field warm? boolean Makes the cells one a frame from the moment the grid exists, also while the menu is closed, so the list is there the first time it is shown.
+---@field view? number With `warm`: the height in pixels the list is expected to show. Default: the window's height.
 
 ---A grid for any number of items: only the cells in view exist, and they are reused as it scrolls. It follows its scrolling while the menu is open, so it belongs in a window, not in an overlay.
 ---@class WaxGrid: WaxControl
@@ -473,6 +487,63 @@ function Split:GetShare() end
 ---@param options? WaxSplitOptions
 ---@return WaxSplit
 function Container:Split(options) end
+
+---What one cell of a Slots control shows. A cell with no look is empty and takes no clicks.
+---@class WaxSlotLook
+---@field image? string A picture of the game by its path, such as an item's icon.
+---@field icon? string An icon by name, for a cell with no picture.
+---@field count? string|number Small text in the lower right corner.
+---@field mark? string A small icon in the upper left corner.
+---@field value? any What the signals and ui.Hovered give for this cell.
+---@field tip? string|table|fun(): any The tooltip: a text, `{ title = "...", lines = { "text" or { "text", "warn" } } }`, or a function that returns one.
+---@field dim? boolean Draws the picture faint.
+---@field selected? boolean Marks the cell as the chosen one.
+---@field tone? "good"|"warn"|"bad"|"accent" A short line of that colour under the picture.
+---@field plain? boolean A picture only: no box, and the mouse passes over it.
+
+---@class WaxSlotsOptions: WaxOptions
+---@field columns? integer Default 9.
+---@field rows? integer Default 1.
+---@field size? number The side of a cell. Default 36.
+---@field gap? number Space between cells. Default 2.
+---@field backing? boolean False leaves out the box behind each cell.
+---@field align? "left"|"center"|"right" Where the block sits in its line.
+---@field below? number Space under the block. The theme's spacing when omitted.
+---@field looks? WaxSlotLook[] What to show at the start.
+
+---A block of square cells that each show a picture, a count and a mark.
+---@class WaxSlots: WaxControl
+---@field Activated WaxSignal<fun(value: any, index: integer, look: WaxSlotLook)> A cell was clicked.
+---@field RightClicked WaxSignal<fun(value: any, index: integer, look: WaxSlotLook)>
+---@field MiddleClicked WaxSignal<fun(value: any, index: integer, look: WaxSlotLook)>
+---@field Hovered WaxSignal<fun(value: any, index: integer, look: WaxSlotLook?)> The mouse came over a cell.
+local Slots = {}
+
+---Shows these looks, the first in the first cell. Cells past the end of the list are empty.
+---@param looks WaxSlotLook[]
+function Slots:Set(looks) end
+
+---Changes one cell.
+---@param index integer
+---@param look WaxSlotLook?
+function Slots:SetLook(index, look) end
+
+---@param index integer
+---@return WaxSlotLook?
+function Slots:GetLook(index) end
+
+---How many cells it has.
+---@return integer
+function Slots:Capacity() end
+
+---True once every cell exists. Cells are made a few a frame.
+---@return boolean
+function Slots:Ready() end
+
+---Adds a block of square cells for pictures, such as items. Give it looks with Set.
+---@param options? WaxSlotsOptions
+---@return WaxSlots
+function Container:Slots(options) end
 
 ---Adds a progress bar. value is 0..1.
 ---@param caption string

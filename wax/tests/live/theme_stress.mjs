@@ -9,7 +9,7 @@ import { ROOT, crashFolders, evalLua, gameRunning, sleep } from '../../cli/bridg
 const rounds = Number(process.argv[2] ?? 6);
 const stepFile = fs.readFileSync(path.join(ROOT, 'wax', 'tests', 'live', 'theme_stress_step.lua'), 'utf8');
 const crashesBefore = crashFolders();
-const themes = ['Dune', 'Graphite', 'Daylight', 'Abyss', 'Midnight'];
+const themes = ['Dune', 'Ember', 'Graphite', 'Glacier', 'Nebula', 'Daylight', 'Prospector', 'Abyss', 'Terminal', 'Midnight'];
 const accents = ['Teal', 'Pink', 'From the theme', 'Amber', 'Blue'];
 let steps = 0;
 let last;

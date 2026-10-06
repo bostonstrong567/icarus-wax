@@ -105,8 +105,13 @@ local function arm()
 end
 guard.arm = arm
 
--- The debugger can pause Lua for any length of time. That must not count as a runaway script.
-function guard.suspend_watchdog(flag) suspended = flag and true or false end
+-- For Lua that is not a runaway script however long ago the last frame was: a paused debugger, Wax's own engine hooks.
+-- Returns what it was, to put back.
+function guard.suspend_watchdog(flag)
+    local was = suspended
+    suspended = flag and true or false
+    return was
+end
 
 local function call_finish(label, ok, ...)
     if ok then return true, ... end

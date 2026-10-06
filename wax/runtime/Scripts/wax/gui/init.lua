@@ -14,6 +14,10 @@ local overlay_module = Wax.import("gui.overlay")
 local notify = Wax.import("gui.notify")
 local tags = Wax.import("gui.tags")
 local picker = Wax.import("gui.picker")
+local pictures = Wax.import("gui.pictures")
+local slots = Wax.import("gui.slots")
+local tip = Wax.import("gui.tip")
+local fit = Wax.import("gui.fit")
 local sched = Wax.import("core.sched")
 local storage = Wax.import("core.storage")
 local scope = Wax.import("core.scope")
@@ -56,17 +60,18 @@ local function any_window_shown()
     return false
 end
 
--- Opens the menu: windows appear and the mouse is freed to use them.
-function ui.Open()
+-- Opens the menu: windows appear and the mouse is freed to use them. options: { windows = false } frees the mouse for panels only.
+function ui.Open(options)
     if menu_open or not root.exists() then return end
     menu_open = true
     log:info("menu opened")
-    if not any_window_shown() then
+    local bare = type(options) == "table" and options.windows == false
+    if not bare and not any_window_shown() then
         for i = 1, #windows do
             if windows[i].closed_by_user then windows[i]:Show() end
         end
     end
-    if not preview then show_layer(true) end
+    if not preview and not bare then show_layer(true) end
     overlay_module.set_moving(true)
     input.set_cursor(true)
     ui.Opened:Fire()
@@ -124,6 +129,20 @@ function ui.Window(options)
 end
 
 ui.Overlay = overlay_module.create
+ui.Panel = overlay_module.panel
+-- The value of the slot under the mouse, then its look and its control.
+ui.Hovered = slots.hovered
+ui.IsTyping = controls.typing
+-- The size of the screen in the units windows and panels are laid out in.
+function ui.ScreenSize()
+    local width, height = root.viewport_size()
+    return width / style.scale, height / style.scale
+end
+ui.Pictures = { Check = pictures.check, Stats = pictures.stats }
+-- ui.FitGame({ scale = 0.85, corner = "bottom-left" }) draws the game's own menus smaller, which leaves room beside them.
+ui.FitGame = fit.create
+-- The game's own menu screen that is showing now, and the main menu's tab number. Nothing when none shows.
+ui.GameScreen = fit.screen
 
 -- ui.Tag(creature, { text = "Wolf" }) keeps a line of text over something in the world: :Set, :SetColor, :Remove
 ui.Tag = tags.create
@@ -138,11 +157,36 @@ function ui.Windows() return table.move(windows, 1, #windows, 1, {}) end
 
 -- Runs callback() when the key ("F6", "K", "MiddleMouseButton" ...) is pressed during play, and in the menu too with options.in_menu.
 local hotkeys = {}
+-- A key that also puts something in a text box. A function key or a mouse button does not, so it works while one has the keyboard.
+local function writes(key)
+    local want = input.parse(key)
+    if want.ctrl or want.alt then return false end
+    key = want.key
+    return not (key:match("^F%d+$") or key:find("Mouse", 1, true) or key:find("Gamepad", 1, true))
+end
+
+-- A plain key gives way to the same key with Ctrl, Shift or Alt: "3" does not run while Ctrl is held if "Ctrl+3" is bound.
+local function taken_with_modifiers(entry)
+    local plain = input.parse(entry.key)
+    if plain.held then return false end
+    local ctrl, shift, alt = nil, nil, nil
+    for index = 1, #hotkeys do
+        local other = input.parse(hotkeys[index].key)
+        if other.held and other.key == plain.key then
+            if ctrl == nil then ctrl, shift, alt = input.modifiers() end
+            if other.ctrl == ctrl and other.shift == shift and other.alt == alt then return true end
+        end
+    end
+    return false
+end
 function ui.Hotkey(key, callback, options)
     if type(key) ~= "string" or key == "" then error("ui.Hotkey expects a key name such as \"F6\"", 2) end
     if type(callback) ~= "function" then error("ui.Hotkey expects a function to run", 2) end
+    -- typing = true lets it run while a text box has the keyboard (a key such as Tab that is meant for the box).
+    -- hover = true makes it a key for the slot under the mouse: it is not even looked at while no slot is under it.
     local entry = { key = key, run = guard.wrap("hotkey " .. key, function() sched.task.spawn(callback) end),
-        in_menu = options and options.in_menu or false }
+        in_menu = options and options.in_menu or false, typing = options and options.typing or false,
+        hover = options and options.hover or false, writes = writes(key) }
     hotkeys[#hotkeys + 1] = entry
     local function disconnect()
         for index, other in ipairs(hotkeys) do
@@ -153,7 +197,7 @@ function ui.Hotkey(key, callback, options)
         end
     end
     scope.own(disconnect)
-    return { Disconnect = disconnect, SetKey = function(_, new_key) entry.key = new_key end }
+    return { Disconnect = disconnect, SetKey = function(_, new_key) entry.key, entry.writes = new_key, writes(new_key) end }
 end
 
 -- Closing the last window closes the menu, so the mouse never stays free with nothing to click.
@@ -182,6 +226,7 @@ function ui.SetScale(scale)
     overlay_module.rescale()
     notify.rescale()
     tags.rescale()
+    tip.rescale()
     return applied
 end
 function ui.GetScale() return style.scale end
@@ -281,6 +326,9 @@ function ui.start()
     if type(saved.windows) ~= "table" then saved.windows = {} end
     if type(saved.overlays) ~= "table" then saved.overlays = {} end
     picker.copy = ui.Copy
+    slots.on_hover(function(look)
+        if look and look.tip then tip.show(look.tip) else tip.hide() end
+    end)
     overlay_module.recall = function(key) return saved.overlays[key] end
     overlay_module.remember = function(key, place)
         saved.overlays[key] = place
@@ -326,6 +374,9 @@ local function recover()
     window_module.forget_all()
     overlay_module.forget_all()
     tags.forget_all()
+    slots.forget_all()
+    pictures.forget_all()
+    tip.forget()
     notify.destroy_all()
     events.forget_all()
     input.forget()
@@ -362,6 +413,19 @@ function ui.step()
     frames = frames + 1
     if frames % 120 == 0 or (not screen_known and frames % 10 == 0) then watch_screen() end
     tween.step()
+    controls.warm()
+    slots.warm()
+    pictures.step()
+    -- panels show beside the game's own screens: they wait for the game's mouse as well as for the menu
+    local cursor = false
+    if not menu_open and overlay_module.wants_cursor() then
+        local player = input.controller()
+        cursor = player ~= nil and player.bShowMouseCursor == true
+    end
+    local panels = overlay_module.watch(menu_open or preview, cursor)
+    slots.step(menu_open or panels)
+    tip.step()
+    fit.step()
     if menu_open or preview then controls.step() end
     notify.step()
     tags.step()
@@ -375,9 +439,11 @@ function ui.step()
     if #hotkeys > 0 and not input.capturing() then
         for index = #hotkeys, 1, -1 do
             local entry = hotkeys[index]
-            if (entry.in_menu or not menu_open) then
+            if (entry.in_menu or not menu_open) and (not entry.hover or slots.hovered() ~= nil) then
                 local ok, pressed = pcall(input.just_pressed, entry.key)
-                if ok and pressed then entry.run() end
+                if ok and pressed and (entry.typing or not entry.writes or not controls.typing()) and not taken_with_modifiers(entry) then
+                    entry.run()
+                end
             end
         end
     end
@@ -400,6 +466,10 @@ function ui.stop()
     window_module.destroy_all()
     overlay_module.destroy_all()
     tags.destroy_all()
+    slots.forget_all()
+    pictures.forget_all()
+    tip.forget()
+    fit.restore()
     notify.destroy_all()
     root.stop()
 end

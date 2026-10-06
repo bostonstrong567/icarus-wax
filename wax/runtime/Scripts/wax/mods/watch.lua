@@ -16,6 +16,7 @@ local dirty = {}                            -- mod id -> when its last change wa
 local enabled = true
 
 watch.on_change = nil                       -- function(mod_id), set by the loader
+watch.on_lost = nil                         -- function(mod_id): a watched file is gone, set by the loader
 watch.checks = 0
 
 -- list: { id, dir, files = { ["relative/path.lua"] = true } } for every mod to watch
@@ -47,7 +48,14 @@ end
 local function check(entry)
     watch.checks = watch.checks + 1
     local file = io.open(entry.path, "rb")
-    if not file then return end
+    if not file then
+        if not entry.lost then
+            entry.lost = true
+            if watch.on_lost then watch.on_lost(entry.mod) end
+        end
+        return
+    end
+    entry.lost = nil
     local content = file:read("a")
     file:close()
     if entry.content == nil then

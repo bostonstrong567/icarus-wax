@@ -524,6 +524,8 @@ end
 function loader.set_watching(on) watch.set_enabled(on) end
 function loader.watching() return watch.enabled() end
 watch.on_change = function(id) pending[id] = true end
+-- a folder taken away while the game runs leaves the list without anyone asking for a look
+watch.on_lost = function() pending_sync = pending_sync or "hold" end
 
 -- Adds a value to every mod's environment under `name` (used by other core modules to publish their API)
 function loader.provide(name, value) extras[name] = value end

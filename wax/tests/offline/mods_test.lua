@@ -264,6 +264,26 @@ t.test("saving a file reloads its mod with nothing outside the game involved", f
     frames_until(function() return loader.get("Watched").exports and loader.get("Watched").exports.value == 5 end)
 end)
 
+t.test("a mod whose folder is taken away while the game runs leaves the list by itself", function()
+    put_mod("Leaving", { ["mod.lua"] = "return { name = 'Leaving' }", ["init.lua"] = "return true" })
+    write_index()
+    loader.sync()
+    t.eq(status("Leaving").status, "loaded")
+    os.remove(scratch .. "/Leaving/init.lua")
+    os.remove(scratch .. "/Leaving/mod.lua")
+    known.Leaving = nil
+    write_index()
+    local gone = false
+    for _ = 1, 2000 do
+        frame()
+        if not status("Leaving") then
+            gone = true
+            break
+        end
+    end
+    t.ok(gone, "nothing asked for a look at the folders, and the mod is still listed")
+end)
+
 t.test("storage keeps a mod's settings on disk, one write for many saves", function()
     mkdir(scratch .. "/saved")
     local storage = Wax.import("core.storage")

@@ -366,7 +366,7 @@ function Install-Wax {
     Write-Host 'Next:'
     Write-Host '  1. Start ICARUS.'
     Write-Host '  2. Press F8 in the game to open the Wax menu.'
-    Write-Host '  3. Put your mods in this folder, one folder per mod. "Hello" is an example.'
+    Write-Host '  3. Put your mods in this folder, one folder per mod. Recipe Browser is there already.'
     Write-Host ('       ' + (Combine $wax 'mods'))
     Write-Host ''
     Write-Host "Docs: $DocsUrl"
