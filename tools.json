@@ -1,0 +1,40 @@
+{
+  "tools": [
+    {
+      "name": "ue4ss",
+      "type": "github-release",
+      "repo": "bostonstrong567/icarus-wax",
+      "tag": "ue4ss-v3.0.1-1152-ge3ba1016",
+      "assets": [
+        "UE4SS_v3.0.1-1152-ge3ba1016.zip"
+      ],
+      "extract": false,
+      "about": "UE4SS v3.0.1-1152-ge3ba1016, the build Wax is tested on. Kept zipped; Build-WaxRelease.ps1 and Install-UE4SS.ps1 unpack it."
+    },
+    {
+      "name": "lua\\lua54",
+      "type": "lua-source",
+      "version": "5.4.8",
+      "exe": "lua.exe",
+      "smoke": [
+        "-v"
+      ],
+      "about": "Standalone Lua 5.4, built from lua.org source with gcc. Same language version UE4SS embeds; runs the framework's offline tests."
+    },
+    {
+      "name": "lua\\lua-language-server",
+      "type": "github-release",
+      "repo": "LuaLS/lua-language-server",
+      "assets": [
+        "lua-language-server-*-win32-x64.zip"
+      ],
+      "exe": "bin\\lua-language-server.exe",
+      "smoke": [
+        "--version"
+      ],
+      "about": "Lua language server: autocomplete and diagnostics in VS Code, and headless type-checking of mods (--check)."
+    }
+  ],
+  "manual": [],
+  "references": []
+}

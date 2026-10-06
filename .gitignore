@@ -1,14 +1,17 @@
-# Runtime state Wax writes next to itself in an installed game
-runtime/saved/
-runtime/run/
-runtime/enabled.txt
-
-# Third-party pieces that ship in the release zip, not source
-runtime/assets/lucide/
-runtime/bin/
-*.dll
-*.exe
-
-# Build output
-*.vsix
+# Downloaded or built; recreate with the scripts.
+/tools/
+/build/
+/game-data/
 node_modules/
+__pycache__/
+*.pyc
+
+# This machine's own files.
+/wax/runtime/run/
+/wax/runtime/saved/
+/wax/runtime/mods
+/wax/wax.config.json
+/luamods/*/.wax/
+
+# Copies made by scripts\Build-WaxExtension.ps1.
+/wax/vscode/bundled/

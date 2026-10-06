@@ -1,0 +1,4 @@
+test/**
+media/make_icon.py
+.vscodeignore
+**/*.map
