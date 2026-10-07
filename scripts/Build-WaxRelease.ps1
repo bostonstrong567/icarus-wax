@@ -18,10 +18,9 @@
   .\scripts\Build-WaxRelease.ps1
   .\scripts\Build-WaxRelease.ps1 -Unsigned           # the zip alone, for trying it out; it cannot be published
   .\scripts\Build-WaxRelease.ps1 -KeepStage          # leaves build\_wax-release for a look
-  .\scripts\Build-WaxRelease.ps1 -WithSetupProgram   # also packs "Wax Setup.exe", which is not finished: never signed, never published
 #>
 [CmdletBinding()]
-param([switch]$KeepStage, [switch]$Unsigned, [switch]$WithSetupProgram)
+param([switch]$KeepStage, [switch]$Unsigned)
 . "$PSScriptRoot\_common.ps1"
 . "$PSScriptRoot\_release.ps1"
 
@@ -147,12 +146,6 @@ $luaFailed = $LASTEXITCODE -ne 0
 Remove-Item -LiteralPath $list -Force
 if ($luaFailed) { throw 'A Lua file in the release does not compile. See above.' }
 
-# The installer program is not finished and not made to the rules the rest keeps. It only goes in when asked for, and such a zip is never signed.
-if ($WithSetupProgram) {
-    & (Join-Path $PSScriptRoot 'Build-WaxSetup.ps1') -Game $game
-    Copy-Item -LiteralPath (Join-Path $BuildDir 'setup\Wax Setup.exe') -Destination (Join-Path $stage 'Wax Setup.exe')
-}
-
 # Folders are written as entries of their own, so the empty ones (saved, run\in, run\out) exist after extraction.
 if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
 Add-Type -AssemblyName System.IO.Compression, System.IO.Compression.FileSystem
@@ -187,8 +180,7 @@ try {
     $missing = @($must | Where-Object { $_ -notin $names })
     if ($missing.Count) { throw "The zip is missing: $($missing -join ', ')" }
     $programs = @($names | Where-Object { $_ -match '\.(exe|com|scr|msi)$' })
-    $allowed = $WithSetupProgram ? @('Wax Setup.exe') : @()
-    if (($programs -join '|') -cne ($allowed -join '|')) { throw "The zip holds programs that do not belong in it: $($programs -join ', ')" }
+    if ($programs.Count) { throw "The zip holds programs that do not belong in it: $($programs -join ', ')" }
     # A player's copy has to be free to update itself, so the mark of a development copy never goes out.
     if ('game/ue4ss/Mods/Wax/dev.txt' -in $names) { throw 'dev.txt ended up in the zip.' }
     $top = @($names | ForEach-Object { ($_ -split '/')[0] } | Sort-Object -Unique)
@@ -203,10 +195,6 @@ Write-Host "Top level: $($top -join ', ')"
 Write-Host "From wax\runtime: $($copied -join ', ')"
 Write-Host "UE4SS mods switched off: $($cheatMods -join ', ')"
 
-if ($WithSetupProgram) {
-    Write-Host 'This zip holds "Wax Setup.exe", which is not finished. It is not signed, the release test fails on it, and Publish-Release.ps1 does not publish it.'
-    return
-}
 if ($Unsigned) {
     Write-Host 'Not signed (-Unsigned). This zip is for trying out: no updater installs it, and Publish-Release.ps1 does not publish it.'
     Write-Host 'Test it with: .\wax\release\test\Test-WaxRelease.ps1'

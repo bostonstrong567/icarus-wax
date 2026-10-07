@@ -1,7 +1,0 @@
-<Project>
-  <!-- Everything the build makes goes under build\setup, so this folder holds source only. -->
-  <PropertyGroup>
-    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)..\..\build\setup\obj\</BaseIntermediateOutputPath>
-    <BaseOutputPath>$(MSBuildThisFileDirectory)..\..\build\setup\bin\</BaseOutputPath>
-  </PropertyGroup>
-</Project>

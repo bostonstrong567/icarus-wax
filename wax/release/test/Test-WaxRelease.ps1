@@ -309,7 +309,7 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $package)
 $top = @(Get-ChildItem -LiteralPath $package -Force | ForEach-Object Name | Sort-Object)
 $wantedTop = @('game', 'Install Wax.cmd', 'licenses', 'README.txt', 'Uninstall Wax.cmd', 'Update Wax.cmd', 'Wax-Setup.ps1' | Sort-Object)
-Check 'the zip has the expected top level, and the unfinished installer program is not in it' (($top -join '|') -eq ($wantedTop -join '|')) ($top -join ', ')
+Check 'the zip has the expected top level and no program in it' (($top -join '|') -eq ($wantedTop -join '|')) ($top -join ', ')
 $kinds = '.exe', '.com', '.scr', '.msi', '.dll', '.sys', '.ocx', '.cpl', '.bat', '.cmd', '.ps1', '.psm1', '.psd1', '.vbs', '.vbe', '.js', '.jse', '.wsf', '.wsh', '.hta', '.lnk', '.jar', '.reg', '.pif'
 $runnable = @(Get-ChildItem -LiteralPath $package -Recurse -Force -File | Where-Object { $_.Extension -in $kinds } | ForEach-Object { $_.FullName.Substring($package.Length + 1) } | Sort-Object)
 $wantedRunnable = @('game\dwmapi.dll', 'game\ue4ss\UE4SS.dll', "game\$waxPath\bin\waxco.dll", "game\$waxPath\bin\waxnet.dll", "game\$waxPath\Wax-Import.ps1",
