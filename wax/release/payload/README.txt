@@ -50,6 +50,14 @@ A mod is a folder with an init.lua in it. One mod comes with Wax: Recipe
 Browser, which shows every item and its recipes beside your inventory. The
 docs explain how to write your own.
 
+Mods added with the "Add to game" button on the Wax site keep themselves up to
+date, and so does Recipe Browser. While the game runs, Wax asks the mod
+catalogue at wax-icarus.duckdns.org whether a newer version is out, downloads
+it and puts it in. The version before stays in the mods folder, under a name
+that starts with ".removed-". A mod you wrote or copied in yourself is never
+changed. To decide for yourself when a mod is updated, open the Wax menu (F8),
+go to Mods and switch off "Auto Update".
+
 Wax keeps its settings, and the settings of your mods, in this folder:
 
   ...\Binaries\Win64\ue4ss\Mods\Wax\saved

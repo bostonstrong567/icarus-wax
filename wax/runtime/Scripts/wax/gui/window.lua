@@ -15,6 +15,7 @@ local M = {}
 local V, H, VA = style.Visibility, style.HAlign, style.VAlign
 local MIN_WIDTH, MIN_HEIGHT = 240, 140
 local SPLIT_WIDTH, MIN_SIDE, MIN_PAGE = 7, 96, 220
+local MAX_SIDE_NEED = 220
 local windows = {}
 local top_order = 0
 M.windows = windows
@@ -136,9 +137,9 @@ local function light_splitter(window, on)
     window.split_line_box:SetWidthOverride((on or dragging) and 2 or 1)
 end
 
--- Keeps the sidebar at least MIN_SIDE wide and leaves the page at least MIN_PAGE.
+-- Keeps the sidebar wide enough for its longest page name and leaves the page at least MIN_PAGE.
 local function set_side_width(window, width)
-    width = math.max(MIN_SIDE, math.min(width, window.width - MIN_PAGE))
+    width = math.max(window.side_need or MIN_SIDE, math.min(width, window.width - MIN_PAGE))
     window.side_width, window.nav_width = width, width + SPLIT_WIDTH
     window.side_sizer:SetWidthOverride(width)
     window.wrapped_at = nil
@@ -430,6 +431,14 @@ local function build_page(self, page, name, options)
     page.marker, page.backing, page.caption, page.icon, page.item = marker, backing, caption, icon, item
     page.button = button
     self.pages[#self.pages + 1] = page
+    if side and self.side_sizer then
+        -- the name must never be cut off: 60 for the padding and the icon, about 9 a letter
+        local need = math.min(MAX_SIDE_NEED, 60 + math.ceil((utf8.len(page.name) or #page.name) * 9.2))
+        if need > (self.side_need or MIN_SIDE) then
+            self.side_need = need
+            if self.side_width < need then set_side_width(self, need) end
+        end
+    end
     local unwatch = scroller and watch_scroll(self, scroller, page) or function() end
     local unclick = events.connect(button, "OnClicked", self.parking, function() select_page(self, page) end)
     -- a page disconnects its own events when it is removed, while its widgets still exist

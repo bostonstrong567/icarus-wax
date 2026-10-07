@@ -238,7 +238,7 @@ function Assert-GameClosed([string]$Win64) {
             Stop-Setup 'ICARUS is running. Close the game, then run this again.'
         }
     }
-    foreach ($name in 'dwmapi.dll', 'ue4ss\UE4SS.dll', "$WaxPath\bin\waxco.dll") {
+    foreach ($name in 'dwmapi.dll', 'ue4ss\UE4SS.dll', "$WaxPath\bin\waxco.dll", "$WaxPath\bin\waxnet.dll") {
         if (Test-Locked (Combine $Win64 $name)) {
             Stop-Setup "$name is in use, so the game is probably still running. Close the game, then run this again."
         }

@@ -247,12 +247,33 @@ local function on_tab()
     command_box:Focus()
 end
 
-local function mod_list_signature(list)
+-- What the updater knows, or nil while it is not running.
+local function update_state()
+    local updates = Wax.update
+    return updates and updates.state() or nil
+end
+
+local function mod_list_signature(list, updates)
     local parts = {}
     for _, mod in ipairs(list) do
+        local newer = updates and updates.available[mod.id]
         parts[#parts + 1] = mod.id .. ":" .. mod.status .. ":" .. mod.generation .. ":" .. (mod.waiting or "")
+            .. ":" .. (newer or "") .. (newer and updates.installing[mod.id] and "+" or "")
     end
     return table.concat(parts, "|")
+end
+
+-- The quiet line beside "Check now": what the updater is doing, or when it last asked the catalogue.
+local function update_line(updates)
+    if updates.checking then return "Checking ..." end
+    if next(updates.installing) then return "Updating ..." end
+    local ago = os.time() - updates.last
+    if updates.last <= 0 then return "Not checked yet." end
+    return ago < 90 and "Last checked a moment ago."
+        or (ago < 3600 and ("Last checked %d minutes ago."):format(ago // 60))
+        or (ago < 7200 and "Last checked an hour ago.")
+        or (ago < 172800 and ("Last checked %d hours ago."):format(ago // 3600))
+        or ("Last checked %d days ago."):format(ago // 86400)
 end
 
 -- Every word typed has to be found in the mod: its name, id, version, state ("loaded", "off", "failed", "new") or error.
@@ -294,23 +315,33 @@ local function filter_mods()
     end
 end
 
-local function rebuild_mods(list)
+local function rebuild_mods(list, updates)
     for _, row in ipairs(mod_rows) do
         -- a card the user opened or closed by hand stays that way for the session
         if row.section:IsOpen() ~= row.built_open then mods_open[row.mod.id] = row.section:IsOpen() end
         row.control:Destroy()
     end
     mod_rows = {}
+    if panel.updates then panel.updates.buttons = {} end
     in_core_scope(function()
         for index, mod in ipairs(list) do
             local healthy, off = mod.status == "loaded", mod.status == "disabled"
-            -- cards start closed, so the list stays short. One with a problem starts open, and a closed one says its state
+            local newer = updates and updates.available[mod.id]
+            local updating = newer and updates.installing[mod.id]
+            -- cards start closed, so the list stays short. One with a problem or an update to put in starts open, and a closed one says its state
             local open = mods_open[mod.id]
-            if open == nil then open = mod.error ~= nil or mod.waiting ~= nil end
+            if open == nil then open = mod.error ~= nil or mod.waiting ~= nil or (newer ~= nil and not updating) end
             local state = off and " (switched off)" or (not healthy and (" (%s)"):format(mod.status) or "")
+            if newer then state = state .. (" (%s available)"):format(newer) end
             local section = mods_page:Section(("%s  %s%s"):format(mod.name, mod.version or "", state), { open = open })
             section:Field("Status", healthy and "loaded" or (off and (mod.fresh and "new: switched off until you enable it" or "switched off") or mod.status))
                 :SetColor(healthy and style.theme.good or (off and (mod.fresh and style.theme.warn or style.theme.dim) or style.theme.bad))
+            if updating then
+                section:Label(("Updating to %s ..."):format(newer), { dim = true })
+            elseif newer then
+                panel.updates.buttons[mod.id] = section:Button(("Update to %s"):format(newer), function() Wax.update.install(mod.id) end,
+                    { icon = "download", stretch = false })
+            end
             if mod.error then section:Label(mod.error, { color = style.theme.bad, size = style.theme.small_size }) end
             if mod.waiting then
                 section:Label("The last save does not compile, so the version before it is still running: " .. mod.waiting,
@@ -386,10 +417,32 @@ local function refresh()
     scan_tick = scan_tick + 1
     if window.page == mods_page and scan_tick % 4 == 0 then Wax.mods.request_sync(true) end
     local list = Wax.mods.list()
-    local signature = mod_list_signature(list)
+    local shown = panel.updates
+    local updates = shown and update_state()
+    local signature = mod_list_signature(list, updates)
     if signature ~= mods_signature then
         mods_signature = signature
-        rebuild_mods(list)
+        rebuild_mods(list, updates)
+    end
+    if updates and not shown.line.destroyed then
+        local text = os.clock() < shown.hold and shown.text or update_line(updates)
+        if text ~= shown.text then
+            shown.text = text
+            shown.line:Set(text)
+        end
+        if updates.problem ~= shown.problem then
+            shown.problem = updates.problem
+            shown.note:Set(updates.problem or "")
+            shown.note:SetVisible(updates.problem ~= nil)
+        end
+        if shown.switch:Get() ~= updates.auto then shown.switch:Set(updates.auto) end
+        -- without the helper neither control does anything
+        local stopped = updates.stopped == true
+        if stopped ~= shown.stopped then
+            shown.stopped = stopped
+            shown.switch:SetEnabled(not stopped)
+            shown.check:SetEnabled(not stopped)
+        end
     end
     local newest = log.newest_id()
     local newest_entry = log.since(newest - 1)[1]
@@ -448,6 +501,25 @@ function panel.start()
         end)
         mod_tools:Button(nil, function() Wax.mods.request_sync(true) end, { icon = "refresh-cw", spin = true })
         mods_note = mods_page:Label("", { dim = true })
+        -- mods that were added from the catalogue: a switch, and a button to ask now
+        local updates = update_state()
+        if updates then
+            local shown = { buttons = {}, hold = 0, text = update_line(updates), stopped = false }
+            shown.switch = mods_page:Toggle("Auto Update", updates.auto, function(on) Wax.update.set_auto(on) end)
+            local asking = mods_page:Row()
+            shown.check = asking:Button("Check now", function()
+                local asked, wait = Wax.update.check_now()
+                if not asked and not wait then return end
+                -- said for a few seconds, then the line goes back to what the updater reports
+                shown.text = asked and "Checking ..." or ("Try again in %d seconds."):format(wait)
+                shown.hold = os.clock() + (asked and 1.5 or 4)
+                shown.line:Set(shown.text)
+            end, { icon = "refresh-cw", spin = true, stretch = false })
+            shown.line = asking:Label(shown.text, { dim = true })
+            shown.note = mods_page:Label("", { color = style.theme.warn, size = style.theme.small_size })
+            shown.note:SetVisible(false)
+            panel.updates = shown
+        end
 
         log_page = window:Page("Log", { icon = "scroll-text", scroll = false })
         log_page:Title("Log", "What Wax and the mods printed, newest at the bottom. Drag to select, Ctrl+C to copy.")
@@ -592,12 +664,13 @@ function panel.stop()
     if Wax.mods then Wax.mods.on_held = nil end
     if opened then opened:Disconnect() end
     if window then window:Destroy() end
-    window, opened = nil, nil
+    window, opened, panel.updates = nil, nil, nil
 end
 
 -- Forgets the window without touching it (the game removed the interface).
 function panel.forget()
     window, opened, mod_rows, mods_signature, command_box, tab_key = nil, nil, {}, nil, nil, nil
+    panel.updates = nil
     if Wax.mods then Wax.mods.on_held = nil end
 end
 

@@ -2,7 +2,7 @@
   "name": "wax-icarus",
   "displayName": "Wax for Icarus",
   "description": "Write Lua mods for ICARUS with Wax. It starts new mods for you, completes and checks your code, runs it in the running game, and shows the game's log and errors.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "RobertCincotta",
   "icon": "icon.png",
   "homepage": "https://wax-icarus.duckdns.org/",

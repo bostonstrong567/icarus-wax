@@ -419,6 +419,98 @@ t.test("the debug panel builds, lists mods, shows the log and takes pages from m
     panel.stop()
 end)
 
+t.test("the Mods page has the updater's switch and button, and offers an update on a mod's card", function()
+    local panel = Wax.import("gui.debug")
+    t.eq(panel.updates, nil, "without the updater the page has none of this")
+    local state = { available = {}, installing = {}, checking = false, last = 0, auto = true }
+    local asked, put, switched = 0, {}, {}
+    Wax.update = {
+        state = function() return state end,
+        set_auto = function(on)
+            switched[#switched + 1] = on
+            state.auto = on
+        end,
+        check_now = function()
+            asked = asked + 1
+            if asked == 1 then return true end
+            return false, 42
+        end,
+        install = function(id)
+            put[#put + 1] = id
+            return true
+        end,
+    }
+    local function text_of(control)
+        local last = fake.last(control.widget, "SetText")
+        return last and rawget(last[2], "__text") or nil
+    end
+    local function refresh()
+        local started = os.clock()
+        while os.clock() - started < 0.55 do end
+        panel.step()
+    end
+    local before = fake.mark()
+    panel.start()
+    ui.SetPreview(true)
+    local shown = panel.updates
+    t.ok(shown and shown.switch and shown.check and shown.line and shown.note, "the controls are there")
+    t.eq(shown.switch:Get(), true)
+    t.eq(text_of(shown.line), "Not checked yet.")
+    refresh()
+    t.eq(next(shown.buttons), nil, "no update button while nothing newer is known")
+
+    click(shown.switch.source)
+    frames(1)
+    t.eq(switched[1], false, "the switch tells the updater")
+    state.auto = true
+    refresh()
+    t.eq(shown.switch:Get(), true, "and follows it when the setting is changed elsewhere")
+
+    click(shown.check.source)
+    frames(1)
+    t.eq(asked, 1)
+    t.eq(text_of(shown.line), "Checking ...")
+    click(shown.check.source)
+    frames(1)
+    t.eq(text_of(shown.line), "Try again in 42 seconds.", "asked again too soon, it says how long to wait")
+
+    shown.hold = 0
+    state.available.Hello, state.last = "0.2.0", os.time() - 600
+    refresh()
+    t.eq(text_of(shown.line), "Last checked 10 minutes ago.")
+    t.ok(shown.buttons.Hello, "a mod with a newer version gets a button on its card")
+    click(shown.buttons.Hello.source)
+    frames(1)
+    t.eq(put[1], "Hello")
+
+    state.installing.Hello = true
+    refresh()
+    t.eq(shown.buttons.Hello, nil, "while the update is being put in there is no button")
+    t.eq(text_of(shown.line), "Updating ...")
+
+    state.available, state.installing, state.problem = {}, {}, "Updates could not be checked."
+    refresh()
+    t.eq(text_of(shown.note), "Updates could not be checked.")
+    state.checking = true
+    refresh()
+    t.eq(text_of(shown.line), "Checking ...")
+    t.eq(fake.count(shown.check.widget, "SetIsEnabled"), 0)
+    state.stopped = true
+    refresh()
+    t.eq(fake.last(shown.check.widget, "SetIsEnabled")[2], false, "without the helper the button is disabled")
+    t.eq(fake.last(shown.switch.widget, "SetIsEnabled")[2], false, "and so is the switch")
+
+    ui.SetPreview(false)
+    panel.stop()
+    t.eq(panel.updates, nil)
+    Wax.update = nil
+    -- everything the page made is freed with the window, and nothing of it is used afterwards
+    fake.free(before, fake.mark())
+    local touches = fake.dead_touches
+    frames(3)
+    t.eq(fake.dead_touches, touches, fake.dead_where)
+end)
+
 t.test("destroying a group destroys what is inside it, however deep", function()
     local host
     scope.run(owner, function() host = ui.Window({ title = "Groups", nav = "side" }) end)

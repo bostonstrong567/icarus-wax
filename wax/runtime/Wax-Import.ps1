@@ -150,6 +150,14 @@ try {
     }
     Copy-Item -LiteralPath $fresh -Destination $target -Recurse
 
+    # Marks the folder as a mod from the catalogue, at this version. Wax in the game only updates folders that have this file.
+    $installed = [string]$about.latest.version
+    $named = [string]$answer.Headers['Content-Disposition']
+    if ($named -match ('filename="' + [regex]::Escape($id) + '-([0-9A-Za-z][0-9A-Za-z._+-]{0,31})\.zip"')) { $installed = $Matches[1] }
+    if ($installed -match '^[0-9A-Za-z][0-9A-Za-z._+-]{0,31}$') {
+        [System.IO.File]::WriteAllText((Join-Path $target 'wax.origin'), "id=$id`r`nversion=$installed`r`n", [System.Text.Encoding]::ASCII)
+    }
+
     $said = "$name $version was added."
     if ($had) { $said = "$name was updated to $version." }
     $lua = "Wax.mods.sync() Wax.mods.set_enabled('$id', true) Wax.mods.request_reload('$id') " +

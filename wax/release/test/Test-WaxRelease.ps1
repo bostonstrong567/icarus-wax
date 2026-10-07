@@ -137,6 +137,8 @@ function Test-Cycle([string]$Label, [string[]]$Locate, [string]$Win64, [hashtabl
     $diff = Compare-Tree $Expected (Get-Tree $Win64 -Skip 'Icarus-Win64-Shipping.exe', 'tbb12.dll')
     Check "${Label}: a first install is the zip's game folder exactly, UE4SS settings and Recipe Browser included" ($diff.Count -eq 0) (($diff | Select-Object -First 5) -join '; ')
     Check "${Label}: Recipe Browser is there" (Test-Path -LiteralPath (Join-Path $wax 'mods\RecipeBrowser\init.lua'))
+    Check "${Label}: Recipe Browser is marked as a mod from the catalogue, and the helper that updates it is installed" ((Test-Path -LiteralPath (Join-Path $wax 'mods\RecipeBrowser\wax.origin')) -and
+        (Test-Path -LiteralPath (Join-Path $wax 'bin\waxnet.dll')))
     Check "${Label}: the version file says $version" ((Get-Content -LiteralPath (Join-Path $wax 'VERSION') -Raw).Trim() -eq $version)
     Check "${Label}: nothing was backed up on a clean game" (-not (Test-Path (Join-Path $Win64 'ue4ss-backup-*')))
 
@@ -147,6 +149,7 @@ function Test-Cycle([string]$Label, [string[]]$Locate, [string]$Win64, [hashtabl
     Check "${Label}: it reports the update" ($run.Text -match "Wax was updated from 0\.0\.9 to $([regex]::Escape($version))\.")
     Check "${Label}: it says the player's files were kept" ($run.Text -match 'Your mods and settings were kept\.')
     Check "${Label}: the player's mods and settings are unchanged" ((Get-PlayerState $Win64) -eq $before)
+    Check "${Label}: a mod the player made is not marked as one from the catalogue" (-not (Test-Path -LiteralPath (Join-Path $wax 'mods\MyMod\wax.origin')))
     Check "${Label}: a file of the old Wax version is gone" (-not (Test-Path -LiteralPath (Join-Path $wax 'Scripts\wax\gone.lua')))
     Check "${Label}: the session log is still there" (Test-Path -LiteralPath (Join-Path $wax 'run\session.log'))
     Check "${Label}: the player's UE4SS settings are kept on the same UE4SS" ((Get-Content -LiteralPath (Join-Path $Win64 'ue4ss\UE4SS-settings.ini') -Raw) -match 'changed by the player' -and
@@ -225,9 +228,15 @@ foreach ($item in Get-ChildItem -LiteralPath $runtime -Force | Where-Object { $_
 }
 $diff = Compare-Tree $waxSource (Get-Tree (Join-Path $package "game\$waxPath") -Skip 'mods\*', 'VERSION')
 Check "Wax in the zip is wax\runtime, file for file ($($waxSource.Count) files)" ($diff.Count -eq 0) (($diff | Select-Object -First 5) -join '; ')
-$bundledSource = Get-Tree (Join-Path $Root 'luamods\RecipeBrowser') -Skip '.*'
-$diff = Compare-Tree $bundledSource (Get-Tree (Join-Path $package "game\$waxPath\mods\RecipeBrowser"))
+$bundledSource = Get-Tree (Join-Path $Root 'luamods\RecipeBrowser') -Skip '.*', 'wax.origin'
+$diff = Compare-Tree $bundledSource (Get-Tree (Join-Path $package "game\$waxPath\mods\RecipeBrowser") -Skip 'wax.origin')
 Check 'the mod in the zip is luamods\RecipeBrowser without editor files' ($diff.Count -eq 0) ($diff -join '; ')
+$origin = Join-Path $package "game\$waxPath\mods\RecipeBrowser\wax.origin"
+$modVersion = [regex]::Match((Get-Content -LiteralPath (Join-Path $Root 'luamods\RecipeBrowser\mod.lua') -Raw), '(?m)^\s*version\s*=\s*"([^"]+)"').Groups[1].Value
+Check "the mod in the zip is marked as coming from the catalogue at version $modVersion, so Wax can update it" ($modVersion -and (Test-Path -LiteralPath $origin) -and
+    [System.IO.File]::ReadAllText($origin) -ceq "id=RecipeBrowser`r`nversion=$modVersion`r`n")
+Check 'the zip has both helpers and the updater' ((Test-Path -LiteralPath (Join-Path $package "game\$waxPath\bin\waxco.dll")) -and
+    (Test-Path -LiteralPath (Join-Path $package "game\$waxPath\bin\waxnet.dll")) -and (Test-Path -LiteralPath (Join-Path $package "game\$waxPath\Scripts\wax\mods\update.lua")))
 Check 'UE4SS loads Wax through enabled.txt' (Test-Path -LiteralPath (Join-Path $package "game\$waxPath\enabled.txt"))
 Check 'the licences are there' ((Get-Content (Join-Path $package 'licenses\UE4SS-LICENSE.txt') -Raw) -match 'MIT License' -and (Get-Content (Join-Path $package 'licenses\Lucide-LICENSE.txt') -Raw) -match 'ISC License')
 
@@ -393,6 +402,11 @@ $held = [System.IO.File]::Open((Join-Path $oldWin64 'ue4ss\UE4SS.dll'), 'Open', 
 try {
     $run = Invoke-Setup @('-Action', 'Install', '-GameDir', $oldWin64)
     Check 'install refuses when UE4SS.dll is in use, whatever the process is called' ($run.Code -eq 1 -and $run.Text -match 'UE4SS\.dll is in use') $run.Text
+} finally { $held.Dispose() }
+$held = [System.IO.File]::Open((Join-Path $oldWin64 "$waxPath\bin\waxnet.dll"), 'Open', 'Read', 'Read')
+try {
+    $run = Invoke-Setup @('-Action', 'Install', '-GameDir', $oldWin64)
+    Check 'install refuses when the helper that downloads updates is in use' ($run.Code -eq 1 -and $run.Text -match 'waxnet\.dll is in use') $run.Text
 } finally { $held.Dispose() }
 
 Section 'Links where folders are expected'

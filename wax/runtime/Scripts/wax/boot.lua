@@ -80,6 +80,15 @@ function boot.start()
         core_log:error("the game object model failed to start: %s", tostring(err))
     end
 
+    local update_ok, update_err = xpcall(function()
+        Wax.update = Wax.import("mods.update")
+        Wax.update.start()
+    end, debug.traceback)
+    if not update_ok then
+        Wax.update = nil
+        core_log:error("the mod updater failed to start: %s", tostring(update_err))
+    end
+
     local ui = nil
     local gui_ok, gui_err = xpcall(function()
         ui = Wax.import("gui.init")

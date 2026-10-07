@@ -157,6 +157,9 @@ else {
     if (-not (Test-Path (Join-Path $Root 'wax\runtime\bin\waxco.dll'))) {
         Report FAIL 'wax\runtime\bin\waxco.dll missing (run Build-WaxNative.ps1): tasks could not call the engine'
     }
+    if (-not (Test-Path (Join-Path $Root 'wax\runtime\bin\waxnet.dll'))) {
+        Report FAIL 'wax\runtime\bin\waxnet.dll missing (run Build-WaxNative.ps1 -Only waxnet): mods could not update themselves'
+    }
     $scratch = Join-Path ([IO.Path]::GetTempPath()) ("wax-tests-" + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Force "$scratch\bridge\run\in", "$scratch\bridge\run\out", "$scratch\bridge\Scripts", "$scratch\mods" | Out-Null
     # Recipe Browser is staged in a dot folder until it is shown to the user. Its suites skip themselves when it is not here.
@@ -175,6 +178,9 @@ else {
         'recipe-app' = @('wax\tests\offline\recipe_app_test.lua', $recipeMod)
         'recipe-layout' = @('wax\tests\offline\recipe_layout_test.lua', $recipeMod)
         'mods'   = @('wax\tests\offline\mods_test.lua', ("$scratch\mods" -replace '\\', '/'))
+        'update' = @('wax\tests\offline\update_test.lua', ("$scratch\update" -replace '\\', '/'))
+        # The helper itself, against the live catalogue. It says so and passes when the catalogue cannot be reached.
+        'waxnet' = @('wax\tests\offline\waxnet_test.lua')
         'bridge' = @('wax\tests\bridge_offline.lua', ("$scratch\bridge" -replace '\\', '/'))
     }
     Push-Location $Root
