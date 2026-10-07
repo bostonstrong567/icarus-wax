@@ -250,4 +250,23 @@ function unlock.describe(index, model, recipe)
     return result
 end
 
+-- What a block says about researching its recipe, from a plan of game.Research: { kind = "done" | "buy" | "level" | "points" }.
+function unlock.research(plan, words)
+    if type(plan) ~= "table" or plan.default then return nil end
+    if plan.unlocked then return { kind = "done", line = words.done } end
+    local count, have = tonumber(plan.points) or 0, tonumber(plan.available) or 0
+    if count < 1 then return nil end
+    local needed = tonumber(plan.needed_level) or 0
+    if (tonumber(plan.player_level) or 0) < needed then return { kind = "level", line = words.level(needed) } end
+    -- too few points: the button shows what it costs and cannot be pressed
+    if have < count then return { kind = "points", caption = words.button(count), line = words.points(count, have) } end
+    -- level and points are enough and the game still says no: the needs line already names the pack or the mission
+    if not plan.can then return nil end
+    local first = {}
+    for at = 1, count - 1 do first[at] = plan.steps[at].name end
+    -- points cannot be taken back here, so every press is asked about first
+    return { kind = "buy", caption = words.button(count), confirm = #first > 0 and words.all or words.one,
+        ask = #first > 0 and words.ask(first, count, have) or words.ask_one(count, have) }
+end
+
 return unlock

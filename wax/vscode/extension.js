@@ -10,6 +10,7 @@ const { Tracker } = require('./lib/problems');
 
 const FEATURES = [
   require('./lib/features/locate'),
+  require('./lib/features/devmode'),
   require('./lib/features/docs'),
   require('./lib/features/editor'),
   require('./lib/features/create'),
@@ -146,7 +147,9 @@ function createApp(context) {
       try {
         return await handler(...args);
       } catch (error) {
-        vscode.window.showErrorMessage(`Wax: ${error && error.message ? error.message : error}`);
+        // the game refused Lua: that is a mode to explain, with the switch beside it, not an error
+        if (error && error.code === 'dev-off') created.offerDevMode().catch(() => {});
+        else vscode.window.showErrorMessage(`Wax: ${error && error.message ? error.message : error}`);
         return undefined;
       }
     }));

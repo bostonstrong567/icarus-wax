@@ -12,6 +12,7 @@ __pycache__/
 /wax/runtime/mods
 /wax/wax.config.json
 /luamods/*/.wax/
+.wax-signing-key.pem
 
 # Copies made by scripts\Build-WaxExtension.ps1.
 /wax/vscode/bundled/

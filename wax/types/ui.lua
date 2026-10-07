@@ -396,6 +396,7 @@ function Debug.Show() end
 ---@field Closed WaxSignal<fun()> Fires when the menu closes.
 ---@field KeyChanged WaxSignal<fun(key: string?)> Fires with the new menu key.
 ---@field ThemeChanged WaxSignal<fun(name: string)> Fires with the theme's name after SetTheme or ResetTheme.
+---@field ScreenChanged WaxSignal<fun(width: number, height: number)> Fires when ScreenSize gives another answer: a new resolution or interface scale.
 ---@field Icons WaxIcons
 ---@field Notifications WaxNotifications
 ---@field Debug WaxDebugPanel
@@ -461,7 +462,8 @@ function ui.Hovered() end
 ---@return boolean
 function ui.IsTyping() end
 
----The size of the screen in the units windows and panels are laid out in.
+---The size of the screen in the units windows and panels are laid out in. While the game is starting and has no
+---screen yet, the answer is 1920 by 1080; ScreenChanged fires if the real one turns out different.
 ---@return number width
 ---@return number height
 function ui.ScreenSize() end

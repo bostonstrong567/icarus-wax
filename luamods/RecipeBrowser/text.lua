@@ -125,6 +125,21 @@ function text.right.stations(count)
     return counted(count, "station", "stations")
 end
 
+-- A name and its figure as one sentence, for a pair too long to stand side by side: "Turns into: Spoiled Plants".
+function text.pair(name, value)
+    return tostring(name) .. ": " .. tostring(value)
+end
+
+-- A count short enough for a slot: 301, 1.8k, 12k, 1.2M. The whole number goes in the tip.
+function text.short(value)
+    local whole = math.floor(tonumber(value) or 0)
+    if whole < 1000 then return tostring(math.tointeger(whole) or whole) end
+    local unit, scaled = "k", whole / 1000
+    if scaled >= 999.5 then unit, scaled = "M", whole / 1000000 end
+    if scaled < 9.95 then return (("%.1f"):format(scaled):gsub("%.0$", "")) .. unit end
+    return ("%d"):format(math.floor(scaled + 0.5)) .. unit
+end
+
 function text.right.times(count)
     return "x" .. number(count)
 end
@@ -324,6 +339,61 @@ end
 function text.tree.makes(made, left)
     if not left or left < 1 then return "Makes " .. number(made) end
     return "Makes " .. number(made) .. ", " .. number(left) .. " left over"
+end
+
+text.research = {
+    done = "Researched",
+    one = "Research",
+    all = "Research all",
+    cancel = "Cancel",
+}
+
+local function in_points(count)
+    return counted(count, "point", "points")
+end
+
+-- "A", "A and B", "A, B and C", then "A, B, C and 2 more".
+local function named(names, limit)
+    local shown = {}
+    for index = 1, math.min(#names, limit) do shown[index] = names[index] end
+    if #names > limit then shown[#shown + 1] = number(#names - limit) .. " more" end
+    if #shown < 2 then return shown[1] or "" end
+    return table.concat(shown, ", ", 1, #shown - 1) .. " and " .. shown[#shown]
+end
+
+function text.research.button(count)
+    return "Research (" .. in_points(count) .. ")"
+end
+
+-- Asked before a press researches more than the one thing: "Researches Anvil Bench first. 2 points in all."
+function text.research.ask(first, count, have)
+    return "Researches " .. named(first, 3) .. " first. " .. in_points(count) .. " in all."
+end
+
+-- Asked before a press spends points on the one thing: "This spends 1 point."
+function text.research.ask_one(count, have)
+    return "This spends " .. in_points(count) .. "."
+end
+
+-- What the player has to spend, shown once above the recipes.
+function text.research.have(count)
+    return "Research points: " .. number(count)
+end
+
+function text.research.level(level)
+    return "Unlocks at level " .. number(level)
+end
+
+function text.research.points(count, have)
+    return "Needs " .. in_points(count)
+end
+
+function text.research.researched(name)
+    return name .. " researched."
+end
+
+function text.research.refused(name)
+    return "The game did not research " .. name .. "."
 end
 
 text.settings = {

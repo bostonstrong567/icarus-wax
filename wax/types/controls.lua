@@ -49,6 +49,7 @@ function Heading:Set(value) end
 ---@field icon? string Icon name shown before the caption. The menu's Icons page lists the names.
 ---@field spin? boolean The icon turns round once on every click, to show that something has started.
 ---@field tab? boolean Makes it one of a row of tabs: SetActive marks the chosen one.
+---@field tip? string|table A line of help shown beside the mouse once it has rested on the button. Give one to every button that is only an icon. A table is `{ title = "...", lines = { "more" } }`.
 
 ---@class WaxButton: WaxControl
 ---@field Activated WaxSignal<fun()> Fires on each click, after on_click.
@@ -69,6 +70,10 @@ function Button:SetCaption(text) end
 ---Marks a button made with `tab = true` as the chosen tab, or as one of the others.
 ---@param on boolean
 function Button:SetActive(on) end
+
+---Changes the help shown while the mouse rests on the button, for a button whose meaning changes. nil takes it away.
+---@param tip string|table|nil
+function Button:SetTip(tip) end
 
 ---@class WaxIconOptions: WaxOptions
 ---@field size? number Default 20.
@@ -152,6 +157,7 @@ function Slider:Set(value) end
 ---@field hint? string Greyed text shown while the box is empty.
 ---@field stacked? boolean True puts the caption above the box, false beside it. When omitted, the room available decides.
 ---@field mono? boolean A fixed-width font, for code.
+---@field clear? boolean Puts a small cross at the right end of the box while it holds text. One press empties the box, fires Typed with "" and leaves the keyboard in the box. For a search box.
 
 ---@class WaxInput: WaxControl
 ---@field Changed WaxSignal<fun(text: string)> Fires when the text is committed (Enter, or the box losing focus).
@@ -178,7 +184,12 @@ function Input:SetGhost(text) end
 ---@param text any
 function Input:Set(text) end
 
+---Changes the greyed text shown while the box is empty.
+---@param hint string
+function Input:SetHint(hint) end
+
 ---A dropdown opens in place under its header. The chosen row is highlighted, and only one list is open at a time.
+---The header is always one line: a choice too long for it ends in "..." there and is whole in the list.
 ---@class WaxDropdown: WaxControl
 ---@field Changed WaxSignal<fun(choice: any)> Fires when the user picks a choice.
 local Dropdown = {}
@@ -211,6 +222,9 @@ function Section:IsOpen() end
 ---A container whose controls sit side by side.
 ---@class WaxRow: WaxContainer
 ---@field control WaxControl The row itself, for Destroy, SetVisible and SetEnabled.
+
+---@class WaxRowOptions: WaxOptions
+---@field height? number The least height of the row. Give two rows the same one and they are equally tall whatever is in them.
 
 ---@class WaxProgressOptions: WaxOptions
 ---@field color? WaxColor|string|integer The accent colour when omitted. "#RRGGBB" works too.
@@ -360,8 +374,9 @@ function Container:Section(title, options) end
 function Container:Title(content, description) end
 
 ---Adds a row. Controls added to the returned container sit side by side and share the width.
+---@param options? WaxRowOptions
 ---@return WaxRow
-function Container:Row() end
+function Container:Row(options) end
 
 ---A colour the user can change.
 ---@param caption string
@@ -424,11 +439,13 @@ function Container:Flow(options) end
 ---@field tone? "text"|"dim"|"accent"|"accent_hover"|"good"|"warn"|"bad" The colour of the value.
 ---@field faint? boolean Draws the name dimmer.
 ---@field name_width? number For a line made with columns: how wide the name is, so values line up from line to line.
+---@field width? number For a line made with fit that is narrower than its container: how wide it is.
 
 ---@class WaxItemOptions : WaxItemLook
 ---@field weight? number In a row, its share of the width.
 ---@field columns? boolean Makes it a line of a table: the name, then the value where the name ends, then the note at the right edge.
 ---@field divider? boolean Draws a thin line under it.
+---@field fit? boolean Cuts a name, note or value that is too long for the line short with "..." and shows the whole of it as a tip while the mouse rests on the line.
 
 ---One line of a list or a tree.
 ---@class WaxItem: WaxControl

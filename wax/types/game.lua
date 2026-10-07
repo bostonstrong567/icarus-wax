@@ -332,6 +332,7 @@ function Highlight:Configure(options) end
 ---@field Highlight WaxHighlight
 ---@field Data WaxData The game's data tables as plain Lua values.
 ---@field Crafting WaxCrafting The bench or crafting screen that is open.
+---@field Research WaxResearch The tech tree: what a recipe still needs researched, and researching it.
 ---@field MapChanged WaxSignal<fun(name: string)> Fires with the new map's name when the world changes.
 game = {}
 
@@ -408,6 +409,62 @@ function Crafting:Select(row) end
 ---@param on boolean
 ---@return boolean
 function Crafting:SetListHidden(on) end
+
+---One node of the tech tree that still has to be researched.
+---@class WaxResearchStep
+---@field node string The node's row name in D_Talents, in lower case.
+---@field name string The name the game shows for it.
+---@field level integer The level it asks of the player.
+
+---What researching the node of one recipe takes.
+---@class WaxResearchPlan
+---@field node string The node's row name in D_Talents, in lower case.
+---@field name string The name the game shows for it.
+---@field unlocked boolean True when it is researched already.
+---@field default boolean True for a node every character has from the start.
+---@field level integer The level this node asks of the player.
+---@field steps WaxResearchStep[] Every node that still has to be researched, in the order to do it, the node itself last.
+---@field points integer How many points that takes: one for each step.
+---@field available integer The points the player has left.
+---@field player_level integer The player's level.
+---@field needed_level integer The highest level any of the steps asks.
+---@field can boolean True when level and points are enough and the game says the first step can be researched now.
+---@field blocked boolean True when level and points are enough and it still cannot be done: a step needs a mission finished or a DLC owned.
+
+---The tech tree: what a recipe still needs researched, and researching it with the player's points.
+---@class WaxResearch
+---@field Changed WaxSignal<fun(level: integer?, points: integer?)> Fires when the player's level or points changed. It is looked at about twice a second.
+local Research = {}
+
+---True while the player has a tech tree to ask, which is in a prospect.
+---@return boolean
+function Research:IsReady() end
+
+---The player's level as the tech tree counts it. Nothing while there is no tech tree.
+---@return integer? level
+function Research:GetLevel() end
+
+---The player's tech tree points. Nothing while there is no tech tree.
+---@return integer? available The points left to spend.
+---@return integer? total
+---@return integer? spent
+function Research:GetPoints() end
+
+---What researching the node of a recipe takes. Nothing when the recipe needs no node, when the game has no such
+---recipe, and while there is no tech tree. Letter case does not matter. The game is asked about each node, so call
+---it when something is shown or pressed, not every frame.
+---@param recipe string A row name of D_ProcessorRecipes.
+---@return WaxResearchPlan?
+function Research:GetPlan(recipe) end
+
+---Researches the node of a recipe, and first every node it still needs, with the player's own points. It does
+---nothing unless the plan says `can`, and it stops at the first node the game does not research. It waits a few
+---frames after each node, so call it inside a task.
+---@param recipe string A row name of D_ProcessorRecipes.
+---@return boolean ok True when the recipe's node is researched now.
+---@return integer bought How many nodes were researched by this call.
+---@return string? failed The name of the node the game did not research.
+function Research:Unlock(recipe) end
 
 ---The top of the tree: World, GameInstance, GameState, GameMode, LocalPlayer, Engine and Viewport, where they exist.
 ---@return WaxInstance[]

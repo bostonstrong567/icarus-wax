@@ -24,6 +24,28 @@ test('the extension is who it says it is', () => {
   assert.equal(manifest.dependencies, undefined, 'no runtime npm dependencies');
 });
 
+test('it does not run in a folder that is not trusted, or in one that is not on this PC', () => {
+  // the extension sends Lua from the open folder into the game, so a folder from a stranger must not switch it on
+  assert.deepEqual(Object.keys(manifest.capabilities).sort(), ['untrustedWorkspaces', 'virtualWorkspaces']);
+  assert.equal(manifest.capabilities.untrustedWorkspaces.supported, false);
+  assert.match(manifest.capabilities.untrustedWorkspaces.description, /Lua.*into the running game.*a folder you trust/);
+  assert.equal(manifest.capabilities.virtualWorkspaces, false);
+});
+
+test('developer mode is switched on and off by two commands, and the README says what it allows', () => {
+  const titles = Object.fromEntries(contributes.commands.map((command) => [command.command, command.title]));
+  assert.equal(titles['wax.devModeOn'], 'Switch Developer Mode On');
+  assert.equal(titles['wax.devModeOff'], 'Switch Developer Mode Off');
+  assert.ok(source.includes('"Wax: Switch Developer Mode On"'), 'a message names the command');
+  const readme = read(path.join(EXTENSION, 'README.md'));
+  assert.match(readme, /## Developer mode/);
+  assert.match(readme, /Any program on this PC can run Lua in the game, and Lua in the game can do what a program can\./);
+  assert.match(readme, /Wax does not update itself/);
+  assert.match(readme, /`dev\.txt` in the Wax folder, beside `Scripts`/);
+  assert.match(readme, /only runs in a folder you trust/);
+  for (const command of ['Wax: Switch Developer Mode On', 'Wax: Switch Developer Mode Off']) assert.ok(readme.includes(`**${command}**`), command);
+});
+
 test('every menu entry is a declared command, and its buttons have icons', () => {
   const commands = new Map(contributes.commands.map((command) => [command.command, command]));
   for (const [menu, entries] of Object.entries(contributes.menus)) {

@@ -19,13 +19,25 @@ function view.start(app)
         return {}
     end
     local words = text.panel
-    local small = ui.Theme().small_size
+    local theme = ui.Theme()
+    local small = theme.small_size
     local crafting = game.Crafting
+    -- game.Research is newer than the Wax this mod asks for: without it no block has a research line
+    local has_research, research = pcall(function() return game.Research end)
+    if not has_research then research = nil end
     local state = { query = "", page = 1, list = {}, mode = "make", view = "recipes", card_page = 1, tab = 1, pass = 0, on = true,
         bare = false, detail = false, amount = 1, numbers = {}, tabs = {}, pages = {}, only = app.settings.bench_only ~= false }
 
     -- every size and place comes from the screen's size, worked out in layout.lua
-    local L = require(mod.layout).compute(ui.ScreenSize())
+    local wide, high = ui.ScreenSize()
+    -- while the game starts it has no screen yet
+    while not (wide and high and wide >= 200 and high >= 200) do
+        task.wait(0.25)
+        wide, high = ui.ScreenSize()
+    end
+    local L = require(mod.layout).compute(wide, high)
+    -- another resolution or interface scale: everything is laid out again
+    if ui.ScreenChanged and mod.Reload then ui.ScreenChanged:Connect(function() mod.Reload() end) end
     local screen_width, screen_height = L.width, L.height
     local column, tall, inner, down = L.column, L.tall, L.inner, L.down
     local CELL, TAB, grid_rows, budget = L.cell, L.tab, L.grid_rows, L.budget
@@ -247,7 +259,7 @@ function view.start(app)
     local note_label = items:Label("", { dim = true, align = "center" })
     note_label:SetVisible(false)
     local grid = items:Slots({ columns = COLUMNS, rows = grid_rows, size = CELL, gap = GAP })
-    local find = items:Input(nil, { hint = words.search })
+    local find = items:Input(nil, { hint = words.search, clear = true })
     local keys_line = items:Label(text.right.keys(KEYS), { size = small, dim = true, align = "center" })
     local list_parts = { tabs, category_line, head.control, grid, find, keys_line }
 
@@ -406,22 +418,97 @@ function view.start(app)
         return crafting:Select(here.row) == true
     end
     local here_button = items:Button(words.make_here, function() select_here(state.pick and here_of(state.pick)) end, { primary = true })
+    -- what the player has to spend on research, above the recipes that ask for it
+    local points_line = items:Label("", { size = small, dim = true, align = "center" })
     local pager = items:Row()
     local card_back = pager:Button(nil, function() state.card_page = state.card_page - 1 show_detail() end, { icon = "chevron-left" })
     local card_label = pager:Label("", { align = "center", dim = true })
     local card_forth = pager:Button(nil, function() state.card_page = state.card_page + 1 show_detail() end, { icon = "chevron-right" })
+    -- Researches a recipe's node with the player's points, in the task of the button that asked, then says how it went.
+    local function research_run(row)
+        if state.researching then return end
+        local found, plan = pcall(research.GetPlan, research, row)
+        if not (found and plan and plan.can) then return show_detail() end
+        state.researching, state.asking = row, nil
+        show_detail()
+        local ran, done, _, failed = pcall(research.Unlock, research, row)
+        state.researching = nil
+        if ran and done then
+            ui.Notify(text.research.researched(plan.name), { kind = "good" })
+        else
+            if not ran then log:warn("%s", tostring(done)) end
+            ui.Notify(text.research.refused(ran and failed or plan.name), { kind = "warn" })
+        end
+        show_detail()
+    end
+    -- The research line of a block: a mark when its recipe is researched, a button when it can be, else what is missing.
+    local function research_line(panel)
+        local line = {}
+        local done = panel:Row()
+        done:Icon("check", { size = 12, color = theme.good })
+        done:Label(text.research.done, { size = small, dim = true })
+        line.note = panel:Label("", { size = small, dim = true })
+        line.button = panel:Button(text.research.button(1), function()
+            if not line.row or not line.ask or state.researching then return end
+            state.asking = line.row
+            show_detail()
+        end)
+        local pair = panel:Row()
+        line.confirm = pair:Button(text.research.all, function() if line.row then research_run(line.row) end end, { primary = true })
+        pair:Button(text.research.cancel, function()
+            state.asking = nil
+            show_detail()
+        end, { stretch = false })
+        line.done, line.pair = done.control, pair.control
+        return line
+    end
+    -- told: what unlock.research made of the game's answer for the recipe `row`, or nothing
+    local function show_research(line, row, told)
+        local kind = told and told.kind
+        line.row, line.ask = row, told and told.ask or nil
+        local asking = line.ask ~= nil and state.asking == row
+        line.done:SetVisible(kind == "done")
+        line.button:SetVisible((kind == "buy" or kind == "points") and not asking)
+        line.pair:SetVisible(asking)
+        line.note:SetVisible(asking or kind == "level" or kind == "points")
+        if kind == "buy" or kind == "points" then
+            line.button:SetCaption(told.caption)
+            line.button:SetEnabled(kind == "buy" and state.researching == nil)
+        end
+        if asking then
+            line.confirm:SetCaption(told.confirm)
+            line.note:Set(told.ask)
+            line.note:SetColor(theme.text)
+        elseif kind == "level" or kind == "points" then
+            line.note:Set(told.line)
+            line.note:SetColor(kind == "level" and theme.warn or theme.dim)
+        end
+    end
+    -- How much of the column a research line takes. The room for the question is kept from the start, so a press moves nothing.
+    local function research_room(told)
+        if not told then return 0 end
+        if told.kind == "points" then return 60 end
+        if told.kind ~= "buy" then return 24 end
+        return #rows.wrap(told.ask, inner * 0.94, small) * 16 + 44
+    end
+
     -- a recipe is what goes in, then an arrow and what comes out on a line of its own
     local cards = {}
     for at = 1, CARDS do
         local card = { inputs = slot_lines(items, 2, COLUMNS) }
         card.output = slot_lines(items, 1, COLUMNS)
         card.needs = items:Label("", { size = small, dim = true })
+        card.research = research and research_line(items) or nil
         card.rule = items:Separator()
         cards[at] = card
     end
-    local recipe_parts = { station_lines[1], station_lines[2], station_line, here_button, pager.control }
+    local recipe_parts = { station_lines[1], station_lines[2], station_line, here_button, points_line, pager.control }
     for _, card in ipairs(cards) do
         for _, part in ipairs({ card.inputs[1], card.inputs[2], card.output[1], card.needs, card.rule }) do
+            recipe_parts[#recipe_parts + 1] = part
+        end
+        local line = card.research
+        for _, part in ipairs(line and { line.done, line.note, line.button, line.pair } or {}) do
             recipe_parts[#recipe_parts + 1] = part
         end
     end
@@ -475,15 +562,37 @@ function view.start(app)
     for at = 1, 4 do where_lines[at] = items:Label("") end
     local detail_parts = { describe_label, flavour_label, where_label, table.unpack(where_lines) }
     local stat_groups = {}
+    -- how a name and its figure can share a line, and the room each side then has for its text
+    local PAIR_SPLITS = { { 3, 2 }, { 1, 1 }, { 2, 3 } }
+    local function pair_room(split, side)
+        return (inner - 8) * split[side] / (split[1] + split[2]) * 0.94
+    end
+    -- Which split shows every line of a group whole. Lines no split has room for are named, to go under as sentences.
+    local function pair_fit(names, values)
+        local best, best_left = 1, nil
+        for index, split in ipairs(PAIR_SPLITS) do
+            local left = {}
+            for at = 1, #names do
+                if rows.measure(names[at]) > pair_room(split, 1) or rows.measure(values[at]) > pair_room(split, 2) then left[#left + 1] = at end
+            end
+            if not best_left or #left < #best_left then best, best_left = index, left end
+            if #left == 0 then break end
+        end
+        return best, best_left or {}
+    end
     for at = 1, 6 do
         local group = { title = items:Label("", { size = small, dim = true }) }
-        local pair = items:Row()
-        group.pair = pair.control
-        group.names = pair:Label("", { weight = 3 })
-        group.values = pair:Label("", { align = "right", weight = 2 })
+        -- the same pair three times, each sharing the line another way: the one whose texts all fit is shown
+        group.pairs = {}
+        for index, split in ipairs(PAIR_SPLITS) do
+            local pair = items:Row()
+            group.pairs[index] = { control = pair.control, names = pair:Label("", { weight = split[1] }),
+                values = pair:Label("", { align = "right", weight = split[2] }) }
+            detail_parts[#detail_parts + 1] = pair.control
+        end
         group.notes = items:Label("", { size = small, dim = true })
         stat_groups[at] = group
-        for _, part in ipairs({ group.title, group.pair, group.notes }) do detail_parts[#detail_parts + 1] = part end
+        for _, part in ipairs({ group.title, group.notes }) do detail_parts[#detail_parts + 1] = part end
     end
     local message = items:Label("", { dim = true })
 
@@ -525,13 +634,13 @@ function view.start(app)
     end
 
     -- The recipes of one station as pages: as many to a page as the column has room for.
-    local function paginate(m, numbers)
+    local function paginate(m, numbers, more)
         local pages, page, used = {}, {}, 0
         for _, number in ipairs(numbers) do
             local made = m.recipes[number]
             local inputs = #made.inputs + #made.tags_in + #made.res_in
-            local height = (1 + math.max(1, math.min(2, math.ceil(inputs / COLUMNS)))) * (CELL + GAP) + 60
-            if #page > 0 and (#page >= CARDS or used + height > budget) then
+            local height = (1 + math.max(1, math.min(2, math.ceil(inputs / COLUMNS)))) * (CELL + GAP) + 60 + more(number)
+            if #page > 0 and (#page >= CARDS or used + height > budget - (state.points_shown and 20 or 0)) then
                 pages[#pages + 1] = page
                 page, used = {}, 0
             end
@@ -568,7 +677,25 @@ function view.start(app)
         -- the open bench makes this: one press chooses it there
         local listed = state.mode == "make" and here_of(picked.key) or nil
         here_button:SetVisible(listed ~= nil)
-        local pages = paginate(m, here)
+        local have = nil
+        if research and state.mode == "make" then
+            local found, available = pcall(research.GetPoints, research)
+            have = found and tonumber(available) or nil
+        end
+        state.points_shown = have ~= nil
+        points_line:Set(have and text.research.have(have) or "")
+        points_line:SetVisible(have ~= nil)
+        -- what the game says about researching each recipe here, asked once for this showing
+        local told = {}
+        local function told_of(number)
+            if not (research and state.mode == "make") then return nil end
+            if told[number] == nil then
+                local found, plan = pcall(research.GetPlan, research, m.recipes[number].row)
+                told[number] = found and app.unlock.research(plan, text.research) or false
+            end
+            return told[number] or nil
+        end
+        local pages = paginate(m, here, function(number) return research_room(told_of(number)) end)
         state.pages = pages
         state.card_page = math.max(1, math.min(state.card_page, math.max(1, #pages)))
         card_label:Set(words.page(state.card_page, math.max(1, #pages)))
@@ -590,6 +717,7 @@ function view.start(app)
                     needs and needs.short or nil, needs and needs.extra or nil, not needs and made.level or nil)
                 card.needs:Set(line)
                 card.needs:SetVisible(line ~= "")
+                if card.research then show_research(card.research, made.row, told_of(page[at])) end
                 card.rule:SetVisible(true)
             end
         end
@@ -617,7 +745,8 @@ function view.start(app)
                 local resource = m.resources[node.key]
                 amount = text.right.amount(app.format.litres(node.need), resource and resource.units or "")
             end
-            raw[#raw + 1] = { image = node.icon, icon = not node.icon and PLAIN[node.kind] or nil, count = amount,
+            raw[#raw + 1] = { image = node.icon, icon = not node.icon and PLAIN[node.kind] or nil,
+                count = node.kind == "resource" and tostring(app.format.litres(node.need)) or text.short(node.need),
                 value = node.kind == "item" and node.key or nil,
                 tip = { title = node.kind == "tag" and text.right.any(node.name) or node.name, lines = { amount } } }
         end
@@ -636,7 +765,7 @@ function view.start(app)
             end
             if at and not step.hand then lines[#lines + 1] = at.name end
             times[#times + 1] = text.tree.step(step.name, step.crafts, seconds and text.duration(seconds) or "", "")
-            steps[#steps + 1] = { image = step.icon, icon = not step.icon and PLAIN.item or nil, count = text.right.times(step.crafts),
+            steps[#steps + 1] = { image = step.icon, icon = not step.icon and PLAIN.item or nil, count = text.short(step.crafts),
                 value = step.key, tip = { title = step.name, lines = lines } }
         end
         -- the list of times gets the lines that are left in the column, and says how many more there are
@@ -691,12 +820,28 @@ function view.start(app)
         for at, parts in ipairs(stat_groups) do
             local group = groups[at]
             parts.title:SetVisible(group ~= nil)
-            parts.pair:SetVisible(group ~= nil and #group.names > 0)
+            local chosen = nil
+            if group and #group.names > 0 then
+                local best, left = pair_fit(group.names, group.values)
+                -- a line too long for any split is written out under the others, where it has the whole width
+                for index = #left, 1, -1 do
+                    local line = left[index]
+                    table.insert(group.notes, 1, text.pair(group.names[line], group.values[line]))
+                    table.remove(group.names, line)
+                    table.remove(group.values, line)
+                end
+                chosen = #group.names > 0 and best or nil
+            end
+            for index, pair in ipairs(parts.pairs) do
+                pair.control:SetVisible(index == chosen)
+                if index == chosen then
+                    pair.names:Set(table.concat(group.names, "\n"))
+                    pair.values:Set(table.concat(group.values, "\n"))
+                end
+            end
             parts.notes:SetVisible(group ~= nil and #group.notes > 0)
             if group then
                 parts.title:Set(group.title)
-                parts.names:Set(table.concat(group.names, "\n"))
-                parts.values:Set(table.concat(group.values, "\n"))
                 parts.notes:Set(table.concat(group.notes, "\n"))
             end
         end
@@ -715,7 +860,12 @@ function view.start(app)
         show_list()
         set(head_parts, true)
         picked_slot:Set({ look_of(picked, false) })
-        title:Set(rows.shorten(picked.name, inner - CELL - 20, 13))
+        -- a long name takes a second line beside the picture. Only one too long for two lines is cut short
+        local name_lines = rows.wrap(picked.name, (inner - CELL - 20) * 0.94, 13)
+        if #name_lines > 2 then
+            name_lines = { name_lines[1], rows.shorten(table.concat(name_lines, " ", 2), inner - CELL - 20, 13) }
+        end
+        title:Set(table.concat(name_lines, "\n"))
         previous:SetEnabled(app.history:can_back())
         star:SetIcon(app.favourites:has(picked.key) and ui.Icons.Has("star-off") and "star-off" or "star")
         local ready = rows.ready(m)
@@ -761,6 +911,7 @@ function view.start(app)
         mode = mode or "make"
         if not stay then app.history:push(key, mode) end
         state.detail, state.pick, state.mode, state.card_page, state.tab, state.view = true, key, mode, 1, 1, "recipes"
+        state.asking = nil
         prepare(m, picked)
         show_detail()
     end
@@ -803,7 +954,7 @@ function view.start(app)
         panel:Spacer(4)
         return place
     end
-    local favourites = ui.Panel({ anchor = "top-left", x = L.shelf_x, y = 6, width = shelf, padding = 6, zoom = ZOOM, when = "always", opacity = 1,
+    local favourites = ui.Panel({ anchor = "top-left", x = L.shelf_x, y = L.top, width = shelf, padding = 6, zoom = ZOOM, when = "always", opacity = 1,
         visible = false })
     local on_shelf = favourite_place(favourites, shelf, favourite_columns, favourite_rows, false)
     -- where the game's list sits on a bench screen, as shares of the screen before it is made smaller
@@ -845,7 +996,7 @@ function view.start(app)
                 local item = m.items[order.key]
                 if item then
                     look = { image = item.icon, icon = not item.icon and PLAIN.item or nil, value = { order = entry.order },
-                        count = text.right.times(order.amount), mark = ui.Icons.Has("clipboard-list") and "clipboard-list" or "list",
+                        count = "x" .. text.short(order.amount), mark = ui.Icons.Has("clipboard-list") and "clipboard-list" or "list",
                         tip = { title = item.name, lines = { text.tree.title(order.amount), words.order_open, words.order_remove } } }
                 end
             else
@@ -1188,6 +1339,13 @@ function view.start(app)
         state.bare = false
         place()
     end)
+
+    -- a level gained or a point spent, here or in the game's own tech tree: the research lines that show are asked again
+    if research then
+        research.Changed:Connect(function()
+            if items:IsVisible() and state.detail and state.view == "recipes" and state.mode == "make" then show_detail() end
+        end)
+    end
 
     -- The open key hides the panels while they show. While they do not, it frees the mouse and shows them on their own.
     local function toggle()

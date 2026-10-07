@@ -1,0 +1,1 @@
+This copy of Wax is a development workspace. Wax never updates its own files while this file is here.

@@ -7,6 +7,7 @@ Commands:
   site                  write the data files of the game browser page
   diff <old> <new>      what changed between two index.json files
   find <text>           search classes and members by name
+  needs                 check the names Wax uses (wax\\runtime\\data\\needs.lua) against the index and the tables
 """
 import argparse
 import difflib
@@ -25,6 +26,9 @@ TYPES_DIR = os.path.join(ROOT, "wax", "types", "icarus")
 SITE_DIR = os.path.join(INDEX_DIR, "site")
 WAX_TYPES = os.path.join(ROOT, "wax", "types")
 LIBRARY_LIST = os.path.join(ROOT, "wax", "runtime", "data", "libraries.lua")
+NEEDS = os.path.join(ROOT, "wax", "runtime", "data", "needs.lua")
+TABLES_DIR = os.path.join(ROOT, "game-data", "data")
+META_STRUCT = "/Script/IcarusUtilities.RowMetadata"
 
 FORMAT = 1
 GAME_MODULE = "/Script/Icarus"
@@ -1337,6 +1341,305 @@ def find(index, text, limit):
     return rows[:limit], len(rows)
 
 
+# What Wax uses of the game is a Lua data file: tables, strings, numbers, true and false.
+
+LUA_TOKEN = re.compile(r"""--[^\n]*|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|-?\d+(?:\.\d+)?|[A-Za-z_]\w*|[{}=,;\[\]]|\s+|(.)""")
+LUA_WORDS = {"true": True, "false": False, "nil": None}
+
+
+def read_lua_data(text, origin="the Lua data"):
+    """The value a Lua data file returns: a list for a table of items, a dict for one with keys."""
+    tokens = []
+    for match in LUA_TOKEN.finditer(text):
+        token = match.group(0)
+        if match.group(1):
+            fail(f"{origin}, line {text.count(chr(10), 0, match.start()) + 1}: {token!r} is not data")
+        if not token.isspace() and not token.startswith("--"):
+            tokens.append(token)
+    if tokens[:1] == ["return"]:
+        tokens = tokens[1:]
+    at = 0
+
+    def value():
+        nonlocal at
+        token = tokens[at]
+        at += 1
+        if token == "{":
+            keyed, listed = {}, []
+            while tokens[at] != "}":
+                if tokens[at] == "[":
+                    at += 1
+                    key = value()
+                    if tokens[at:at + 2] != ["]", "="]:
+                        fail(f"{origin}: a key in brackets needs ] and = after it")
+                    at += 2
+                    keyed[key] = value()
+                elif tokens[at + 1] == "=":
+                    key = tokens[at]
+                    at += 2
+                    keyed[key] = value()
+                else:
+                    listed.append(value())
+                if tokens[at] in ",;":
+                    at += 1
+            at += 1
+            if not keyed:
+                return listed
+            keyed.update((place + 1, item) for place, item in enumerate(listed))
+            return keyed
+        if token[0] in "\"'":
+            return re.sub(r"\\(.)", lambda found: {"n": "\n", "t": "\t"}.get(found.group(1), found.group(1)), token[1:-1])
+        if token in LUA_WORDS:
+            return LUA_WORDS[token]
+        try:
+            return float(token) if "." in token else int(token)
+        except ValueError:
+            fail(f"{origin}: {token!r} is not data")
+
+    try:
+        result = value()
+    except IndexError:
+        fail(f"{origin} ends in the middle of a table")
+    if at != len(tokens):
+        fail(f"{origin}: there is text after the value it returns")
+    return result
+
+
+def read_needs(path):
+    if not os.path.isfile(path):
+        fail(f"No list of what Wax uses at {path}.")
+    with open(path, encoding="utf-8") as file:
+        parts = read_lua_data(file.read(), path)
+    if not isinstance(parts, list) or not all(isinstance(part, dict) and part.get("id") and part.get("name") for part in parts):
+        fail(f"{path} must return a list of parts, each with an id and a name.")
+    return parts
+
+
+class TableFiles:
+    """The game's tables as Export-GameData wrote them: one JSON file per table, found by the table's name."""
+
+    def __init__(self, folder):
+        self.folder = folder
+        self.paths, self.read = {}, {}
+        for root, _folders, files in os.walk(folder):
+            for name in files:
+                if name.endswith(".json"):
+                    self.paths[name[:-5]] = os.path.join(root, name)
+
+    def get(self, name):
+        if name not in self.read:
+            data = None
+            if name in self.paths:
+                with open(self.paths[name], encoding="utf-8") as file:
+                    data = json.load(file)
+            self.read[name] = data if isinstance(data, dict) and "Rows" in data else None
+        return self.read[name]
+
+    def newest(self):
+        return max((os.path.getmtime(path) for path in self.paths.values()), default=None)
+
+
+def closest(name, candidates):
+    """The existing name most like one that is gone, or None."""
+    candidates = [candidate for candidate in candidates if candidate != name]
+    for candidate in candidates:
+        if same_name(candidate, name):
+            return candidate
+    near = difflib.get_close_matches(name, candidates, 1, 0.6)
+    return near[0] if near else None
+
+
+def members_of(game, path, key):
+    """The names of one kind (properties, functions or fields) a class or struct has, with those of its parents."""
+    names = []
+    for owner in [path] + game.ancestors(path):
+        names.extend(item["name"] for item in (game.record(owner) or {}).get(key, ()))
+    return names
+
+
+def in_values(values, parts):
+    """True when the path leads somewhere in these values, False when it stops at one that is filled in, None when nothing is."""
+    for part in parts:
+        found, asked = [], False
+        for value in values:
+            for item in value if isinstance(value, list) else (value,):
+                if isinstance(item, dict):
+                    asked = True
+                    if part in item:
+                        found.append(item[part])
+        if not found:
+            return False if asked else None
+        values = found
+    return True
+
+
+def in_struct(game, struct, parts):
+    """The same for a struct of the index. With False come the closest name and why the path stops."""
+    plain = None
+    for part in parts:
+        if plain:
+            return False, None, f"{plain} has no fields"
+        if struct not in game.structs:
+            return None, None, None
+        names = members_of(game, struct, "fields")
+        if part not in names:
+            return False, closest(part, names), "not in " + leaf(struct)
+        field = next(item for owner in [struct] + game.ancestors(struct) for item in game.structs.get(owner, {}).get("fields", ())
+                     if item["name"] == part)
+        described = field.get("inner", field) if field["type"] == "Array" else field
+        struct, plain = described.get("ref"), None if described["type"] == "Struct" else part
+    return True, None, None
+
+
+def check_field(game, row_struct, values, defaults, path):
+    """fine, missing or unknown for one field path of a table, and the closest name when it is missing."""
+    parts = path.split(".")
+    known, hint, why = in_struct(game, row_struct, parts)
+    if known is False:
+        return "missing", hint, why
+    if isinstance(defaults, dict) and defaults and parts[0] not in defaults:
+        return "missing", closest(parts[0], defaults), "not among the table's fields"
+    if known or in_values(values, parts):
+        return "fine", None, None
+    return "unknown", None, "no row fills it in and the dump does not hold the row's struct"
+
+
+def check_part(part, game, tables):
+    missing, unknown, checked = [], [], 0
+
+    def gone(kind, name, hint=None, note=None):
+        missing.append({"kind": kind, "name": name, "hint": hint, "note": note})
+
+    def listed(key):
+        return part.get(key) or []
+
+    for entry in listed("classes") + listed("structs"):
+        is_class = "class" in entry
+        path = entry["class"] if is_class else entry["struct"]
+        group = game.classes if is_class else game.structs
+        wanted = [("property", "properties", name) for name in entry.get("properties") or []]
+        wanted += [("function", "functions", name) for name in entry.get("functions") or []]
+        wanted += [("field", "fields", name) for name in entry.get("fields") or []]
+        checked += 1 + len(wanted)
+        if path not in group:
+            same = [other for other in group if leaf(other) == leaf(path)]
+            if same:
+                gone("class" if is_class else "struct", path, same[0], "it is at another path")
+            elif path.startswith("/Script/"):
+                near = closest(leaf(path), [leaf(other) for other in group if package_of(other) == package_of(path)])
+                near = near or closest(leaf(path), [leaf(other) for other in group])
+                gone("class" if is_class else "struct", path, near and next(other for other in group if leaf(other) == near))
+            else:
+                also = f". Its members ({len(wanted)}) were not checked either" if wanted else ""
+                unknown.append({"kind": "class" if is_class else "struct", "name": path,
+                                "why": "not in this dump (a blueprint is only in it while it is loaded)" + also})
+            continue
+        for kind, key, name in wanted:
+            names = members_of(game, path, key)
+            if name in names:
+                continue
+            other = {"properties": "functions", "functions": "properties"}.get(key)
+            if other and name in members_of(game, path, other):
+                gone(kind, f"{path}:{name}", None, "it is a function now" if other == "functions" else "it is a property now")
+            else:
+                everything = names + (members_of(game, path, other) if other else [])
+                gone(kind, f"{path}:{name}", closest(name, everything))
+
+    for entry in listed("enums"):
+        path, values = entry["enum"], entry.get("values") or {}
+        checked += 1 + len(values)
+        record = game.enums.get(path)
+        if not record:
+            near = closest(leaf(path), [leaf(other) for other in game.enums])
+            gone("enum", path, near and next(other for other in game.enums if leaf(other) == near))
+            continue
+        now = dict(record["values"])
+        for name, number in sorted(values.items(), key=lambda pair: pair[1]):
+            if name not in now:
+                by_number = [other for other, value in now.items() if value == number]
+                gone("value", f"{path}:{name}", None if by_number else closest(name, now),
+                     by_number and f"{by_number[0]} has its number, {number}" or None)
+            elif now[name] != number:
+                gone("value", f"{path}:{name}", None, f"it is {now[name]} now and Wax expects {number}")
+
+    for entry in listed("tables"):
+        name, fields, meta = entry["table"], entry.get("fields") or [], entry.get("meta") or []
+        checked += 1 + len(fields) + len(meta)
+        data = tables.get(name)
+        if not data:
+            gone("table", name, closest(name, tables.paths))
+            continue
+        rows = data.get("Rows") or []
+        for path in fields:
+            state, hint, note = check_field(game, data.get("RowStruct"), [data.get("Defaults") or {}] + rows, data.get("Defaults"), path)
+            if state == "missing":
+                gone("field", f"{name}:{path}", hint, note)
+            elif state == "unknown":
+                unknown.append({"kind": "field", "name": f"{name}:{path}", "why": note})
+        for path in meta:
+            state, hint, note = check_field(game, META_STRUCT, [row["Metadata"] for row in rows if "Metadata" in row], None, path)
+            if state == "missing":
+                gone("field", f"{name} (its meta table):{path}", hint, note)
+            elif state == "unknown":
+                unknown.append({"kind": "field", "name": f"{name} (its meta table):{path}", "why": note})
+
+    return {"id": part["id"], "name": part["name"], "checked": checked, "missing": missing, "unknown": unknown}
+
+
+def check_needs(parts, index, tables):
+    """Every name each part of Wax uses, looked up in the index and in the tables. One result per part."""
+    game = Game(index)
+    return [check_part(part, game, tables) for part in parts]
+
+
+def needs_lines(results):
+    lines = []
+    for result in results:
+        missing, unknown = result["missing"], result["unknown"]
+        if missing:
+            head = f"{len(missing)} of {result['checked']} names are gone" if len(missing) > 1 else f"1 of {result['checked']} names is gone"
+        else:
+            head = f"fine, {result['checked']} name{'' if result['checked'] == 1 else 's'}"
+        if unknown:
+            head += f", {len(unknown)} could not be checked"
+        lines.append(f"{result['name']} ({result['id']}): {head}")
+        for item in missing:
+            more = [text for text in (item["note"], item["hint"] and f"closest: {item['hint']}") if text]
+            lines.append(f"    - {item['kind']} {item['name']}" + (f"  ({', '.join(more)})" if more else ""))
+        for item in unknown:
+            lines.append(f"    ? {item['kind']} {item['name']}: {item['why']}")
+    broken = [result["name"] for result in results if result["missing"]]
+    names = sum(result["checked"] for result in results)
+    if broken:
+        lines.append(f"{len(broken)} of {len(results)} parts use names the game no longer has: {', '.join(broken)}.")
+    else:
+        lines.append(f"All {len(results)} parts are fine ({names} names).")
+    return lines
+
+
+def command_needs(args):
+    index = load_index(args.index)
+    tables = TableFiles(args.tables)
+    if not tables.paths:
+        fail(f"No tables in {args.tables}. Run: scripts\\Export-GameData.ps1")
+    results = check_needs(read_needs(args.needs), index, tables)
+    if args.json:
+        print(json.dumps(results, indent=1))
+    else:
+        written, read = index["source"].get("written"), tables.newest()
+        print(f"Classes from the dump of {written}, tables as read on {time.strftime('%Y-%m-%d %H:%M', time.localtime(read))}.")
+        try:
+            dumped = time.mktime(time.strptime(written, "%Y-%m-%d %H:%M"))
+        except (TypeError, ValueError):
+            dumped = None
+        if dumped and read - dumped > 86400:
+            print("The tables are newer than the dump, so classes are checked against an older build of the game. "
+                  "Take a new dump, then run build.")
+        print("\n".join(needs_lines(results)))
+    if any(result["missing"] for result in results):
+        sys.exit(1)
+
+
 def command_build(args):
     started = time.perf_counter()
     index = build_index(args.dump, args.ue4ss_types)
@@ -1435,6 +1738,13 @@ def main(argv=None):
     search.add_argument("--index", default=INDEX, help="index.json to read (default: build\\game-index\\index.json)")
     search.add_argument("--limit", type=int, default=40, help="how many matches to print (default: 40)")
     search.set_defaults(run=command_find)
+
+    needs = commands.add_parser("needs", help="check the names Wax uses against the index and the tables")
+    needs.add_argument("--index", default=INDEX, help="index.json to read (default: build\\game-index\\index.json)")
+    needs.add_argument("--needs", default=NEEDS, help="the list to check (default: wax\\runtime\\data\\needs.lua)")
+    needs.add_argument("--tables", default=TABLES_DIR, help="the game's tables as JSON (default: game-data\\data)")
+    needs.add_argument("--json", action="store_true", help="print JSON")
+    needs.set_defaults(run=command_needs)
 
     args = parser.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):

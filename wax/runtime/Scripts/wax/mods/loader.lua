@@ -12,12 +12,14 @@ local watch = Wax.import("mods.watch")
 
 local loader = {}
 
--- Which mods the player switched off, kept between sessions in saved/wax.mods.lua.
+-- What the player decided about mods, kept between sessions in saved/wax.mods.lua: disabled, order, and known (the mods they have seen).
 local preferences = nil
+local adopt = false         -- the saved file has no list of known mods yet: what is there at the first full look counts as seen
 local function switched_off()
     if not preferences then
         preferences = storage.load("wax", "mods", { disabled = {} })
         if type(preferences.disabled) ~= "table" then preferences.disabled = {} end
+        if type(preferences.known) ~= "table" then preferences.known, adopt = {}, true end
     end
     return preferences.disabled
 end
@@ -28,6 +30,10 @@ local mods = {}             -- id -> mod record
 local order = {}            -- ids in load order (dependencies first)
 local pending = {}          -- reloads queued for the next frame step: id -> true
 local pending_sync = false
+local looks, settled = 0, false     -- looks at the mods folder so far, and whether one of them could list it
+local quiet = nil           -- the mod loader.added is about, which it announces itself
+local told = {}             -- new mods that were said to be held in this session: id -> true
+local accepted = {}         -- mods switched on in this session whose wax.new could not be removed: id -> true
 local extras = {}           -- name -> value: additions to every mod's environment (set by other core modules)
 
 -- UE4SS functions that must not be used from mod code, with the reason shown to the author.
@@ -109,7 +115,8 @@ local function make_env(mod)
     env.Signal = sched.Signal
     env.log = log.channel(mod.id)
     env.mod = setmetatable({ id = mod.id, name = mod.manifest.name or mod.id, version = mod.manifest.version or "0.0.0",
-        dir = mod.dir }, { __index = function(_, key) return type(key) == "string" and file_of(mod, key) or nil end })
+        dir = mod.dir, Reload = function() pending[mod.id] = true end },
+        { __index = function(_, key) return type(key) == "string" and file_of(mod, key) or nil end })
     for name, reason in pairs(BLOCKED) do env[name] = blocked(name, reason) end
     for name, value in pairs(extras) do env[name] = value end
 
@@ -295,11 +302,33 @@ local function dependents_of(id, found)
     return found
 end
 
--- Finds mods, loads new ones and unloads removed ones. With hold_new, a mod not seen before is listed switched off instead.
-function loader.sync(hold_new)
+-- A mod's name and version as its own mod.lua gives them, cut to one short line for a notification.
+local function shown_name(mod)
+    local name = mod.manifest and mod.manifest.name
+    if type(name) ~= "string" or not name:find("%S") then return mod.id end
+    return (name:gsub("%c", " "):sub(1, 60))
+end
+
+local function shown_version(mod)
+    local version = mod.manifest and mod.manifest.version
+    if type(version) ~= "string" or version == "" or #version > 32 or version:find("[^%w%.%-+]") then return nil end
+    return version
+end
+
+-- The mark the site's button leaves in a copy it put in for a player who did not have the mod: a file named wax.new, in any letter case. Returns the file's name.
+local function mark_of(files)
+    if files["wax.new"] then return "wax.new" end
+    for name in pairs(files) do
+        if #name == 7 and name:lower() == "wax.new" then return name end
+    end
+    return nil
+end
+
+-- Finds mods, loads the ones the player has switched on and unloads removed ones. A mod not seen before is listed switched off.
+function loader.sync()
     pending_sync = false
     local held = {}
-    local found, notes = discover.all()
+    local found, notes, listed = discover.all()
     local current = {}
     for _, note in ipairs(notes) do
         if not noted[note] then core_log:warn("%s", note) end
@@ -307,6 +336,24 @@ function loader.sync(hold_new)
     end
     noted = current
     watch.track(found)
+    local disabled = switched_off()
+    local known, changed = preferences.known, false
+    local first = looks == 0
+    looks = looks + 1
+    if listed and adopt then
+        adopt = false
+        for _, entry in ipairs(found) do known[entry.id] = true end
+        changed = true
+    end
+    if listed and not settled then
+        -- a mod whose folder is gone when the game starts is forgotten: a folder that turns up under its name later is new
+        settled = true
+        local here = {}
+        for _, entry in ipairs(found) do here[entry.id] = true end
+        for id in pairs(known) do
+            if not here[id] then known[id], changed = nil, true end
+        end
+    end
     local seen, added, removed = {}, {}, {}
     for _, entry in ipairs(found) do
         seen[entry.id] = true
@@ -322,19 +369,26 @@ function loader.sync(hold_new)
             for _, dependency in ipairs(manifest.dependencies) do depends[dependency] = true end
         end
         local mod = mods[entry.id]
-        if not mod then
+        local arrived = not mod
+        if arrived then
             mod = { id = entry.id, status = "new", generation = 0, persistent = {}, modules = {} }
             mods[entry.id] = mod
             added[#added + 1] = entry.id
-            if hold_new and not switched_off()[entry.id] then
-                switched_off()[entry.id] = true
-                storage.save("wax", "mods", preferences)
-                mod.fresh = true
-                held[#held + 1] = mod
-            end
+        end
+        -- a copy that carries the mark is one the player has not seen, whatever was written down about its name
+        mod.mark = mark_of(files)
+        local unseen = mod.mark ~= nil and not accepted[entry.id] and known[entry.id] ~= nil
+        if unseen then known[entry.id], changed = nil, true end
+        -- while the folder cannot be listed nothing is written down: the first full look may still count this mod as seen
+        if not known[entry.id] and not adopt and (arrived or unseen) then
+            local was_off = disabled[entry.id]
+            -- also written down as switched off, which is what a Wax from before the list of known mods reads
+            if not was_off then disabled[entry.id], changed = true, true end
+            held[#held + 1] = { mod = mod, tell = unseen or not (first and was_off) }
         end
         mod.dir, mod.manifest, mod.files, mod.depends = entry.dir, manifest, files, depends
-        mod.enabled = not switched_off()[entry.id]
+        mod.fresh = not known[entry.id] or nil
+        mod.enabled = (known[entry.id] and not disabled[entry.id]) and true or false
         mod.manifest_error = manifest_error
         if manifest_error then
             unload(mod, "broken manifest")
@@ -345,13 +399,20 @@ function loader.sync(hold_new)
     for id, mod in pairs(mods) do
         if not seen[id] then
             unload(mod, "removed")
-            mods[id] = nil
+            mods[id], accepted[id] = nil, nil
             removed[#removed + 1] = id
         end
     end
-    for _, mod in ipairs(held) do
-        core_log:info("%s found. It stays switched off until you enable it", mod.id)
-        if loader.on_held then pcall(loader.on_held, mod.id, mod.manifest.name or mod.id) end
+    if changed then storage.save("wax", "mods", preferences) end
+    local held_ids = {}
+    for index, entry in ipairs(held) do
+        local mod = entry.mod
+        held_ids[index] = mod.id
+        if not told[mod.id] then
+            told[mod.id] = true
+            core_log:info("%s is new here. It stays switched off until you switch it on in the Mods page", mod.id)
+            if entry.tell and mod.id ~= quiet and loader.on_held then pcall(loader.on_held, mod.id, shown_name(mod)) end
+        end
     end
     order = sort_by_dependencies()
     -- Load what is new, and retry what failed earlier (its missing dependency may have arrived since).
@@ -368,7 +429,35 @@ function loader.sync(hold_new)
             load_mod(mod)
         end
     end
-    return { added = added, removed = removed, mods = loader.list() }
+    return { added = added, removed = removed, held = held_ids, mods = loader.list() }
+end
+
+-- For the bridge: something outside put a mod's folder in. Looks again, reloads the mod if it was running, and says once what happened.
+function loader.added(id)
+    local before = mods[id]
+    -- a copy that was just put in is looked at afresh: a mark on it counts, whatever went before in this session
+    quiet, accepted[id] = id, nil
+    local ok, problem = pcall(loader.sync)
+    quiet = nil
+    if not ok then error(problem, 0) end
+    local mod = mods[id]
+    if not mod then return nil, ("no mod named '%s' is in the mods folder"):format(tostring(id)) end
+    if before and mod.enabled and not mod.manifest_error then loader.reload(id) end
+    local name, version = shown_name(mod), shown_version(mod)
+    local label = version and (name .. " " .. version) or name
+    local text, kind = nil, nil
+    if mod.fresh then
+        text = ("%s was added. It stays switched off until you switch it on in the Mods page."):format(label)
+    elseif not mod.enabled then
+        text = ("%s was put in. It is still switched off."):format(label)
+    elseif mod.status == "loaded" then
+        text, kind = ("%s was put in and is running."):format(label), "good"
+    else
+        text, kind = ("%s was put in, but it did not load. The Mods page says why."):format(label), "bad"
+    end
+    local ui = Wax.ui
+    if ui and ui.Notify then pcall(ui.Notify, text, { title = mod.fresh and "New mod" or "Mods", kind = kind, icon = "package-plus", seconds = 8 }) end
+    return { id = id, name = name, version = version, status = mod.status, enabled = mod.enabled, fresh = mod.fresh == true }
 end
 
 -- Reloads one mod and, after it, every mod that depends on it
@@ -406,20 +495,18 @@ local function broken_file(mod)
     end
     return nil
 end
--- hold_new as for loader.sync. A request without it wins over one with it.
-function loader.request_sync(hold_new)
-    if hold_new then pending_sync = pending_sync or "hold" else pending_sync = true end
-end
+-- Asks for a look at the mods folder at the start of the next frame.
+function loader.request_sync() pending_sync = true end
 
 -- Called once per frame by the core: runs the reloads that were requested since the last frame.
 function loader.step()
     watch.step()
-    if pending_sync then loader.sync(pending_sync == "hold") end
+    if pending_sync then loader.sync() end
     if next(pending) then
         local batch = pending
         pending = {}
         -- look at the folders again first, so a file added since the last look is found
-        loader.sync(true)
+        loader.sync()
         for id in pairs(batch) do
             local mod = mods[id]
             -- a file saved half-typed does not take a running mod down: the version that runs stays until one compiles
@@ -453,11 +540,25 @@ end
 
 function loader.get(id) return mods[id] end
 
--- Switches a mod off (it unloads and stays off, also after restarting the game) or back on.
+-- Switches a mod off (it unloads and stays off, also after restarting the game) or back on. Switching a new mod on is what makes it known.
 function loader.set_enabled(id, enabled)
     if not mods[id] then return false, ("no mod named '%s'"):format(tostring(id)) end
     switched_off()[id] = (not enabled) or nil
-    if enabled then mods[id].fresh = nil end
+    if enabled then
+        local mod = mods[id]
+        if mod.mark then
+            -- the mark goes once the player has switched the mod on. errno 2: it is gone already
+            local gone, why, errno = os.remove(mod.dir .. "/" .. mod.mark)
+            if not gone and errno ~= 2 then
+                accepted[id] = true
+                core_log:warn("%s was switched on, but %s in its folder could not be removed (%s). It is switched off again the next time the game starts",
+                    id, mod.mark, tostring(why))
+            end
+            mod.mark = nil
+        end
+        preferences.known[id] = true
+        mod.fresh, told[id] = nil, nil
+    end
     storage.save("wax", "mods", preferences)
     pending_sync = true
     return true
@@ -480,8 +581,8 @@ function loader.move(id, by)
     return true
 end
 
--- Takes a mod out: it unloads and its folder is renamed with a leading dot, so nothing is erased. Returns the new folder name.
-function loader.remove(id)
+-- Takes a mod out: it unloads, its folder is renamed with a leading dot (nothing is erased), and it is forgotten unless the updater is replacing it. Returns the new folder name.
+function loader.remove(id, replacing)
     local mod = mods[id]
     if not mod then return nil, ("no mod named '%s'"):format(tostring(id)) end
     local parent = mod.dir:match("^(.*)/[^/]+$")
@@ -494,8 +595,14 @@ function loader.remove(id)
         return nil, ("the folder could not be renamed (%s)"):format(tostring(problem))
     end
     mods[id] = nil
+    switched_off()
+    if not replacing then told[id], accepted[id] = nil, nil end
+    if not replacing and preferences.known[id] then
+        preferences.known[id] = nil
+        storage.save("wax", "mods", preferences)
+    end
     order = sort_by_dependencies()
-    pending_sync = pending_sync or true
+    pending_sync = true
     return kept
 end
 
@@ -525,7 +632,7 @@ function loader.set_watching(on) watch.set_enabled(on) end
 function loader.watching() return watch.enabled() end
 watch.on_change = function(id) pending[id] = true end
 -- a folder taken away while the game runs leaves the list without anyone asking for a look
-watch.on_lost = function() pending_sync = pending_sync or "hold" end
+watch.on_lost = function() pending_sync = true end
 
 -- Adds a value to every mod's environment under `name` (used by other core modules to publish their API)
 function loader.provide(name, value) extras[name] = value end

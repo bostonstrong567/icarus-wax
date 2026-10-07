@@ -17,7 +17,7 @@ function register(app) {
   };
 
   const statusWords = (mod) => {
-    if (mod.status === 'disabled') return mod.fresh ? 'new, switched off until enabled' : 'switched off';
+    if (mod.status === 'disabled') return mod.fresh ? 'new, switched off until you enable it' : 'switched off';
     if (mod.status === 'failed') return 'failed';
     return mod.status;
   };
@@ -38,7 +38,9 @@ function register(app) {
   const view = vscode.window.createTreeView('wax.mods', { treeDataProvider: provider });
 
   const refresh = () => {
-    view.message = game.connected || game.state === 'unset' ? undefined : 'The game is not running. These are the mods on disk.';
+    if (game.connected || game.state === 'unset') view.message = undefined;
+    else if (game.state === 'devoff') view.message = 'Developer mode is off, so the game does not tell the editor about its mods. These are the mods on disk.';
+    else view.message = 'The game is not running. These are the mods on disk.';
     changed.fire();
   };
 

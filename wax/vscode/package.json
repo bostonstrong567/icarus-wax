@@ -2,7 +2,7 @@
   "name": "wax-icarus",
   "displayName": "Wax for Icarus",
   "description": "Write Lua mods for ICARUS with Wax. It starts new mods for you, completes and checks your code, runs it in the running game, and shows the game's log and errors.",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "RobertCincotta",
   "icon": "icon.png",
   "homepage": "https://wax-icarus.duckdns.org/",
@@ -28,6 +28,13 @@
   "extensionDependencies": [
     "sumneko.lua"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Wax sends Lua from the open folder into the running game, where it can do what a program can. So it only works in a folder you trust."
+    },
+    "virtualWorkspaces": false
+  },
   "activationEvents": [
     "onLanguage:lua",
     "workspaceContains:luamods",
@@ -136,6 +143,18 @@
         "icon": "$(cloud-download)"
       },
       {
+        "command": "wax.devModeOn",
+        "title": "Switch Developer Mode On",
+        "category": "Wax",
+        "icon": "$(unlock)"
+      },
+      {
+        "command": "wax.devModeOff",
+        "title": "Switch Developer Mode Off",
+        "category": "Wax",
+        "icon": "$(lock)"
+      },
+      {
         "command": "wax.addDependency",
         "title": "Add Dependency to mod.lua",
         "category": "Wax"
@@ -219,6 +238,16 @@
           "command": "wax.openDocs",
           "when": "view == wax.mods",
           "group": "wax@4"
+        },
+        {
+          "command": "wax.devModeOn",
+          "when": "view == wax.mods",
+          "group": "waxdev@1"
+        },
+        {
+          "command": "wax.devModeOff",
+          "when": "view == wax.mods",
+          "group": "waxdev@2"
         }
       ],
       "view/item/context": [

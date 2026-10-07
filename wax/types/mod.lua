@@ -11,12 +11,13 @@
 ---@class WaxFile
 
 ---What a mod knows about itself. Every Lua file and folder of the mod is a field too: `mod.Utils` is Utils.lua and
----`mod.extras.Utils` is extras/Utils.lua. A file called id, name, version or dir has to be required by its name instead.
+---`mod.extras.Utils` is extras/Utils.lua. A file called id, name, version, dir or Reload has to be required by its name instead.
 ---@class WaxModInfo
 ---@field id string The mod's folder name.
 ---@field name string
 ---@field version string
 ---@field dir string Path of the mod's folder.
+---@field Reload fun() Loads the mod again at the start of the next frame, as a saved file does.
 mod = {}
 
 ---One line of the Wax log.

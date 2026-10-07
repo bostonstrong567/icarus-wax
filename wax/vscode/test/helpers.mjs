@@ -61,9 +61,11 @@ export function writeIndex(dir, modsDir) {
   put(dir, { 'run/mods.index.lua': `return { mods = {\n${lines.join('\n')}\n} }\n` });
 }
 
-// Starts fake_game.lua with `dir` as the game's Wax folder and keeps its frames going until the test ends.
-export async function startStandInGame(t, dir) {
-  for (const folder of ['run/in', 'run/out', 'saved', 'Scripts']) fs.mkdirSync(path.join(dir, folder), { recursive: true });
+// Starts fake_game.lua with `dir` as the game's Wax folder (a folder below one named Binaries, as waxIn gives) and keeps its frames going until the test ends.
+// dev: whether dev.txt is in that folder, as in a mod author's install. Without it the game answers commands and runs no Lua.
+export async function startStandInGame(t, dir, { dev = true } = {}) {
+  for (const folder of ['run/in', 'run/out', 'saved', 'Scripts', 'mods']) fs.mkdirSync(path.join(dir, folder), { recursive: true });
+  if (dev) fs.writeFileSync(path.join(dir, 'dev.txt'), '');
   const child = spawn(LUA, [path.join('wax', 'vscode', 'test', 'fake_game.lua'), dir], { cwd: ROOT, stdio: ['pipe', 'pipe', 'pipe'] });
   const game = { stderr: '' };
   child.stderr.on('data', (data) => { game.stderr += data; });

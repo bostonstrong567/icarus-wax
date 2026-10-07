@@ -46,6 +46,49 @@ local function put(scale, corner, x, y)
     return true
 end
 
+M.TIPS = 4          -- frames between looks for new tooltips while the tech tree or the talents show
+M.TIP_SHARE = 0.82  -- those tooltips are this much of the menus' size: at the menus' own size they cover the tree
+
+local TIP_SLOTS = { "BlueprintMenuSlot", "TalentMenuSlot", "SoloMenuSlot" }
+local tips_done = { scale = 1, counts = {} }
+
+-- The tooltips of the tech tree and the talents are drawn outside the holder, so each gets the menus' size itself.
+-- They are made as they are first needed, which is why this is looked at again while those screens show.
+local function size_tips(scale)
+    local holder = menus()
+    if not holder then return end
+    if tips_done.scale ~= scale then tips_done.scale, tips_done.counts = scale, {} end
+    for index = 0, holder:GetChildrenCount() - 1 do
+        local main = holder:GetChildAt(index)
+        if main:IsValid() and main:GetFName():ToString():find("MainMenu", 1, true) then
+            for _, slot_name in ipairs(TIP_SLOTS) do
+                local slot = main[slot_name]
+                local view = slot:IsValid() and slot:GetChildrenCount() > 0 and slot:GetChildAt(0) or nil
+                local switcher = view and view:IsValid() and view.GraphWidgetSwitcher or nil
+                if switcher and switcher:IsValid() then
+                    for at = 0, switcher:GetChildrenCount() - 1 do
+                        local graph = switcher:GetChildAt(at)
+                        local tips = graph:IsValid() and graph.TooltipWidgets or nil
+                        local count = tips and tips:GetArrayNum() or 0
+                        local key = slot_name .. at
+                        if count ~= (tips_done.counts[key] or 0) then
+                            tips_done.counts[key] = count
+                            tips:ForEach(function(_, element)
+                                local tip = element:get()
+                                if tip:IsValid() then
+                                    tip:SetRenderTransformPivot({ X = 0, Y = 0 })
+                                    tip:SetRenderScale({ X = scale, Y = scale })
+                                end
+                            end)
+                        end
+                    end
+                end
+            end
+            return
+        end
+    end
+end
+
 local function current()
     for at = #requests, 1, -1 do
         if requests[at].enabled then return requests[at] end
@@ -59,6 +102,7 @@ local function apply()
         if put(request.scale, request.corner, request.x, request.y) then shown = request end
     elseif shown then
         if put(1, CORNERS.center, 0, 0) then shown = nil end
+        pcall(size_tips, 1)
     end
 end
 
@@ -151,6 +195,9 @@ end
 
 function M.step()
     frames = frames + 1
+    if shown and seen.name == "UMG_MainMenu" and (seen.tab == 2 or seen.tab == 3) and frames % M.TIPS == 0 then
+        pcall(size_tips, shown.scale * M.TIP_SHARE)
+    end
     if frames % M.EVERY ~= 0 then return end
     if current() or shown then apply() end
 end
@@ -160,6 +207,7 @@ function M.restore()
     requests = {}
     if shown then
         pcall(put, 1, CORNERS.center, 0, 0)
+        pcall(size_tips, 1)
         shown = nil
     end
 end

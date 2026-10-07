@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Wax CLI: drive the live game from outside it
 import fs from 'node:fs';
-import { evalLua, gameRunning, ping, start, stop, ue4ssLogPath } from './bridge.mjs';
+import { devModeHelp, evalLua, gameRunning, ping, start, stop, ue4ssLogPath } from './bridge.mjs';
 import { sync, watch } from './mods.mjs';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -33,6 +33,8 @@ switch (command) {
     const bridge = running ? await ping() : null;
     let state = 'game not running';
     if (running) state = bridge ? 'ready' : 'game running, game thread not answering (loading, paused, hung, or Wax not installed)';
+    // without developer mode the game answers commands such as this one, and refuses eval, perf, sync and watch
+    if (bridge && bridge.dev === false) state = 'ready, developer mode off';
     result = { state, gameRunning: running, bridge };
     break;
   }
@@ -82,4 +84,5 @@ switch (command) {
     process.exit(2);
 }
 console.log(JSON.stringify(result, null, 2));
+if (result.code === 'dev-off') console.error(devModeHelp());
 process.exit(result.ok === false ? 1 : 0);

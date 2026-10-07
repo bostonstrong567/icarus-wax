@@ -143,9 +143,12 @@ function create({ folders = [], settings = {} } = {}) {
   const languageOf = (file) => (file.endsWith('.lua') ? 'lua' : file.endsWith('.json') ? 'json' : 'plaintext');
   const findDocument = (uri) => state.documents.find((document) => document.uri.toString().toLowerCase() === uri.toString().toLowerCase());
 
+  // like the real one, a message may be given options ({ modal, detail }) before its buttons
   const message = (level) => async (text, ...items) => {
-    state.messages.push({ level, text, items });
-    return state.reply('message', { level, text, items });
+    const options = items.length && typeof items[0] === 'object' ? items.shift() : null;
+    const shown = options ? { level, text, items, options } : { level, text, items };
+    state.messages.push(shown);
+    return state.reply('message', shown);
   };
 
   const vscode = {

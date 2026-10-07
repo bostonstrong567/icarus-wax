@@ -1,15 +1,34 @@
 -- Offline tests for the mod loader: environments, require, dependencies, reload, failure handling.
+-- The mods are in folders of their own and reach the loader through the index, as a mod author's do in developer mode.
+-- (held_test.lua has the player's side: the mods folder itself, and mods the player has not seen.)
 -- Run from the workspace root:  tools\lua\lua54\lua.exe wax\tests\offline\mods_test.lua <empty scratch dir>
 
 local t = dofile("wax/tests/offline/harness.lua")
 local scratch = assert(arg[1], "usage: mods_test.lua <empty scratch dir>"):gsub("\\", "/")
+if not scratch:match("^%a:") then scratch = io.popen("cd"):read("l"):gsub("\\", "/") .. "/" .. scratch end
+local root = scratch .. "/Binaries/Win64/ue4ss/Mods/Wax"
+
+local function mkdir(path) os.execute('mkdir "' .. path:gsub("/", "\\") .. '" >nul 2>nul') end
+local function write(path, text)
+    local file = assert(io.open(path, "wb"))
+    file:write(text)
+    file:close()
+end
+
+mkdir(root .. "/run")
+mkdir(root .. "/saved")
+write(root .. "/dev.txt", "")                -- developer mode: the loader reads <root>/run/mods.index.lua
+-- Wax's own folder as UE4SS lists it, with an empty mods folder
+function IterateGameDirectories()
+    return { Game = { Binaries = { Win64 = { ue4ss = { Mods = { Wax = { mods = { __files = {} } } } } } } } }
+end
 
 local Wax = t.new_wax()
+Wax.root = root
 local scope = Wax.import("core.scope")
 local log = Wax.import("core.log")
 local guard = Wax.import("core.guard")
 local sched = Wax.import("core.sched")
-Wax.root = scratch                       -- the loader reads <root>/run/mods.index.lua
 local loader = Wax.import("mods.loader")
 
 local now = 0
@@ -20,14 +39,21 @@ local function frame()
     sched.step()
 end
 
-local function mkdir(path) os.execute('mkdir "' .. path:gsub("/", "\\") .. '" >nul 2>nul') end
-local function write(path, text)
-    local file = assert(io.open(path, "wb"))
-    file:write(text)
-    file:close()
+-- Looks at the folders and switches on what is new, as the player does in the Mods page.
+local look = loader.sync
+local function sync()
+    local summary = look()
+    local any = false
+    for _, entry in ipairs(loader.list()) do
+        if entry.fresh then
+            loader.set_enabled(entry.id, true)
+            any = true
+        end
+    end
+    if any then look() end
+    return summary
 end
 
-mkdir(scratch .. "/run")
 local known = {}    -- id -> { files }
 
 -- Writes a mod's files and rewrites the index the way the command-line tool would.
@@ -55,7 +81,7 @@ local function write_index()
         lines[#lines + 1] = ("  { id = %q, dir = %q, files = { %s } },"):format(id, scratch .. "/" .. id, table.concat(quoted, ", "))
     end
     lines[#lines + 1] = "} }"
-    write(scratch .. "/run/mods.index.lua", table.concat(lines, "\n"))
+    write(root .. "/run/mods.index.lua", table.concat(lines, "\n"))
 end
 
 local function status(id)
@@ -91,7 +117,7 @@ t.test("a mod loads in its own environment, with require, print and exports", fu
         ["pack/init.lua"] = "return 'folder module'",
     })
     write_index()
-    loader.sync()
+    sync()
     local entry = status("Alpha")
     t.eq(entry.status, "loaded")
     t.eq(entry.version, "1.2.3")
@@ -111,7 +137,7 @@ t.test("dependencies load first and are reached with require('@Id'); undeclared 
     })
     put_mod("Gamma", { ["init.lua"] = 'return require("@Alpha")' })
     write_index()
-    loader.sync()
+    sync()
     t.eq(loader.get("Beta").exports.value, 10)
     t.eq(status("Gamma").status, "failed")
     t.ok(status("Gamma").error:find("does not list", 1, true), status("Gamma").error)
@@ -126,12 +152,12 @@ t.test("a missing dependency fails with a clear message and loads once the depen
         ["init.lua"] = 'return require("@Epsilon")',
     })
     write_index()
-    loader.sync()
+    sync()
     t.eq(status("Delta").status, "failed")
     t.ok(status("Delta").error:find("Epsilon", 1, true))
     put_mod("Epsilon", { ["init.lua"] = "return 'here now'" })
     write_index()
-    loader.sync()
+    sync()
     t.eq(status("Delta").status, "loaded")
     t.eq(loader.get("Delta").exports, "here now")
 end)
@@ -151,7 +177,7 @@ t.test("reload undoes what the mod set up, keeps persist() state, and reloads de
         ["init.lua"] = 'return { sawLoads = require("@Zeta").loads }',
     })
     write_index()
-    loader.sync()
+    sync()
     signal:Fire()
     t.eq(shared.hits, 1)
     frame()
@@ -171,7 +197,7 @@ t.test("a syntax error or a failing init leaves nothing behind, and a fixed file
     guard.clear_errors()
     put_mod("Theta", { ["init.lua"] = "shared.signal:Connect(function() shared.theta = true end)\nlocal x = = 1" })
     write_index()
-    loader.sync()
+    sync()
     t.eq(status("Theta").status, "failed")
     t.ok(status("Theta").error:find("Theta/init.lua:2", 1, true), "error names the file and line: " .. status("Theta").error)
     put_mod("Theta", { ["init.lua"] = "shared.signal:Connect(function() shared.theta = true end)\nerror('init exploded')" })
@@ -194,7 +220,7 @@ t.test("off-thread and restart functions are refused with an explanation; raw st
         ]],
     })
     write_index()
-    loader.sync()
+    sync()
     local exports = loader.get("Iota").exports
     _G.LoopAsync = nil
     t.eq(exports.ok, false)
@@ -205,7 +231,7 @@ end)
 t.test("request_reload waits for the frame step; a removed mod unloads; a broken manifest is reported", function()
     put_mod("Kappa", { ["init.lua"] = "shared.kappa = (shared.kappa or 0) + 1 return true" })
     write_index()
-    loader.sync()
+    sync()
     t.eq(shared.kappa, 1)
     loader.request_reload("Kappa")
     t.eq(shared.kappa, 1, "not reloaded inline")
@@ -214,7 +240,7 @@ t.test("request_reload waits for the frame step; a removed mod unloads; a broken
     known.Kappa = nil
     put_mod("Lambda", { ["mod.lua"] = "return { name = ", ["init.lua"] = "return true" })
     write_index()
-    local summary = loader.sync()
+    local summary = sync()
     t.eq(status("Kappa"), nil)
     t.eq(summary.removed[1], "Kappa")
     t.eq(status("Lambda").status, "failed")
@@ -225,7 +251,7 @@ end)
 t.test("saving a file reloads its mod with nothing outside the game involved", function()
     put_mod("Watched", { ["init.lua"] = "return { value = 1 }" })
     write_index()
-    loader.sync()
+    sync()
     t.eq(loader.get("Watched").exports.value, 1)
     local function frames_until(condition)
         for count = 1, 2000 do
@@ -267,7 +293,7 @@ end)
 t.test("a mod whose folder is taken away while the game runs leaves the list by itself", function()
     put_mod("Leaving", { ["mod.lua"] = "return { name = 'Leaving' }", ["init.lua"] = "return true" })
     write_index()
-    loader.sync()
+    sync()
     t.eq(status("Leaving").status, "loaded")
     os.remove(scratch .. "/Leaving/init.lua")
     os.remove(scratch .. "/Leaving/mod.lua")
@@ -285,15 +311,14 @@ t.test("a mod whose folder is taken away while the game runs leaves the list by 
 end)
 
 t.test("storage keeps a mod's settings on disk, one write for many saves", function()
-    mkdir(scratch .. "/saved")
     local storage = Wax.import("core.storage")
-    storage.directory = scratch .. "/saved"
+    t.eq(storage.directory, root .. "/saved")
     put_mod("Saver", { ["init.lua"] = [[
         local settings = storage.Load("settings", { volume = 5, nested = { on = true } })
         return { settings = settings, save = function() storage.Save("settings", settings) end }
     ]] })
     write_index()
-    loader.sync()
+    sync()
     local exports = loader.get("Saver").exports
     t.eq(exports.settings.volume, 5)
     exports.settings.volume = 9
@@ -301,12 +326,12 @@ t.test("storage keeps a mod's settings on disk, one write for many saves", funct
     exports.settings.nested.on = false
     exports.save()
     exports.save()
-    t.ok(not io.open(scratch .. "/saved/Saver.settings.lua", "rb"), "nothing is written until the saves settle")
+    t.ok(not io.open(root .. "/saved/Saver.settings.lua", "rb"), "nothing is written until the saves settle")
     for _ = 1, 60 do
         frame()
         storage.step()
     end
-    local file = assert(io.open(scratch .. "/saved/Saver.settings.lua", "rb"), "the settings file was not written")
+    local file = assert(io.open(root .. "/saved/Saver.settings.lua", "rb"), "the settings file was not written")
     file:close()
     loader.reload("Saver")
     local again = loader.get("Saver").exports.settings
@@ -321,7 +346,7 @@ t.test("a mod can be switched off and on, and what depends on it says why it sto
     put_mod("Base", { ["init.lua"] = "return { value = 1 }" })
     put_mod("Needs", { ["mod.lua"] = 'return { dependencies = { "Base" } }', ["init.lua"] = 'return { got = require("@Base").value }' })
     write_index()
-    loader.sync()
+    sync()
     t.eq(status("Needs").status, "loaded")
     t.ok(loader.set_enabled("Base", false))
     for _ = 1, 3 do frame() end
@@ -357,14 +382,18 @@ t.test("a mod that turns up while the game runs is listed but held until it is s
     loader.on_held = nil
     put_mod("Asked", { ["init.lua"] = "return {}" })
     write_index()
-    loader.sync()
-    t.eq(status("Asked").status, "loaded", "a look that was asked for outright loads what it finds")
+    look()
+    t.eq(status("Asked").status, "disabled", "a look that was asked for outright holds what it finds too")
+    t.ok(status("Asked").fresh)
+    loader.set_enabled("Asked", true)
+    look()
+    t.eq(status("Asked").status, "loaded")
 end)
 
 t.test("the console's environment reaches every mod, keeps what is defined in it, and blocks what mods are blocked from", function()
     put_mod("Reach", { ["init.lua"] = "counter = 3\nreturn { value = 9 }" })
     write_index()
-    loader.sync()
+    sync()
     local env = loader.console_env()
     t.eq(env.mods.Reach.counter, 3, "mods.<Id> is that mod's globals")
     env.mods.Reach.counter = 4
@@ -395,7 +424,7 @@ return { sum = Utils.add(2, 3), deep = Deep, pack = Pack, same = require("extras
         ["pack/init.lua"] = "return 'a folder with an init.lua'",
     })
     write_index()
-    loader.sync()
+    sync()
     t.eq(status("Tidy").status, "loaded", tostring(status("Tidy").error))
     local exports = loader.get("Tidy").exports
     t.eq(exports.sum, 5)
@@ -408,7 +437,7 @@ return { sum = Utils.add(2, 3), deep = Deep, pack = Pack, same = require("extras
 
     put_mod("Tidy", { ["init.lua"] = "return require(mod.extras.Nope)", ["extras/Deep.lua"] = "return 1" })
     write_index()
-    loader.sync()
+    sync()
     loader.reload("Tidy")
     t.ok(status("Tidy").error:find("Tidy has no file or folder 'Nope' in extras", 1, true), tostring(status("Tidy").error))
     put_mod("Tidy", { ["init.lua"] = "return require(mod.Nothing)" })
@@ -422,7 +451,7 @@ t.test("a save that does not compile leaves the running mod alone until one does
     guard.clear_errors()
     put_mod("Steady", { ["init.lua"] = "shared.steady = (shared.steady or 0) + 1" })
     write_index()
-    loader.sync()
+    sync()
     t.eq(status("Steady").status, "loaded")
     local generation = status("Steady").generation
     put_mod("Steady", { ["init.lua"] = "local window = { width = " })
@@ -444,7 +473,7 @@ t.test("a mod's errors are forgotten once it loads cleanly again", function()
     guard.clear_errors()
     put_mod("Typo", { ["init.lua"] = "local x = " })
     write_index()
-    loader.sync()
+    sync()
     t.eq(status("Typo").status, "failed")
     local function mine()
         local n = 0
@@ -464,7 +493,7 @@ end)
 t.test("mods can be put in another order, which is kept, and one can be removed without erasing it", function()
     put_mod("Zeta", { ["init.lua"] = "return {}" })
     put_mod("Alpha", { ["init.lua"] = "return {}" })
-    loader.sync()
+    sync()
     local function ids()
         local out = {}
         for _, mod in ipairs(loader.list()) do
@@ -483,7 +512,7 @@ t.test("mods can be put in another order, which is kept, and one can be removed 
     end
     t.eq(loader.list()[1].id, "Zeta")
     t.eq(loader.move("Zeta", -1), false, "it is at the top already")
-    loader.sync()
+    sync()
     t.eq(loader.list()[1].id, "Zeta", "the order survives another look at the folder")
 
     local kept, problem = loader.remove("Zeta")
@@ -507,11 +536,83 @@ t.test("what a look at the mods folder has to say is logged once, not at every l
         end
         return count
     end
-    loader.sync()
+    sync()
     local before = said()
-    loader.sync()
-    loader.sync()
+    sync()
+    sync()
     t.eq(said(), before)
+end)
+
+-- Writes an index by hand: each entry as Lua text.
+local function index_of(entries)
+    write(root .. "/run/mods.index.lua", "return { mods = {\n" .. table.concat(entries, ",\n") .. "\n} }")
+end
+
+t.test("every entry of the index is checked: its id, its folder, the names of its files", function()
+    mkdir(scratch .. "/Good")
+    write(scratch .. "/Good/init.lua", "shared.good_ran = true return {}")
+    mkdir(scratch .. "/Wrong")
+    write(scratch .. "/Wrong/init.lua", "shared.wrong_ran = true return {}")
+    mkdir(scratch .. "/My Mod")
+    write(scratch .. "/My Mod/init.lua", "shared.wrong_ran = true return {}")
+    local function entry(id, dir, files)
+        return ("  { id = %q, dir = %q, files = { %s } }"):format(id, dir, files or '"init.lua"')
+    end
+    local bad = {
+        entry("My Mod", scratch .. "/My Mod"),                              -- an id with a space
+        entry("../Wrong", scratch .. "/Wrong"),                             -- an id that is a path
+        entry(("W"):rep(65), scratch .. "/" .. ("W"):rep(65)),              -- an id that is too long
+        entry("Wrong", "Wrong"),                                            -- a folder that is not a full path
+        entry("Wrong", "//server/share/Wrong"),                             -- a folder on another machine
+        entry("Wrong", scratch .. "/Good/../Wrong"),                        -- a folder reached through ..
+        entry("Wrong", scratch .. "/Good"),                                 -- a folder named after another mod
+        entry("Wrong", scratch .. "/Missing/Wrong"),                        -- a folder that is not there
+        entry("Wrong", scratch .. "/Wrong", '"init.lua", "../Good/init.lua"'),
+        entry("Wrong", scratch .. "/Wrong", '"init.lua", "C:/Windows/win.ini"'),
+        entry("Wrong", scratch .. "/Wrong", '"init.lua", "sub\\\\file.lua"'),
+        entry("Wrong", scratch .. "/Wrong", '"init.lua", "/file.lua"'),
+        entry("Wrong", scratch .. "/Wrong", '"init.lua", 5'),
+        entry("Wrong", scratch .. "/Wrong", '"other.lua"'),                 -- no init.lua
+        '  { id = "Wrong", dir = 5, files = { "init.lua" } }',
+        '  { id = "Wrong", dir = ' .. ("%q"):format(scratch .. "/Wrong") .. ' }',
+        '  "Wrong"',
+    }
+    for position, text in ipairs(bad) do
+        index_of({ text, entry("Good", scratch .. "/Good") })
+        shared.good_ran, shared.wrong_ran = nil, nil
+        loader.unload_all()
+        local summary = sync()
+        t.eq(#summary.mods, 1, "entry " .. position .. " was let in: " .. text)
+        t.eq(status("Good").status, "loaded", "the good entry beside bad entry " .. position)
+        t.eq(shared.wrong_ran, nil, "entry " .. position)
+        t.ok(logged("skipped entry 1 of run/mods.index.lua"), "entry " .. position)
+    end
+    t.ok(logged("skipped entry 1 of run/mods.index.lua: its id may only use letters, digits, _ and -"))
+    t.ok(logged("skipped entry 1 of run/mods.index.lua: its folder is not a full path on a drive"))
+    t.ok(logged("skipped entry 1 of run/mods.index.lua: its folder is not a plain path"))
+    t.ok(logged("skipped entry 1 of run/mods.index.lua: its folder is not named after the mod"))
+    t.ok(logged("skipped entry 1 of run/mods.index.lua: its folder is not there"))
+    t.ok(logged("skipped entry 1 of run/mods.index.lua: it lists a file that is not inside its folder"))
+    t.ok(logged("skipped entry 1 of run/mods.index.lua: it has no init.lua"))
+    -- an index that is not a list of mods is left alone as a whole
+    write(root .. "/run/mods.index.lua", "return 5")
+    t.eq(#sync().mods, 0)
+    t.ok(logged("run/mods.index.lua could not be read and was ignored"))
+    index_of({ entry("Good", scratch .. "/Good") })
+    t.eq(#sync().mods, 1)
+end)
+
+t.test("without developer mode the index is not read, and the mods it listed are gone until it is back", function()
+    known = { Reach = known.Reach }
+    write_index()
+    sync()
+    t.eq(status("Reach").status, "loaded")
+    os.remove(root .. "/dev.txt")
+    t.eq(#look().mods, 0, "no dev.txt beside Scripts, no index")
+    t.eq(loader.get("Reach"), nil)
+    write(root .. "/dev.txt", "")
+    look()
+    t.eq(status("Reach").status, "loaded", "a mod the player had seen is back as it was")
 end)
 
 t.test("unload_all leaves no connections or tasks behind", function()

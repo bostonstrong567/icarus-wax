@@ -12,11 +12,16 @@ function register(app) {
   const render = () => {
     vscode.commands.executeCommand('setContext', 'wax.connected', game.connected);
     status.backgroundColor = undefined;
+    status.command = 'wax.showLog';
     if (game.state === 'unset') {
       status.hide();
       return;
     }
-    if (game.state === 'connected') {
+    if (game.state === 'devoff') {
+      status.text = '$(lock) Wax: developer mode is off';
+      status.tooltip = 'ICARUS is running. Wax in it runs Lua sent from the editor only in developer mode. Click to switch it on.';
+      status.command = 'wax.devModeOn';
+    } else if (game.state === 'connected') {
       const count = game.mods.length;
       const failed = game.mods.filter((mod) => mod.status === 'failed').length;
       status.text = `$(plug) Wax: ${count} mod${count === 1 ? '' : 's'}${failed ? `, ${failed} failed` : ''}`;
@@ -69,6 +74,7 @@ function register(app) {
 
   game.on('state', (state, previous) => {
     if (state === 'connected') output.appendLine(`${clock()} [info] [editor] connected to the game`);
+    else if (state === 'devoff') output.appendLine(`${clock()} [info] [editor] the game is running with developer mode off, so it runs no Lua sent from the editor. "Wax: Switch Developer Mode On" changes that.`);
     else if (previous === 'connected') output.appendLine(`${clock()} [info] [editor] ${state === 'absent' ? 'the game is gone' : 'the game stopped answering'}`);
     render();
   });

@@ -1,12 +1,17 @@
--- Tests for waxnet.dll against the live catalogue: status files, checksums, refused paths, runs one after another.
--- It skips itself when the DLL is not built or the catalogue cannot be reached.
+-- Tests for waxnet.dll. First the signature check, which needs no catalogue: on the DLL as built, and on a copy built with a key
+-- made for the test (scripts\Build-WaxNative.ps1 -SigningTest, which needs gcc and Node). Then against the live catalogue: status
+-- files, checksums, refused paths, runs one after another. That part skips itself when the catalogue cannot be reached.
 -- Run from the workspace root:  tools\lua\lua54\lua.exe wax\tests\offline\waxnet_test.lua
 
 local t = dofile("wax/tests/offline/harness.lua")
 
+local SUITE = "waxnet"
+
+-- Ends the suite here with what ran so far.
 local function skip(why)
-    print(("waxnet: 0 passed, 0 failed (skipped: %s)"):format(why))
-    os.exit(0)
+    for _, failure in ipairs(t.failures) do io.stderr:write("FAIL ", failure, "\n") end
+    print(("%s: %d passed, %d failed (the rest skipped: %s)"):format(SUITE, t.passed, t.failed, why))
+    os.exit(t.failed == 0 and 0 or 1)
 end
 
 local function read(path)
@@ -28,20 +33,32 @@ local function sleep(seconds)
     while os.clock() < stop do end
 end
 
-local built = read("wax/runtime/bin/waxnet.dll")
-if not built then skip("wax/runtime/bin/waxnet.dll is not built") end
+-- Another build of the helper can be named, for one that could not be put in wax/runtime/bin while the game had that file open.
+local DLL = arg[1] or "wax/runtime/bin/waxnet.dll"
+local built = read(DLL)
+if not built then skip(DLL .. " is not built") end
 
 -- The DLL takes the folder above its own bin as its root, so a copy in a scratch folder keeps everything in there.
 local here = io.popen("cd"):read("l"):gsub("\\", "/")
-local ROOT = here .. "/build/waxnet-test"
-local NET = ROOT .. "/run/net"
-os.execute(('rmdir /s /q "%s" >nul 2>nul'):format((ROOT:gsub("/", "\\"))))
-os.execute(('mkdir "%s" >nul 2>nul'):format(((ROOT .. "/bin"):gsub("/", "\\"))))
-write(ROOT .. "/bin/waxnet.dll", built)
+local function win(path) return (path:gsub("/", "\\")) end
+local function mkdir(path) os.execute(('mkdir "%s" >nul 2>nul'):format(win(path))) end
 
-local ready = package.loadlib(ROOT .. "/bin/waxnet.dll", "wax_net_ready")
-local run, problem = package.loadlib(ROOT .. "/bin/waxnet.dll", "wax_net_run")
-if not (ready and run) then skip("the DLL does not load: " .. tostring(problem)) end
+local ROOT, NET, ready, run = nil, nil, nil, nil
+
+-- Loads the copy of the helper under a root. Every request after this goes to that copy.
+local function use(root)
+    local made, why = package.loadlib(root .. "/bin/waxnet.dll", "wax_net_ready")
+    local start = made and package.loadlib(root .. "/bin/waxnet.dll", "wax_net_run")
+    if not start then return false, why end
+    ROOT, NET, ready, run = root, root .. "/run/net", made, start
+    ready()
+    return true
+end
+
+local REAL = here .. "/build/waxnet-test"
+os.execute(('rmdir /s /q "%s" >nul 2>nul'):format(win(REAL)))
+mkdir(REAL .. "/bin")
+write(REAL .. "/bin/waxnet.dll", built)
 
 local number = os.time() % 100000 * 1000
 
@@ -81,10 +98,210 @@ local function sha256(path)
     return found
 end
 
-ready()
+-- Puts a list and a signature under run/net as the game's Lua does, has the helper check them, and returns the status in its parts.
+local function check(name, list, signature)
+    for path, content in pairs({ [NET .. "/" .. name] = list or false, [NET .. "/" .. name .. ".sig"] = signature or false }) do
+        if content then write(path, content) else os.remove(path) end
+    end
+    write(NET .. "/" .. name .. ".status", "200 1 an answer from an earlier check\n")
+    ask({ "=\t" .. name })
+    return status(name)
+end
+
+-- Says that the check refused, and why.
+local function refused(why, code, bytes, hash, reason)
+    t.eq(code, 0, why)
+    t.eq(bytes, 0, why)
+    t.eq(hash, "-", why)
+    t.eq(reason, why)
+end
+
+local B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+-- The same base64 text with one bit of the bytes it stands for turned over, in the character at `place`.
+local function flip(text, place, bit)
+    local value = B64:find(text:sub(place, place), 1, true) - 1
+    local other = value ~ (bit or 1)
+    return text:sub(1, place - 1) .. B64:sub(other + 1, other + 1) .. text:sub(place + 1)
+end
+
+local has_key = not (read("wax/native/waxnet.c") or ""):find("#define WAX_PUBLIC_KEY WAX_NO_PUBLIC_KEY", 1, true)
+local SIGNING = here .. "/build/waxnet-signing"
+local fixture, no_fixture = nil, nil
+for _, tool in ipairs({ "gcc", "node", "pwsh" }) do
+    if not os.execute(("where %s >nul 2>nul"):format(tool)) then no_fixture = no_fixture or (tool .. " is not here") end
+end
+if not no_fixture then
+    local built_copy = os.execute("pwsh -NoProfile -File scripts\\Build-WaxNative.ps1 -SigningTest >build\\waxnet-signing.log 2>&1")
+    fixture = { list = read(SIGNING .. "/fixture/list.txt"), good = read(SIGNING .. "/fixture/good.sig"), other = read(SIGNING .. "/fixture/other.sig"),
+        empty = read(SIGNING .. "/fixture/empty.sig"), key = read(SIGNING .. "/fixture/key.txt") }
+    t.test("a copy of the helper is built with a key made for this test", function()
+        t.ok(built_copy, "scripts\\Build-WaxNative.ps1 -SigningTest failed: see build\\waxnet-signing.log")
+        t.ok(fixture.list and fixture.good and fixture.other and fixture.empty and fixture.key, "the list and its signatures are there")
+        t.eq(#fixture.good, 89)
+        t.ok(fixture.good ~= fixture.other)
+        t.ok(use(SIGNING), "the copy loads")
+        t.eq(ROOT, SIGNING)
+        t.ok((read(SIGNING .. "/bin/waxnet.dll") or ""):find(fixture.key, 1, true), "the key a copy was built with can be read out of its file")
+        t.ok(not built:find(fixture.key, 1, true), "and the helper for the game does not hold it")
+        t.eq(read(SIGNING .. "/fixture/key.pem"), nil, "the private half was never written")
+    end)
+    if t.failed > 0 then fixture = nil end
+else
+    print("waxnet: the signature tests on a keyed copy are skipped (" .. no_fixture .. ")")
+end
+
+if fixture then
+    mkdir(NET .. "/plan")
+    local good = fixture.good:sub(1, 88)
+
+    t.test("a list with the owner's signature is good", function()
+        local code, bytes, hash, why = check("plan/wax-own.list", fixture.list, fixture.good)
+        t.eq(code, 200)
+        t.eq(bytes, #fixture.list)
+        t.eq(hash, sha256(NET .. "/plan/wax-own.list"), "the checksum in the answer is the list's")
+        t.eq(why, "")
+        t.eq(read(NET .. "/plan/wax-own.list"), fixture.list, "the list stays as it was")
+        t.eq(read(NET .. "/plan/wax-own.list.sig"), fixture.good)
+        t.eq(read(NET .. "/request.txt"), nil)
+    end)
+
+    t.test("one changed bit in the list makes it bad", function()
+        for _, place in ipairs({ 1, 5, 9, 76, #fixture.list // 2, #fixture.list - 1, #fixture.list }) do
+            for _, bit in ipairs({ 1, 128 }) do
+                local changed = fixture.list:sub(1, place - 1) .. string.char(fixture.list:byte(place) ~ bit) .. fixture.list:sub(place + 1)
+                refused("the signature does not match", check("plan/wax-own.list", changed, fixture.good))
+            end
+        end
+        for what, changed in pairs({ ["a byte more"] = fixture.list .. "\n", ["a byte less"] = fixture.list:sub(1, -2), ["other line endings"] = fixture.list:gsub("\n", "\r\n"),
+            ["two lines the other way round"] = fixture.list:gsub("^(.-\n)(.-\n)(.-\n)", "%1%3%2"), ["nothing"] = "" }) do
+            t.ok(changed ~= fixture.list, what)
+            refused("the signature does not match", check("plan/wax-own.list", changed, fixture.good))
+        end
+        t.eq((check("plan/wax-own.list", fixture.list, fixture.good)), 200, "and the list as it was signed is still good")
+    end)
+
+    t.test("one changed bit in the signature makes it bad", function()
+        for _, place in ipairs({ 1, 2, 43, 44, 85 }) do
+            for _, bit in ipairs({ 1, 32 }) do refused("the signature does not match", check("plan/wax-own.list", fixture.list, flip(good, place, bit) .. "\n")) end
+        end
+        refused("the signature does not match", check("plan/wax-own.list", fixture.list, flip(good, 86, 16) .. "\n"))
+        local code, bytes, hash = check("plan/wax-own.list", fixture.list, ("A"):rep(86) .. "==\n")
+        t.eq(code, 0, "a signature of nothing but zeros")
+        t.eq(bytes, 0)
+        t.eq(hash, "-")
+    end)
+
+    t.test("a signature that is cut short, or is not 64 bytes in base64, is not read", function()
+        local hex = good:gsub(".", function(char) return ("%02x"):format(char:byte()) end)
+        for what, text in pairs({ ["cut by one"] = good:sub(1, 87), ["cut in half"] = good:sub(1, 44), ["empty"] = "", ["one more"] = good .. "A", ["no padding"] = good:sub(1, 86),
+            ["bits left over"] = flip(good, 86, 1), ["a space in it"] = good:sub(1, 40) .. " " .. good:sub(42), ["a line break in it"] = good:sub(1, 44) .. "\n" .. good:sub(45),
+            ["written for a web address"] = good:gsub("[+/]", { ["+"] = "-", ["/"] = "_" }):sub(1, 86), ["hex"] = hex:sub(1, 128), ["a space after it"] = good .. " \n",
+            ["a line before it"] = "\n" .. good, ["twice"] = good .. "\n" .. good .. "\n" }) do
+            refused("the signature is not 64 bytes in base64", check("plan/wax-own.list", fixture.list, text))
+            t.ok(text ~= good, what)
+        end
+        refused("the signature is missing", check("plan/wax-own.list", fixture.list, nil))
+        refused("the signature is missing", check("plan/wax-own.list", fixture.list, ("A"):rep(300)))
+        for _, ending in ipairs({ "", "\n", "\r\n", "\n\n" }) do t.eq((check("plan/wax-own.list", fixture.list, good .. ending)), 200, ("%q"):format(ending)) end
+    end)
+
+    t.test("a signature by another key, or over another text, is bad", function()
+        refused("the signature does not match", check("plan/wax-own.list", fixture.list, fixture.other))
+        refused("the signature does not match", check("plan/wax-own.list", fixture.list, fixture.empty))
+        refused("the signature does not match", check("plan/wax-own.list", "", fixture.good))
+        local code, bytes = check("plan/wax-own.list", "", fixture.empty)
+        t.eq(code, 200, "each signature is good for the text it was made over, an empty one too")
+        t.eq(bytes, 0)
+    end)
+
+    t.test("a list that is missing or larger than 4 MB is not checked", function()
+        refused("the list is missing or too large", check("plan/wax-own.list", nil, fixture.good))
+        refused("the list is missing or too large", check("plan/wax-own.list", ("x"):rep(4 * 1024 * 1024 + 1), fixture.good))
+        mkdir(NET .. "/plan/a folder.list")
+        ask({ "=\tplan/a folder.list" })
+        refused("the list is missing or too large", status("plan/a folder.list"))
+    end)
+
+    t.test("a list or a signature outside run/net is not looked at", function()
+        local outside = { ROOT .. "/outside.list", ROOT .. "/run/outside.list", ROOT .. "/elsewhere/list.txt" }
+        mkdir(ROOT .. "/elsewhere")
+        for _, path in ipairs(outside) do
+            write(path, fixture.list)
+            write(path .. ".sig", fixture.good)
+        end
+        local linked = os.execute(('mklink /J "%s" "%s" >nul 2>nul'):format(win(NET .. "/link"), win(ROOT .. "/elsewhere")))
+        write(NET .. "/kept.list", fixture.list)
+        write(NET .. "/kept.list.sig", fixture.good)
+        local lines = {}
+        for _, name in ipairs({ "../outside.list", "../../outside.list", "plan/../../outside.list", "/outside.list", ROOT .. "/outside.list", "..\\outside.list",
+            "plan\\..\\..\\outside.list", win(ROOT .. "/outside.list"), "link/list.txt", "nul", "con.list", "plan/wax-own.list.status", "plan/wax-own.list.part",
+            "request.txt", "done", "" }) do
+            lines[#lines + 1] = "=\t" .. name
+        end
+        lines[#lines + 1] = "=\tkept.list"
+        t.eq(ask(lines), "#" .. number .. "\n")
+        t.eq((status("kept.list")), 200, "the one good line in the request is still done")
+        for _, path in ipairs(outside) do
+            t.eq(read(path .. ".status"), nil, path)
+            t.eq(read(path), fixture.list, path)
+        end
+        t.ok(linked, "a link from run/net to a folder outside it could be made for the test")
+        t.eq(read(NET .. "/link/list.txt.status"), nil, "a link out of run/net is not followed")
+        for _, path in ipairs({ ROOT .. "/run/outside.list.status", NET .. "/outside.list.status", NET .. "/request.txt.status", NET .. "/done.status",
+            NET .. "/plan/wax-own.list.status.status", NET .. "/plan/wax-own.list.part.status", NET .. "/nul.status", NET .. "/con.list.status" }) do
+            t.eq(read(path), nil, path)
+        end
+        os.execute(('rmdir "%s" >nul 2>nul'):format(win(NET .. "/link")))
+        t.eq(read(ROOT .. "/elsewhere/list.txt"), fixture.list, "taking the link away left the folder it pointed at")
+    end)
+
+    t.test("checks, clearing and addresses go in one request, each with its own answer", function()
+        mkdir(NET .. "/stage/Thing")
+        write(NET .. "/stage/Thing/left.txt", "left over")
+        write(NET .. "/plan/a.list", fixture.list)
+        write(NET .. "/plan/a.list.sig", fixture.good)
+        write(NET .. "/plan/b.list", fixture.list)
+        write(NET .. "/plan/b.list.sig", fixture.other)
+        t.eq(ask({ "=\tplan/a.list", "-\tstage/Thing", "/other\tother.json", "=\tplan/b.list", "=\tplan/a.list" }, 3), "#" .. number .. "\n")
+        t.eq((status("plan/a.list")), 200)
+        refused("the signature does not match", status("plan/b.list"))
+        t.eq((status("stage/Thing")), 200)
+        t.eq(read(NET .. "/stage/Thing/left.txt"), nil)
+        refused("this address is not allowed", status("other.json"))
+    end)
+end
+
+t.test("the helper as it is built for the game accepts no signature made with a key from a test", function()
+    t.ok(use(REAL), "the DLL loads")
+    mkdir(NET .. "/plan")
+    local list = fixture and fixture.list or "wax 0.2.1\n"
+    local cases = fixture and { fixture.good, fixture.other, fixture.empty } or {}
+    cases[#cases + 1] = ("A"):rep(86) .. "==\n"
+    -- a file built before signatures takes the line for an address, which is a refusal too. The last line of this suite says so
+    local _, _, _, first_answer = check("plan/wax-own.list", list, cases[1])
+    local stale = first_answer == "this address is not allowed"
+    if stale then SUITE = ("waxnet (%s is older than wax/native/waxnet.c and checks no signatures: rebuild it with the game closed)"):format(DLL) end
+    for _, signature in ipairs(cases) do
+        for _, text in ipairs({ list, "" }) do
+            local code, bytes, hash, why = check("plan/wax-own.list", text, signature)
+            t.eq(code, 0)
+            t.eq(bytes, 0)
+            t.eq(hash, "-")
+            -- until the owner's key is in waxnet.c nothing at all is good, whatever it is signed with
+            if not has_key and not stale then t.eq(why, "this build has no signing key") end
+        end
+    end
+    if not has_key and not stale then
+        t.ok(built:find(("0"):rep(128), 1, true), "the placeholder is what the file holds in place of a key")
+        refused("this build has no signing key", check("plan/wax-own.list", nil, nil))
+    end
+end)
+
+if ROOT ~= REAL then skip("the DLL does not load") end
 if not pcall(write, NET .. "/request.txt", "") then
     t.test("wax_net_ready makes run/net", function() error("run/net was not made") end)
-    t.finish("waxnet")
+    t.finish(SUITE)
 end
 os.remove(NET .. "/request.txt")
 
@@ -328,4 +545,4 @@ t.test("a mod of the catalogue is fetched whole, checked, and put in the place o
     t.eq(next(state.available), nil)
 end)
 
-t.finish("waxnet")
+t.finish(SUITE)

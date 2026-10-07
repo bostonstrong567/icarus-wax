@@ -326,4 +326,52 @@ if exists(folder .. "/text.lua") then
     end)
 end
 
+-- a copy of the mod from before it had a research line has neither
+local research_words = exists(folder .. "/text.lua") and part("text").research
+if unlock.research and research_words then
+    -- A plan as game.Research gives it, for a node of level 25 that needs `count` points.
+    local function plan(count, fields)
+        local out = { node = "shotgun", name = "Shotgun", unlocked = false, default = false, level = 25, steps = {}, points = count,
+            available = 11, player_level = 30, needed_level = 25, can = true, blocked = false }
+        local names = { "Machining Bench", "Cement Mixer", "Shotgun Shell Casing", "Shotgun" }
+        for at = 1, count do out.steps[at] = { node = "n" .. at, name = names[#names - count + at], level = 20 } end
+        for key, value in pairs(fields or {}) do out[key] = value end
+        return out
+    end
+    local function told(count, fields) return unlock.research(plan(count, fields), research_words) end
+
+    t.test("research: nothing for a recipe with no node, a node known from the start, and one the game holds back", function()
+        t.eq(unlock.research(nil, research_words), nil)
+        t.eq(told(0, { unlocked = true, default = true }), nil)
+        t.eq(told(1, { can = false, blocked = true }), nil, "the needs line already names the pack or the mission")
+        t.eq(told(3, { can = false, blocked = true }), nil)
+    end)
+
+    t.test("research: researched, one step, and several steps with what is asked first", function()
+        t.eq(told(0, { unlocked = true }).kind, "done")
+        t.eq(told(0, { unlocked = true }).line, "Researched")
+        local one = told(1)
+        t.eq(one.kind, "buy")
+        t.eq(one.caption, "Research (1 point)")
+        t.eq(one.ask, "This spends 1 point.", "a press is always asked about first")
+        t.eq(one.confirm, "Research")
+        local three = told(3)
+        t.eq(three.kind, "buy")
+        t.eq(three.caption, "Research (3 points)")
+        t.eq(three.ask, "Researches Cement Mixer and Shotgun Shell Casing first. 3 points in all.")
+        t.eq(three.confirm, "Research all")
+    end)
+
+    t.test("research: the level comes before the points, and each says what is missing", function()
+        local low = told(3, { player_level = 20, available = 0, can = false })
+        t.eq(low.kind, "level")
+        t.eq(low.line, "Unlocks at level 25")
+        local poor = told(3, { available = 1, can = false })
+        t.eq(poor.kind, "points")
+        t.eq(poor.line, "Needs 3 points")
+        t.eq(poor.caption, "Research (3 points)", "the button shows what it costs and cannot be pressed")
+        t.eq(told(3, { available = 3 }).kind, "buy")
+    end)
+end
+
 t.finish("recipe-unlock")

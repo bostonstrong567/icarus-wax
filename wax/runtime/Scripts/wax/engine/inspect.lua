@@ -205,6 +205,13 @@ function M.write(inst, record, value)
     return false, clean(problem)
 end
 
+-- what fits in each whole-number type (an enum's size is not known, and 64 bits is all Lua has)
+local RANGES = {
+    Int8Property = { -128, 127 }, Int16Property = { -32768, 32767 }, IntProperty = { -2147483648, 2147483647 },
+    ByteProperty = { 0, 255 }, UInt16Property = { 0, 65535 }, UInt32Property = { 0, 4294967295 },
+    UInt64Property = { 0, math.maxinteger },
+}
+
 local YES = { ["true"] = true, ["1"] = true, on = true, yes = true }
 local NO = { ["false"] = true, ["0"] = true, off = true, no = true }
 
@@ -227,9 +234,14 @@ function M.parse(record, text, field)
     if show ~= "int" and show ~= "float" and not part then return nil, "this cannot be typed" end
     local number = tonumber(trimmed)
     if not number or number ~= number then return nil, "a number is needed" end
+    if number == math.huge or number == -math.huge then return nil, "that number is too large" end
     if show == "int" or (part and record.fields.whole) then
         local whole = math.tointeger(number)
         if not whole then return nil, "a whole number is needed" end
+        local range = part and RANGES.ByteProperty or RANGES[record.type]
+        if range and (whole < range[1] or whole > range[2]) then
+            return nil, ("a whole number from %d to %d is needed"):format(range[1], range[2])
+        end
         return whole
     end
     return number

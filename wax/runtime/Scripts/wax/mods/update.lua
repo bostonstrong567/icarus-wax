@@ -14,7 +14,7 @@ local FIRST_SECONDS, EVERY_SECONDS, GAP_SECONDS = 20, 6 * 3600, 60
 local POLL_FRAMES = 30                      -- how often the answer to a request is looked for
 local MAX_FILES, MAX_BYTES = 500, 20 * 1024 * 1024
 local MAX_OUTPUT, MAX_FULL_PATH = 220, 255
-local ORIGIN = "wax.origin"
+local ORIGIN, MARK = "wax.origin", "wax.new"    -- the two files in a mod's folder that are Wax's own, never the mod's
 local NET = Wax.root .. "/run/net"
 local KINDS, DEVICES = {}, {}
 for kind in ("lua json txt md png jpg jpeg webp ogg wav csv"):gmatch("%a+") do KINDS[kind] = true end
@@ -25,12 +25,13 @@ update.loadlib = package.loadlib            -- replaced in tests
 update.time = os.time                       -- replaced in tests
 update.Changed = sched.Signal.new("update") -- fired whenever update.state() would answer differently
 
-local settings = { auto = true, last = 0 }
+local settings = { look = true, auto = true, last = 0 }   -- look: whether the catalogue is asked at all. auto: whether what it has is put in
 local available, queued, queue = {}, {}, {}
 local checking, problem, wanted, asked_at = false, nil, false, nil
 local worker, helper, dead = nil, nil, false
 local wax_version, run_number = nil, nil
 local staging = nil                         -- the folder under run/net a download is going to, until it is moved or given up
+local busy_until = nil                      -- the helper does one request at a time. Set while one is out
 local said = {}
 
 local function fail(text, left) error({ said = text, left = left }, 0) end
@@ -166,9 +167,7 @@ local function native()
     return helper
 end
 
--- Hands jobs ({ address, output } each) to the helper and waits until it has done them all.
-local function fetch(jobs)
-    local lib = native()
+local function send(lib, jobs)
     run_number = (run_number or update.time() % 1000000 * 1000) + 1
     local lines = { "#" .. run_number }
     for _, job in ipairs(jobs) do lines[#lines + 1] = job[1] .. "\t" .. job[2] end
@@ -191,6 +190,18 @@ local function fetch(jobs)
     end
 end
 
+-- Hands jobs ({ address, output } each) to the helper and waits until it has done them all. A second caller waits its turn.
+local function fetch(jobs)
+    -- with looking for updates switched off nothing is asked, and the helper is not even loaded
+    if not settings.look then fail("looking for updates is switched off") end
+    local lib = native()
+    while busy_until and sched.clock() < busy_until do frames(POLL_FRAMES) end
+    busy_until = sched.clock() + 200 + 2 * #jobs
+    local ok, why = pcall(send, lib, jobs)
+    busy_until = nil
+    if not ok then error(why, 0) end
+end
+
 -- What the helper wrote about one output: the http status (0 when there was none), the size, the checksum, the reason.
 local function status_of(output)
     local text = read(NET .. "/" .. output .. ".status")
@@ -209,6 +220,52 @@ local function answer(output, what)
     local ok, value = pcall(json.decode, text or "")
     if not ok or type(value) ~= "table" then fail(what .. ": the answer could not be read") end
     return value
+end
+
+-- True when path a comes before path b by its bytes, whatever the locale is.
+local function before(a, b)
+    for index = 1, math.min(#a, #b) do
+        local x, y = a:byte(index), b:byte(index)
+        if x ~= y then return x < y end
+    end
+    return #a < #b
+end
+
+-- The text the owner signs for a list of files: the head line, then "<sha256> <size> <path>" for each file in the order of the paths.
+local function signed_text(head, files)
+    local order, sorted = {}, true
+    for index, file in ipairs(files) do
+        order[index] = file
+        if index > 1 and not before(files[index - 1].path, file.path) then sorted = false end
+    end
+    if not sorted then table.sort(order, function(a, b) return before(a.path, b.path) end) end
+    local lines = { head }
+    for index, file in ipairs(order) do lines[index + 1] = ("%s %d %s"):format(file.sha256, file.size, file.path) end
+    lines[#lines + 1] = ""
+    return table.concat(lines, "\n")
+end
+
+-- Has the helper check the owner's signature on a list of files, the list being what was made of the catalogue's answer. Raises unless it is good.
+local function check_signed(head, files, signature, output)
+    if type(signature) ~= "string" or #signature ~= 88 or not signature:find("^[A-Za-z0-9+/]+==$") then
+        fail("the catalogue gives no signature for the list of its files")
+    end
+    local text = signed_text(head, files)
+    -- an answer left from an earlier check must not be taken for this one
+    local gone, _, errno = os.remove(NET .. "/" .. output .. ".status")
+    pause()
+    if not gone and errno ~= 2 then fail("an earlier answer of the helper could not be removed") end
+    for name, content in pairs({ [output] = text, [output .. ".sig"] = signature .. "\n" }) do
+        if not write(NET .. "/" .. name, content) then fail("the list of its files could not be written to be checked") end
+        pause()
+    end
+    fetch({ { "=", output } })
+    local code, bytes, _, why = status_of(output)
+    pause()
+    os.remove(NET .. "/" .. output .. ".status")
+    pause()
+    if code ~= 200 then fail("the list of its files is not signed with Wax's key (" .. why .. ")") end
+    if bytes ~= #text then fail("the helper checked another list than the one written for it") end
 end
 
 -- Finds out which installed mods the catalogue has a newer version of.
@@ -259,6 +316,8 @@ local function read_plan(plan, id, version)
         local file = files[index]
         local path = type(file) == "table" and file.path
         if not good_path(path) then fail("it holds a path that is not allowed: " .. shown(path)) end
+        local name = path:match("[^/]*$"):lower()
+        if name == ORIGIN or name == MARK then fail("it holds a file under a name that is Wax's own: " .. path) end
         if not KINDS[(path:match("%.([A-Za-z0-9]+)$") or ""):lower()] then fail("it holds a kind of file that is not allowed: " .. path) end
         if 7 + #id + #path > MAX_OUTPUT or #NET + #id + #path + 16 > MAX_FULL_PATH then fail("it holds a path that is too long: " .. path) end
         if seen[path:lower()] then fail("it lists the same file twice: " .. path) end
@@ -342,7 +401,8 @@ local function swap(id, mod, version)
         local other = Wax.mods.get(entry.id)
         if other and other.depends and other.depends[id] then dependents[#dependents + 1] = entry.id end
     end
-    local kept, why = Wax.mods.remove(id)
+    -- the player has seen this mod: its next version is not a new mod
+    local kept, why = Wax.mods.remove(id, true)
     if not kept then fail(tostring(why)) end
     local moved, reason = os.rename(NET .. "/stage/" .. id, dir)
     if not moved then
@@ -368,7 +428,10 @@ local function bring(id, version)
     local base = ("/api/mods/%s/files/%s"):format(id, encode(version))
     local listing, stage = "plan/" .. id .. ".json", "stage/" .. id
     fetch({ { base .. "?update=1", listing } })
-    local files = read_plan(answer(listing, "the list of its files"), id, version)
+    local plan = answer(listing, "the list of its files")
+    local files = read_plan(plan, id, version)
+    -- every file below is checked against this list, so nothing is fetched before the list is known to be the owner's
+    check_signed(("mod %s %s"):format(id, version), files, plan.signature, "plan/" .. id .. ".list")
     local jobs = { { "-", stage } }
     for index, file in ipairs(files) do
         jobs[index + 1] = { base .. "/" .. file.path:gsub("[^/]+", encode), stage .. "/" .. file.path }
@@ -410,6 +473,14 @@ local function bring(id, version)
         available[id] = nil
         fail("its folder was changed while the update was downloaded")
     end
+    -- a copy the player has not switched on yet keeps its mark, so an update never switches anything on
+    local marked = read(mod.dir .. "/" .. MARK) ~= nil
+    pause()
+    if marked then
+        if not write(NET .. "/" .. stage .. "/" .. MARK, "new\n") then fail("the download could not be marked as a mod that is still new") end
+        pause()
+    end
+    if not settings.look then fail("looking for updates was switched off while it was downloaded") end
     swap(id, mod, version)
     staging = nil
 end
@@ -454,7 +525,8 @@ local function install(id)
     if ok then
         problem = nil
     elseif not dead then
-        problem = ("%s could not be updated."):format(name)
+        -- stopped by the player's own switch, it is said in the log and not shown as something that went wrong
+        if settings.look then problem = ("%s could not be updated."):format(name) end
         once("install " .. id .. " " .. version, "warn", "%s could not be updated to %s: %s. %s", id, version, why,
             left ~= "stuck" and left or "The installed version stays as it is")
         -- what was downloaded is not left lying about
@@ -474,11 +546,11 @@ local function loop()
     while not dead do
         task.wait(1)
         local now = sched.clock()
-        if wanted or now >= due then
+        if settings.look and (wanted or now >= due) then
             wanted, due, asked_at = false, now + EVERY_SECONDS, now
             look()
         end
-        while queue[1] and not dead do install(table.remove(queue, 1)) end
+        while settings.look and queue[1] and not dead do install(table.remove(queue, 1)) end
     end
 end
 
@@ -487,8 +559,20 @@ function update.state()
     local found, busy = {}, {}
     for id, version in pairs(available) do found[id] = version end
     for id in pairs(queued) do busy[id] = true end
-    return { available = found, installing = busy, checking = checking, last = settings.last, auto = settings.auto, problem = problem,
-        stopped = dead }
+    return { available = found, installing = busy, checking = checking, last = settings.last, look = settings.look, auto = settings.auto,
+        problem = problem, stopped = dead }
+end
+
+-- Whether the catalogue is asked at all, for mods and for Wax itself. Switched off, no request is made and the helper is not loaded.
+function update.set_looking(on)
+    settings.look = on and true or false
+    storage.save("wax", "updates", settings)
+    if settings.look then
+        wanted = true
+    else
+        available, queue, queued, problem = {}, {}, {}, nil
+    end
+    changed()
 end
 
 -- Whether updates are put in by themselves. Switched off, a newer version is only offered.
@@ -503,7 +587,7 @@ end
 
 -- Asks the catalogue soon. Not more often than once a minute: then it returns false and the seconds left to wait.
 function update.check_now()
-    if dead or not worker then return false end
+    if dead or not worker or not settings.look then return false end
     if wanted or checking then return true end
     local since = asked_at and sched.clock() - asked_at
     if since and since < GAP_SECONDS then return false, math.ceil(GAP_SECONDS - since) end
@@ -513,7 +597,7 @@ end
 
 -- Puts in the newer version that is known for this mod. Returns false when none is.
 function update.install(id)
-    if dead or not worker or not available[id] then return false end
+    if dead or not worker or not settings.look or not available[id] then return false end
     enqueue(id)
     changed()
     return true
@@ -522,6 +606,7 @@ end
 function update.start()
     if worker then return end
     settings = storage.load("wax", "updates", settings)
+    settings.look = settings.look ~= false
     settings.auto = settings.auto ~= false
     settings.last = tonumber(settings.last) or 0
     local previous = scope.enter(nil)
@@ -541,5 +626,11 @@ function update.stop()
     if worker then task.cancel(worker) end
     worker = nil
 end
+
+-- What mods.selfupdate uses to bring Wax's own files the same way.
+update.shared = { net = NET, fail = fail, pause = pause, read = read, write = write, size_of = size_of, shown = shown, parse = parse,
+    good_path = good_path, encode = encode, fetch = fetch, status_of = status_of, answer = answer, check_file = check_file,
+    check_signed = check_signed, files_under = files_under, attempt = attempt, stopped = function() return dead end,
+    looking = function() return settings.look end, auto = function() return settings.auto end }
 
 return update

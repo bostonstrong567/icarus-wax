@@ -9,16 +9,34 @@
   by their exact names. After a UE4SS update, rebuild and run the live tests in wax\tests\live\co_*.lua.
   waxnet.dll (wax\native\waxnet.c) downloads mod updates from the catalogue. It uses nothing of UE4SS or Lua, and
   the game only loads it at the first check for updates, so it can usually be built while the game runs.
+  It also holds the public key that a newer Wax has to be signed with (the WAX_PUBLIC_KEY line of waxnet.c).
+  -SigningTest builds nothing of the above. It makes a key that exists only for that moment and builds a copy of
+  waxnet.dll with it under build\waxnet-signing, for wax\tests\offline\waxnet_test.lua. Needs Node.
 .EXAMPLE
   .\scripts\Build-WaxNative.ps1
   .\scripts\Build-WaxNative.ps1 -Only waxnet
+  .\scripts\Build-WaxNative.ps1 -SigningTest
 #>
 [CmdletBinding()]
-param([ValidateSet('waxco', 'waxnet')][string]$Only = '')
+param([ValidateSet('waxco', 'waxnet')][string]$Only = '', [switch]$SigningTest)
 . "$PSScriptRoot\_common.ps1"
 
 $gcc = Get-Command gcc -ErrorAction SilentlyContinue
 if (-not $gcc) { throw 'gcc is needed to build the helpers (e.g. scoop install mingw).' }
+
+if ($SigningTest) {
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw 'Node.js is needed to make the key the test copy is built with.' }
+    $copy = Join-Path $BuildDir 'waxnet-signing'
+    Remove-Item -LiteralPath $copy -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force (Join-Path $copy 'bin') | Out-Null
+    $key = "$(node (Join-Path $Root 'wax\tests\offline\waxnet_fixture.mjs') $copy)".Trim()
+    if ($LASTEXITCODE -ne 0 -or $key -notmatch '^[0-9a-f]{128}$') { throw 'The key for the test copy could not be made.' }
+    # WAX_TEST_KEY is only ever given here, so a key made for a test never gets into wax\runtime\bin.
+    & $gcc.Source -O2 -Wall -Wextra -shared -static-libgcc "-DWAX_TEST_KEY=$key" -o (Join-Path $copy 'bin\waxnet.dll') (Join-Path $Root 'wax\native\waxnet.c') -lwinhttp -lbcrypt
+    if ($LASTEXITCODE -ne 0) { throw 'gcc failed to build the test copy of waxnet.dll.' }
+    Write-Host "Built $copy\bin\waxnet.dll with a key made for this build"
+    return
+}
 
 $outDir = Join-Path $Root 'wax\runtime\bin'
 New-Item -ItemType Directory -Force $outDir | Out-Null

@@ -119,7 +119,7 @@ test('New Mod asks for a name, a description and a starting point, writes the fi
   assert.ok(fs.existsSync(path.join(dir, '.luarc.json')));
   assert.deepEqual(tree(session).map(({ mod }) => mod.id), ['Hello', 'MyFirstMod']);
   assert.match(tree(session)[1].item.tooltip, /Shows the map I am on\./);
-  assert.match(session.state.messages.at(-1).text, /MyFirstMod was created.*next time the game starts/);
+  assert.match(session.state.messages.at(-1).text, /MyFirstMod was created in .*\. The game lists it switched off, as it does every mod it has not seen before\. Switch it on in the Mods view here/);
   assert.equal(session.state.contexts['wax.editorInMod'], true);
 });
 
@@ -280,6 +280,151 @@ test('connected: the status bar counts the mods, the log follows, errors become 
   assert.equal(session.state.contexts['wax.connected'], false);
   assert.match(output(session).at(-1), /the game is gone$/);
   assert.equal(tree(session)[0].item.contextValue, 'mod.disk');
+});
+
+test('New Mod while the game runs: the game holds the new mod, and the message offers to switch it on', async (t) => {
+  const session = start(t, makeWorkspace(t));
+  await connect(session);
+  answerNewMod(session, ['Late One', '', 'Empty']);
+  const held = { id: 'LateOne', name: 'Late One', version: '0.1.0', status: 'disabled', enabled: false, fresh: true, generation: 0 };
+  // the refresh New Mod asks for, the look after it, then the switch and the look after that
+  session.replies.push(answer(true), answer({ core: 'table: 0x01', newest: 3, entries: {}, mods: [...LIST, held] }),
+    answer(true), answer({ core: 'table: 0x01', newest: 3, entries: {}, mods: [...LIST, { ...held, status: 'loaded', enabled: true, fresh: undefined }] }));
+  const asked = session.state.reply;
+  session.state.reply = (kind, detail) => (kind === 'message' && detail.items.includes('Enable in Game') ? 'Enable in Game' : asked(kind, detail));
+  await session.user.run('wax.newMod');
+  const said = session.state.messages.at(-1);
+  assert.equal(said.text, 'Wax: LateOne was created. The game lists a mod it has not seen before switched off.');
+  assert.deepEqual(said.items, ['Enable in Game']);
+  assert.ok(session.sent.at(-2).endsWith('end)("enable", "LateOne")'));
+  assert.equal(tree(session).at(-1).item.description, '0.1.0  loaded');
+  // before it was switched on, the view said why it was off
+  const { provider } = session.state.views.get('wax.mods');
+  assert.equal(provider.getTreeItem({ ...held, inGame: true }).description, '0.1.0  new, switched off until you enable it');
+});
+
+// What the game answers to Lua while developer mode is off.
+const refusal = () => ({ ok: false, code: 'dev-off', output: {}, error: 'Developer mode is off, so this was not run. Wax only runs Lua sent from outside the game while a file named dev.txt is in its folder.' });
+const ON = 'Switch Developer Mode On';
+
+// A player's layout: the Wax folder in the game, found through a setting, with its mods folder open.
+function makeInstalled(t) {
+  const game = makeGame(path.join(scratch(t), 'steamapps', 'common', 'Icarus'));
+  const runtime = makeRuntime(waxIn(game));
+  put(runtime, { 'mods/Hello/init.lua': 'return {}\n' });
+  return { game, runtime, session: start(t, path.join(runtime, 'mods'), { 'wax.gamePath': game }) };
+}
+
+test('a game with developer mode off: the status bar and the view say so, and a command that sends Lua offers the switch', async (t) => {
+  const { session, runtime } = makeInstalled(t);
+  session.replies.push(refusal());
+  assert.equal(await session.app.game.poll(), true);
+  assert.equal(session.app.game.state, 'devoff');
+  assert.deepEqual([status(session).text, status(session).command, status(session).visible], ['$(lock) Wax: developer mode is off', 'wax.devModeOn', true]);
+  assert.match(status(session).tooltip, /only in developer mode\. Click to switch it on\.$/);
+  assert.match(output(session).at(-1), /\[info\] \[editor\] the game is running with developer mode off.*"Wax: Switch Developer Mode On" changes that\.$/);
+  assert.match(session.state.views.get('wax.mods').message, /^Developer mode is off, so the game does not tell the editor about its mods\./);
+  assert.deepEqual(tree(session).map(({ item }) => [item.label, item.contextValue]), [['Hello', 'mod.disk']]);
+  assert.equal(session.state.contexts['wax.connected'], false);
+
+  // each thing that sends Lua says what the mode is, with the button, and shows no error
+  await session.user.open(path.join(runtime, 'mods', 'Hello', 'init.lua'));
+  for (const command of ['wax.runFile', 'wax.reloadMod', 'wax.stopScripts']) {
+    const before = session.state.messages.length;
+    session.replies.push(refusal());
+    await session.user.run(command);
+    assert.equal(session.state.messages.length, before + 1, command);
+    assert.deepEqual(session.state.messages.at(-1), { level: 'warning', items: [ON],
+      text: 'Wax: developer mode is off, so the game did not run this. The game runs Lua sent from the editor only while developer mode is on.' }, command);
+  }
+  session.user.select(0, 0, 0, 9);
+  session.replies.push(refusal());
+  await session.user.run('wax.runSelection');
+  assert.deepEqual(session.state.messages.at(-1).items, [ON]);
+  session.replies.push(refusal());
+  await session.user.run('wax.enableMod', { id: 'Hello' });
+  assert.deepEqual(session.state.messages.at(-1).items, [ON]);
+  assert.ok(!session.state.messages.some((message) => message.level === 'error'));
+
+  // back to the log once the game runs Lua again
+  session.app.game.loadBridge = async () => ({ evalLua: async () => answer({ core: 'table: 0x01', newest: 1, entries: {}, mods: {} }), ping: async () => ({ dev: true, core: true }) });
+  await session.app.game.poll();
+  assert.deepEqual([status(session).text, status(session).command], ['$(plug) Wax: 0 mods', 'wax.showLog']);
+});
+
+test('Switch Developer Mode On asks one question that says what it allows, and writes dev.txt only on a yes', async (t) => {
+  const { session, runtime } = makeInstalled(t);
+  const file = path.join(runtime, 'dev.txt');
+  await session.user.run('wax.devModeOn');
+  const asked = session.state.messages.at(-1);
+  assert.equal(asked.level, 'warning');
+  assert.equal(asked.text, `Switch developer mode on for the Wax at ${runtime}?`);
+  assert.deepEqual(asked.items, [ON]);
+  assert.equal(asked.options.modal, true, 'it cannot be missed, and closing it is a no');
+  assert.match(asked.options.detail, /^While it is on, any program on this PC can run Lua in the game, and Lua in the game can do what a program can\./);
+  assert.match(asked.options.detail, /Wax also stops updating itself while it is on\./);
+  assert.equal(fs.existsSync(file), false, 'no answer, no file');
+
+  session.state.reply = (kind, detail) => (kind === 'message' && detail.options ? ON : undefined);
+  await session.user.run('wax.devModeOn');
+  assert.match(read(file), /^Developer mode is on for this copy of Wax\./);
+  assert.match(read(file), /Delete this file to switch developer mode off\./);
+  assert.deepEqual([session.state.messages.at(-1).level, session.state.messages.at(-1).text],
+    ['info', 'Wax: developer mode is on. A game that is running takes it up at once.']);
+  session.app.game.stop();
+
+  // asked again, it says so and asks nothing
+  const count = session.state.messages.length;
+  await session.user.run('wax.devModeOn');
+  session.app.game.stop();
+  assert.equal(session.state.messages.length, count + 1);
+  assert.equal(session.state.messages.at(-1).text, `Wax: developer mode is already on for the Wax at ${runtime}.`);
+  assert.equal(session.state.messages.at(-1).options, undefined);
+
+  await session.user.run('wax.devModeOff');
+  session.app.game.stop();
+  assert.equal(fs.existsSync(file), false);
+  assert.match(session.state.messages.at(-1).text, /^Wax: developer mode is off\. The game no longer runs Lua sent from outside it\./);
+  await session.user.run('wax.devModeOff');
+  assert.equal(session.state.messages.at(-1).text, `Wax: developer mode is already off for the Wax at ${runtime}.`);
+});
+
+test('the button on the refusal leads to the same question', async (t) => {
+  const { session, runtime } = makeInstalled(t);
+  session.state.reply = (kind) => (kind === 'message' ? ON : undefined);
+  await session.user.open(path.join(runtime, 'mods', 'Hello', 'init.lua'));
+  session.replies.push(refusal());
+  await session.user.run('wax.runFile');
+  await sleep(20);
+  session.app.game.stop();
+  const texts = session.state.messages.slice(-3).map((message) => message.text);
+  assert.match(texts[0], /^Wax: developer mode is off, so the game did not run this\./);
+  assert.equal(texts[1], `Switch developer mode on for the Wax at ${runtime}?`);
+  assert.equal(texts[2], 'Wax: developer mode is on. A game that is running takes it up at once.');
+  assert.ok(fs.existsSync(path.join(runtime, 'dev.txt')));
+});
+
+test('in the Wax development workspace developer mode is not switched off: its dev.txt also stops Wax updating its own files', async (t) => {
+  const root = makeWorkspace(t);
+  put(root, { 'wax/runtime/dev.txt': 'This copy of Wax is a development workspace.\n' });
+  const session = start(t, root);
+  await session.user.run('wax.devModeOff');
+  assert.equal(read(path.join(root, 'wax', 'runtime', 'dev.txt')), 'This copy of Wax is a development workspace.\n');
+  assert.match(session.state.messages.at(-1).text, /is the development copy of Wax in the open folder\. Its dev\.txt also keeps Wax from updating its own files there, so it stays\.$/);
+  await session.user.run('wax.devModeOn');
+  session.app.game.stop();
+  assert.match(session.state.messages.at(-1).text, /^Wax: developer mode is already on/);
+});
+
+test('without the game\'s Wax folder the two commands ask for the game, and write nothing', async (t) => {
+  const root = path.join(scratch(t), 'project');
+  put(root, { 'notes.lua': 'print("not a mod")\n' });
+  const session = start(t, root);
+  const before = session.state.messages.length;
+  await session.user.run('wax.devModeOn');
+  await session.user.run('wax.devModeOff');
+  assert.equal(session.state.messages.length, before + 2);
+  assert.deepEqual(session.state.messages.at(-1).items, ['Choose the ICARUS folder', 'Get Wax']);
 });
 
 test('Run File sends the editor\'s text and shows what came back', async (t) => {

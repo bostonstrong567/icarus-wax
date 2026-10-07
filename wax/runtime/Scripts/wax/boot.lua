@@ -59,6 +59,14 @@ function boot.start()
         Wax.game = game.root
         Wax.instance = Wax.import("engine.instance")
         mods.provide("game", game.root)
+        local needs_ok, needs_err = xpcall(function()
+            Wax.needs = Wax.import("engine.needs")
+            Wax.needs.start()
+        end, debug.traceback)
+        if not needs_ok then
+            Wax.needs = nil
+            core_log:error("the check against game updates failed to start: %s", tostring(needs_err))
+        end
         local world_ok, world_err = xpcall(function()
             Wax.import("engine.actors").start()
             track = Wax.import("engine.track")
@@ -66,6 +74,7 @@ function boot.start()
             Wax.import("world.creatures").start()
             Wax.import("world.players").start()
             Wax.import("world.crafting").start()
+            Wax.import("world.research").start()
             highlight = Wax.import("world.highlight")
             highlight.start()
         end, debug.traceback)
@@ -87,6 +96,14 @@ function boot.start()
     if not update_ok then
         Wax.update = nil
         core_log:error("the mod updater failed to start: %s", tostring(update_err))
+    end
+    local self_ok, self_err = xpcall(function()
+        Wax.selfupdate = Wax.import("mods.selfupdate")
+        Wax.selfupdate.start()
+    end, debug.traceback)
+    if not self_ok then
+        Wax.selfupdate = nil
+        core_log:error("the Wax updater failed to start: %s", tostring(self_err))
     end
 
     local ui = nil
@@ -123,6 +140,8 @@ function boot.start()
         highlight.step()
     end
 
+    -- a version put in at this start is kept once it has run for a while
+    local settle = Wax.selfupdate and Wax.selfupdate.settle
     Wax.frame = function()
         perf.frame()
         local current_ui = Wax.ui
@@ -135,9 +154,11 @@ function boot.start()
         if current_ui then perf.run("gui", guard.call, "gui.step", current_ui.step) end
         local panel = Wax.debug_panel
         if panel then perf.run("debug", guard.call, "debug.step", panel.step) end
+        if settle and not settle() then settle = nil end
     end
     Wax.gui_step_wired = true
     core_log:info("core started")
+    -- a mod the player has not seen before is listed switched off, and stays off until they switch it on
     mods.sync()
 end
 

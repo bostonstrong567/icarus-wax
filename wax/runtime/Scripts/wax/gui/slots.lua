@@ -108,7 +108,8 @@ function slots.install(Container, tools)
             local count = look.count and tostring(look.count) or false
             if count ~= cell.count then
                 if count and not cell.count_text then
-                    cell.count_text = style.extend(control, kit.label, count, { size = theme.small_size, family = "mono" })
+                    -- the narrow font, and smaller in a small cell, so four characters are not cut off
+                    cell.count_text = style.extend(control, kit.label, count, { size = size < 34 and theme.small_size - 2 or theme.small_size })
                     cell.count_box = style.extend(control, kit.box, style.with_alpha(theme.window, 0.8), "round4", style.margin(3, 0))
                     cell.count_box:SetContent(cell.count_text)
                     kit.slot(cell.layers:AddChild(cell.count_box), { h = H.Right, v = VA.Bottom, pad = style.margin(0, 0, 1, 1) })

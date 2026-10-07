@@ -133,11 +133,13 @@ ui.Panel = overlay_module.panel
 -- The value of the slot under the mouse, then its look and its control.
 ui.Hovered = slots.hovered
 ui.IsTyping = controls.typing
--- The size of the screen in the units windows and panels are laid out in.
+-- The size of the screen in the units windows and panels are laid out in. Until the game has a screen it is 1920 by 1080.
 function ui.ScreenSize()
     local width, height = root.viewport_size()
+    if width < 200 or height < 200 then width, height = 1920, 1080 end
     return width / style.scale, height / style.scale
 end
+ui.ScreenChanged = sched.Signal.new("ScreenChanged")
 ui.Pictures = { Check = pictures.check, Stats = pictures.stats }
 -- ui.FitGame({ scale = 0.85, corner = "bottom-left" }) draws the game's own menus smaller, which leaves room beside them.
 ui.FitGame = fit.create
@@ -207,6 +209,7 @@ end
 
 local MIN_SHARP, MAX_SCALE = 0.9, 2
 local wanted_scale, screen_scale, screen_known = 1, 1, false
+local told_width, told_height = nil, nil
 
 -- The smallest scale that still draws text at a readable size on this screen.
 function ui.MinScale() return math.max(0.7, MIN_SHARP / screen_scale) end
@@ -243,6 +246,14 @@ local function watch_screen()
         screen_scale = scale
         style.screen_scale = scale
         ui.SetScale(wanted_scale)
+    end
+    -- mods that laid themselves out for another size are told
+    local now_width, now_height = ui.ScreenSize()
+    if not told_width then
+        told_width, told_height = now_width, now_height
+    elseif math.abs(now_width - told_width) > 0.5 or math.abs(now_height - told_height) > 0.5 then
+        told_width, told_height = now_width, now_height
+        ui.ScreenChanged:Fire(now_width, now_height)
     end
 end
 

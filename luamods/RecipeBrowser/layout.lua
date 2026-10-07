@@ -35,7 +35,10 @@ function layout.compute(width, height)
 
     -- the column is as wide as on a 16 by 9 screen of this height, however wide the screen is
     L.column = math.floor(((1 - layout.FIT) * hold.w - 8) / ZOOM)
-    L.tall = math.floor((height - 16) / ZOOM)
+    -- two units free above and below the column
+    L.tall = math.floor((height - 4) / ZOOM)
+    -- where the column starts at the top: the shelf starts level with it
+    L.top = (height - L.tall * ZOOM) / 2
     L.inner, L.down = L.column - 12, L.tall - 12
     L.cell = math.floor((L.inner - (layout.COLUMNS - 1) * GAP) / layout.COLUMNS)
     L.tab = math.floor((L.inner - (layout.TAB_COLUMNS - 1) * GAP) / layout.TAB_COLUMNS)
@@ -46,7 +49,7 @@ function layout.compute(width, height)
     -- The game's box is made smaller until it fits beside the column, and under a full shelf above the hotbar.
     local room = L.column_left - 6 - EDGE
     local hotbar = hold.y + layout.HOTBAR * hold.h
-    local full_shelf = 6 + (10 + layout.FAVOURITE_ROWS * (L.cell + 3 + GAP) + 36) * ZOOM
+    local full_shelf = L.top + (10 + layout.FAVOURITE_ROWS * (L.cell + 3 + GAP) + 36) * ZOOM
     local tallest = 0
     for _, span in pairs(layout.SCREENS) do tallest = math.max(tallest, span[2] - span[1]) end
     L.scale = math.max(0.5, math.min(1, room / hold.w, (hotbar - full_shelf - 12) / (tallest * hold.h)))
@@ -54,8 +57,9 @@ function layout.compute(width, height)
     L.menu_x = EDGE + math.max(0, (room - hold.w * L.scale) / 2)
     L.hotbar = hotbar
 
-    L.shelf = math.floor(L.scale * hold.w / ZOOM)
-    L.shelf_x = L.menu_x
+    -- the shelf reaches two units from the screen's edge and from the column, a little past the game's screen each side
+    L.shelf_x = L.menu_x - (EDGE - 2)
+    L.shelf = math.floor((L.scale * hold.w + (EDGE - 2) + 4) / ZOOM)
     L.favourite_rows = layout.FAVOURITE_ROWS
     L.favourite_columns = math.max(4, math.floor((L.shelf - 12 + GAP) / (L.cell + GAP)))
     L.shelf_cell = layout.even(L.shelf, L.favourite_columns)
@@ -63,7 +67,7 @@ function layout.compute(width, height)
     -- Where the shelf ends on the screen. lines: rows of it in use (0 for its one line of text, nil for no shelf).
     function L.shelf_bottom(lines, pager)
         if not lines then return 0 end
-        return 6 + (10 + (lines > 0 and lines * (L.shelf_cell + GAP) or 26) + (pager and 36 or 0)) * ZOOM
+        return L.top + (10 + (lines > 0 and lines * (L.shelf_cell + GAP) or 26) + (pager and 36 or 0)) * ZOOM
     end
 
     -- A share of the game's box as a place on the screen, before the box is moved up or down.

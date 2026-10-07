@@ -30,7 +30,7 @@ Wax is an early version. It is for ICARUS on Steam, on Windows.
 The extension needs Wax in your game. Wax comes as one zip.
 
 1. Open the [install page](https://wax-icarus.duckdns.org/docs/install/) and download the zip. Its name carries
-   the version, for example `Wax-0.2.0.zip`.
+   the version, for example `Wax-0.2.1.zip`.
 2. Close ICARUS and unzip the whole file.
 3. Double-click `Install Wax.cmd`. It finds the game through Steam and copies the files.
 4. Start ICARUS and press **F8**. The Wax menu opens.
@@ -48,7 +48,7 @@ You can also install by hand. Copy the contents of the zip's `game` folder into
 | `game` | Everything that goes into `Binaries\Win64`: `dwmapi.dll` and the `ue4ss` folder. |
 
 UE4SS, the script loader Wax runs on, is in the zip, so you install nothing else. Wax itself is at
-`ue4ss\Mods\Wax`, and the example mod is at `ue4ss\Mods\Wax\mods\Hello`.
+`ue4ss\Mods\Wax`, and the mod that comes with it, Recipe Browser, is at `ue4ss\Mods\Wax\mods\RecipeBrowser`.
 
 Installing again over an old copy updates Wax. It keeps your own mods (`Wax\mods`) and your settings (`Wax\saved`).
 
@@ -61,6 +61,30 @@ Installing again over an old copy updates Wax. It keeps your own mods (`Wax\mods
   `code --install-extension wax-icarus-<version>.vsix`.
 
 VS Code installs the Lua language server (`sumneko.lua`) with it, because the extension builds on it.
+
+The extension only runs in a folder you trust. In VS Code's Restricted Mode it stays off, because it sends Lua from
+the open folder into your game.
+
+## Developer mode
+
+The game does not run Lua that another program sends it. Run File, Run Selection, Reload Mod, the log, the Problems
+panel and the Mods view all work by sending Lua, so they need developer mode.
+
+Developer mode is one file: `dev.txt` in the Wax folder, beside `Scripts`. Run **Wax: Switch Developer Mode On**
+and the extension asks once, then writes that file. **Wax: Switch Developer Mode Off** removes it. Both take effect
+at once, also in a game that is already running.
+
+While developer mode is on:
+
+- Any program on this PC can run Lua in the game, and Lua in the game can do what a program can.
+- The game reads `run\mods.index.lua`, which lets mods live in folders outside the game.
+- Wax does not update itself. `Update Wax.cmd` still updates it.
+
+Switch it off when you are done writing mods. While it is off the status bar says `Wax: developer mode is off`.
+Completion, checking, snippets, New Mod and New Script work without it.
+
+A mod the game has not seen before is listed switched off, with or without developer mode. Switch it on in the Mods
+view, or on the Mods page of the Wax menu in the game.
 
 ## Your first mod
 
@@ -75,8 +99,11 @@ VS Code installs the Lua language server (`sumneko.lua`) with it, because the ex
    | Window with a button | A window in the menu. The button shows a message. |
    | Overlay | A panel that stays on screen while you play. It shows the map you are on. |
 
-5. `init.lua` opens. Start the game and press **F8** to see a window. An overlay is on screen without the menu.
-6. Change the file and save. The mod reloads in the running game. Errors show under the line that caused them.
+5. `init.lua` opens. Start the game. It lists a mod it has not seen before switched off, so switch yours on: press
+   **F8**, open the Mods page and switch on Enabled on its card. With developer mode on, the check button beside the
+   mod in the Mods view here does the same.
+6. A window shows in the menu. An overlay is on screen without the menu.
+7. Change the file and save. The mod reloads in the running game. Errors show under the line that caused them.
 
 The name and the description go into the mod's `mod.lua`. New Mod never writes into a folder that already exists.
 
@@ -105,6 +132,8 @@ All of them are in the command palette under **Wax**.
 | Open Mod Folder in the Explorer | Shows the mod's folder in the Explorer, adding it to the workspace when it is not in it. Use it to add folders, pictures and other files. |
 | Set Up Editor Support | Writes the `.luarc.json` files again. The extension also does this by itself. |
 | Choose the ICARUS Folder | Opens a folder picker and saves the folder you pick in your settings. |
+| Switch Developer Mode On | Asks first, then writes `dev.txt` into the Wax folder. From then on the game runs Lua sent from the editor. |
+| Switch Developer Mode Off | Removes `dev.txt`. The game goes back to running no Lua from outside it. |
 | Open the Download Page | Opens the page Wax is downloaded from. |
 | Open Documentation | Opens the docs. |
 
@@ -122,7 +151,8 @@ Code that waits (`task.wait`) keeps running after the result is shown. What it p
 
 While the game is running, the status bar shows `Wax: 3 mods` and the **Wax** output channel follows the game's
 log, one line per entry with its time, level and source. When the game is not running the status bar says so, and
-nothing is sent anywhere.
+nothing is sent anywhere. When the game runs with developer mode off the status bar says that, and a click on it
+asks whether to switch it on.
 
 Errors that name a file and line of a mod become entries in the Problems panel:
 
@@ -176,7 +206,10 @@ Mods are created in `luamods` when an open folder has one, otherwise in the Wax 
   (or at `wax/types` and `wax/lsp` when you work in the Wax development workspace). A `.luarc.json` you wrote
   yourself for a folder of mods is left alone.
 - Requests to the game go through small files in the Wax folder's `run` folder, one per second while the game is
-  running. The game answers them on its own thread between frames.
+  running. The game answers them on its own thread between frames. If the extension has to make `run\in` and
+  `run\out`, it leaves them to your Windows account, the system and the administrators, so no other account on the
+  PC can put a request there.
+- `dev.txt` in the Wax folder, when you switch developer mode on. Switching it off removes the file.
 - The folder you choose with **Wax: Choose the ICARUS Folder** goes into your user settings.
 
 ## Building it

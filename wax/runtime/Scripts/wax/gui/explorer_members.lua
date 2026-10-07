@@ -47,7 +47,8 @@ end
 -- A sheet for an object whose class has these members (from inspect.members) and this class chain.
 function M.new(records, chain)
     local sheet = { records = records, chain = chain or {}, state = {}, made = {}, open = {}, mode = "All", words = {},
-        polled = {}, poll_at = 1, rounds = 0, reads = 0, failed = 0, changed = 0, dirty = false }
+        polled = {}, poll_at = 1, rounds = 0, reads = 0, failed = 0, changed = 0, dirty = false,
+        written = {} }      -- written[name] = true for a member that was changed from the page
     for _, record in ipairs(records) do
         if record.poll then sheet.polled[#sheet.polled + 1] = record end
     end
@@ -198,6 +199,16 @@ local function signature(record)
 end
 M.signature = signature
 
+-- True when the row has something under it: a struct's parts, or the places of an array that has some and whose places are read.
+function M.opens(sheet, a_row)
+    local record = a_row.record
+    if a_row.type ~= "member" or not record then return false end
+    if record.show == "struct" then return true end
+    if record.show ~= "array" or not record.inner_show then return false end
+    local state = sheet.state[record.name]
+    return state ~= nil and state.seen == true and not state.failed and state.value ~= 0
+end
+
 -- How a row looks: { text, note, value, tone, faint, arrow, indent, flag } where flag is true or false for a row with a switch.
 function M.look(sheet, a_row)
     local kind, record = a_row.type, a_row.record
@@ -215,6 +226,8 @@ function M.look(sheet, a_row)
     end
     local state = sheet.state[record.name] or {}
     local recent = state.changed_at and M.clock() - state.changed_at < M.RECENT
+    -- a value changed from the page keeps a quiet mark of its own
+    local settled = sheet.written[record.name] and "good" or "text"
     if kind == "member" then
         out.text, out.note = record.name, record.label
         if record.kind == "function" then
@@ -222,19 +235,19 @@ function M.look(sheet, a_row)
         elseif state.failed then
             out.value, out.tone = state.problem or "could not be read", "bad"
         elseif not record.show then
-            out.faint = true
+            out.value, out.tone, out.faint = "not shown", "dim", true
         elseif state.seen then
             out.value = inspect.text(record, state.value)
             if record.show == "bool" then out.flag = state.value end
-            out.tone = recent and "warn" or (record.show == "object" and state.value and "accent_hover" or "text")
+            out.tone = recent and "warn" or (record.show == "object" and state.value and "accent_hover" or settled)
         end
-        if record.show == "struct" or record.show == "array" then out.arrow = sheet.open[record.name] and true or false end
+        if M.opens(sheet, a_row) then out.arrow = sheet.open[record.name] and true or false end
     elseif kind == "field" then
         out.text, out.note = a_row.field, record.fields.whole and "byte" or "float"
         if state.failed then
             out.value, out.tone = state.problem or "could not be read", "bad"
         elseif state.seen then
-            out.value, out.tone = inspect.text(record, state.value[a_row.field], true), recent and "warn" or "text"
+            out.value, out.tone = inspect.text(record, state.value[a_row.field], true), recent and "warn" or settled
         end
     elseif kind == "element" then
         local item = state.items and state.items.items[a_row.index]

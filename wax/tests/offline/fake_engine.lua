@@ -72,6 +72,13 @@ function fake.free(from, upto)
     for index = from + 1, upto do rawset(all[index], "__dead", true) end
 end
 
+-- Every object made since fake.mark() gave `from`.
+function fake.made(from)
+    local out = {}
+    for index = from + 1, #all do out[#out + 1] = all[index] end
+    return out
+end
+
 -- How often object:member(...) was called, and with what the last time.
 function fake.count(object, member)
     local found = rawget(object, "__members")[member]

@@ -747,6 +747,13 @@ watch(text, "text")
 
 t.test("numbers get thousands separators", function()
     t.eq(text.number(0), "0")
+    if text.pair then t.eq(text.pair("Turns into", "Spoiled Plants"), "Turns into: Spoiled Plants") end
+    -- a count on a slot has room for four characters
+    for value, shown in pairs({ [0] = "0", [7] = "7", [301] = "301", [999] = "999", [1000] = "1k", [1800] = "1.8k", [2240] = "2.2k",
+            [5600] = "5.6k", [9940] = "9.9k", [9960] = "10k", [12345] = "12k", [600000] = "600k", [999600] = "1M", [1300000] = "1.3M" }) do
+        t.eq(text.short(value), shown, tostring(value))
+        t.ok(#text.short(value) <= 4, shown)
+    end
     t.eq(text.number(7), "7")
     t.eq(text.number(999), "999")
     t.eq(text.number(1000), "1,000")
@@ -1024,6 +1031,33 @@ t.test("the problems", function()
     t.eq(text.problem.changed("D_Talents"),
         "This version of the game changed D_Talents. Recipes cannot be shown until Recipe Browser is updated.")
 end)
+
+-- a copy of the mod from before it had a research line has none of these
+if text.research then
+    t.test("the research line of a recipe", function()
+        local research = text.research
+        t.eq(research.done, "Researched")
+        t.eq(research.all, "Research all")
+        t.eq(research.cancel, "Cancel")
+        t.eq(research.button(1), "Research (1 point)")
+        if research.ask_one then
+            t.eq(research.one, "Research")
+            t.eq(research.ask_one(1, 11), "This spends 1 point.")
+            t.eq(research.have(10), "Research points: 10")
+        end
+        t.eq(research.button(3), "Research (3 points)")
+        t.eq(research.ask({ "Machining Bench" }, 2, 11), "Researches Machining Bench first. 2 points in all.")
+        t.eq(research.ask({ "Machining Bench", "Cement Mixer" }, 3, 11),
+            "Researches Machining Bench and Cement Mixer first. 3 points in all.")
+        t.eq(research.ask({ "A", "B", "C" }, 4, 4), "Researches A, B and C first. 4 points in all.")
+        t.eq(research.ask({ "A", "B", "C", "D", "E" }, 6, 1200), "Researches A, B, C and 2 more first. 6 points in all.")
+        t.eq(research.level(25), "Unlocks at level 25")
+        t.eq(research.points(3, 1), "Needs 3 points")
+        t.eq(research.points(1, 0), "Needs 1 point")
+        t.eq(research.researched("Shotgun"), "Shotgun researched.")
+        t.eq(research.refused("Cement Mixer"), "The game did not research Cement Mixer.")
+    end)
+end
 
 t.test("every counted text was tried", function()
     local missed = {}

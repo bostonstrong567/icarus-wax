@@ -6,6 +6,8 @@
   Re-run any time to pull the newest releases. Tools that are already current are skipped.
   Archives are extracted over the existing folder without wiping it, so portable apps keep their settings.
   Folders that are not in the manifest (the "manual" tools) are never touched.
+  An entry that downloads one file may give its "sha256". A download that does not match is refused and nothing of it
+  is installed. Entries that follow the newest build on purpose have none.
 .EXAMPLE
   .\scripts\Get-Tools.ps1
   .\scripts\Get-Tools.ps1 -Name pak\repak,assets\FModel -Force
@@ -67,7 +69,8 @@ function Build-Lua([string]$Tarball, [string]$Dest) {
     $gcc = Get-Command gcc -ErrorAction SilentlyContinue
     if (-not $gcc) { throw 'gcc is needed to build Lua (e.g. scoop install mingw)' }
     $work = Split-Path $Tarball
-    tar -xzf $Tarball -C $work
+    # Windows' own tar, by its full path: from a Git shell "tar" is GNU tar, which reads D:\ as a host name
+    & (Join-Path $env:SystemRoot 'System32\tar.exe') -xzf $Tarball -C $work
     if ($LASTEXITCODE -ne 0) { throw 'could not unpack the Lua source' }
     $src = Join-Path (Get-ChildItem $work -Directory -Filter 'lua-*' | Select-Object -First 1).FullName 'src'
     New-Item -ItemType Directory -Force $Dest | Out-Null
@@ -131,6 +134,11 @@ $results = foreach ($tool in $manifest) {
             default { throw "unknown type '$($tool.type)'" }
         }
 
+        $sha256 = $tool.PSObject.Properties['sha256']?.Value
+        if ($sha256) {
+            if ($sha256 -cnotmatch '^[0-9a-f]{64}$') { throw 'its sha256 in tools.json is not 64 lower-case hex digits' }
+            if (@($downloads).Count -ne 1) { throw 'a sha256 in tools.json is for an entry that downloads one file, and this one downloads several' }
+        }
         $row.Version = $version
         if (-not $Force -and $state[$tool.name] -eq $version -and (Test-Path $dest)) {
             $row.Status = 'up to date'
@@ -138,13 +146,21 @@ $results = foreach ($tool in $manifest) {
             $work = Join-Path $tempDir ([guid]::NewGuid().ToString('N'))
             New-Item -ItemType Directory -Force $work | Out-Null
             try {
+                # Everything is downloaded and checked before anything that is installed is touched.
+                foreach ($d in $downloads) {
+                    $file = Join-Path $work $d.File
+                    Save-Url $d.Url $file
+                    if ($sha256) {
+                        $got = (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLower()
+                        if ($got -cne $sha256) { throw "$($d.File) is not the file tools.json names: its sha256 is $got, not $sha256. Nothing of it was installed." }
+                    }
+                }
                 if (-not $extract -and (Test-Path $dest)) {
                     # Archives kept zipped carry their version in the file name; clear the old ones first.
                     foreach ($pattern in $tool.assets) { Get-ChildItem -LiteralPath $dest -Filter $pattern -File | Remove-Item -Force }
                 }
                 foreach ($d in $downloads) {
                     $file = Join-Path $work $d.File
-                    Save-Url $d.Url $file
                     if ($d['Build'] -eq 'lua') { Build-Lua $file $dest } else { Install-Payload $file $dest $extract }
                 }
             } finally {

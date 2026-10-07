@@ -20,12 +20,30 @@ local stack, stack_box, stack_slot = nil, nil, nil
 local corner, limit = "bottom-right", 5
 local clock = os.clock
 
+local aside = 0             -- how far the stack is moved in from its edge, to stand beside a panel there
+
 local function place_stack()
     local at = CORNERS[corner]
     stack_slot:SetAnchors({ Minimum = { X = at[1], Y = at[2] }, Maximum = { X = at[1], Y = at[2] } })
     stack_slot:SetAlignment({ X = at[1], Y = at[2] })
     stack_slot:SetAutoSize(true)
-    stack_slot:SetPosition({ X = at[1] == 1 and -MARGIN or MARGIN, Y = at[2] == 1 and -MARGIN or MARGIN })
+    stack_slot:SetPosition({ X = at[1] == 1 and -(MARGIN + aside) or MARGIN + aside, Y = at[2] == 1 and -MARGIN or MARGIN })
+end
+
+-- A panel that stands along the edge the notifications come up at (an item column, say): they come up beside it, not over it.
+local function beside_panels()
+    local side = CORNERS[corner][1] == 1 and "right" or "left"
+    local room = 0
+    for _, overlay in ipairs(Wax.import("gui.overlay").overlays) do
+        if overlay.interactive and not overlay.destroyed and overlay.anchor == side and overlay:IsShowing() then
+            room = math.max(room, (overlay.x or 0) + (overlay.width or 0) * (overlay.zoom or 1) * style.scale)
+        end
+    end
+    room = math.floor(room + 0.5)
+    if room ~= aside then
+        aside = room
+        if stack_slot then place_stack() end
+    end
 end
 
 local function get_stack()
@@ -125,6 +143,7 @@ local function build(self, options)
     local outline = kit.image(theme.outline, "frame8", 1, 1)
     kit.slot(card:AddChild(outline), { h = H.Fill, v = VA.Fill })
     kit.slot(get_stack():AddChild(card), { pad = style.margin(0, 8, 0, 0) })
+    beside_panels()
     self.card, self.body, self.heading, self.counter = card, body, heading, counter
     self.bar, self.bar_slot, self.rest_slot = bar, bar_slot, rest_slot
 end
@@ -183,6 +202,7 @@ end
 
 function notify.step()
     if #shown == 0 then return end
+    beside_panels()
     local now = clock()
     for i = #shown, 1, -1 do
         local item = shown[i]

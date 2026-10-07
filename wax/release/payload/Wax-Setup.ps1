@@ -4,7 +4,8 @@ param(
     [string]$Action = 'Install',
     [string]$GameDir = '',
     [string]$SteamRoot = '',
-    [string]$ReleaseApi = '',
+    [ValidateSet('Ask', 'Yes', 'No')]
+    [string]$ModLinks = 'Ask',
     [ValidateSet('Ask', 'Yes', 'No')]
     [string]$RemoveUE4SS = 'Ask',
     [ValidateSet('Ask', 'Yes', 'No')]
@@ -14,13 +15,20 @@ param(
 Set-StrictMode -Version 2
 $ErrorActionPreference = 'Stop'
 
+# Where "Update" looks, the key a release is signed with, the kind of link Windows hands to Wax, and Wax's folder under %LOCALAPPDATA%. Only this file sets them.
+$ReleaseApi = 'https://api.github.com/repos/bostonstrong567/icarus-wax/releases/latest'
+$DownloadRoot = 'https://github.com/bostonstrong567/icarus-wax/releases/download/'
+$SigningKey = '8b37ac88ea0d9e8a8d239b731f1ba1d12fe163c605f6fe3c3933253e36421a953c5d04fdcb94e3934223e41aeb511593788140a7865c00ab2f6ad67746900d62'
+$LinkScheme = 'wax'
+$LocalFolder = 'Wax'
+
 $AppId = '1149460'
 $GameExe = 'Icarus-Win64-Shipping.exe'
 $GameProcess = 'Icarus-Win64-Shipping'
-$Repo = 'bostonstrong567/icarus-wax'
 $DocsUrl = 'https://wax-icarus.duckdns.org/'
-$ReleasePage = "https://github.com/$Repo/releases/latest"
-$DefaultApi = "https://api.github.com/repos/$Repo/releases/latest"
+$InstallPage = 'https://wax-icarus.duckdns.org/docs/install/'
+$ReleasePage = 'https://github.com/bostonstrong567/icarus-wax/releases/latest'
+$MaxZip = 200MB
 $Package = [System.IO.Path]::Combine($PSScriptRoot, 'game')
 $WaxPath = 'ue4ss\Mods\Wax'
 $Mine = @('mods', 'saved')
@@ -34,6 +42,9 @@ $StockMods = @(
     'BPML_GenericFunctions', 'BPModLoaderMod', 'CheatManagerEnablerMod', 'ConsoleCommandsMod',
     'ConsoleEnablerMod', 'Keybinds', 'LineTraceMod', 'SplitScreenMod', 'shared'
 )
+# UE4SS's own mods that Wax ships switched off.
+$CheatMods = @('CheatManagerEnablerMod', 'ConsoleCommandsMod', 'ConsoleEnablerMod')
+$AclOnItem = [bool]([System.IO.DirectoryInfo].GetMethod('SetAccessControl'))
 
 function Combine([string]$Left, [string]$Right) { return [System.IO.Path]::Combine($Left, $Right) }
 function Test-File([string]$Path) { return [System.IO.File]::Exists($Path) }
@@ -80,12 +91,18 @@ function Copy-Tree([string]$From, [string]$To) {
     }
 }
 
+# The SHA-256 of a file in lower-case hex.
+function Get-Sha256([string]$File) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $stream = [System.IO.File]::OpenRead($File)
+    try { return ([System.BitConverter]::ToString($sha.ComputeHash($stream)) -replace '-', '').ToLowerInvariant() }
+    finally { $stream.Dispose(); $sha.Dispose() }
+}
+
 function Test-Same([string]$Left, [string]$Right) {
     if (-not (Test-File $Left) -or -not (Test-File $Right)) { return $false }
     if ((New-Object System.IO.FileInfo $Left).Length -ne (New-Object System.IO.FileInfo $Right).Length) { return $false }
-    $a = (Get-FileHash -LiteralPath $Left -Algorithm SHA256).Hash
-    $b = (Get-FileHash -LiteralPath $Right -Algorithm SHA256).Hash
-    return $a -eq $b
+    return (Get-Sha256 $Left) -ceq (Get-Sha256 $Right)
 }
 
 function Test-Empty([string]$Folder) {
@@ -112,8 +129,8 @@ function Get-InstalledVersion([string]$Wax) {
 }
 
 function Test-Newer([string]$Candidate, [string]$Current) {
-    $a = [regex]::Matches($Candidate, '\d+')
-    $b = [regex]::Matches($Current, '\d+')
+    $a = [regex]::Matches($Candidate, '\d{1,9}')
+    $b = [regex]::Matches($Current, '\d{1,9}')
     for ($i = 0; $i -lt 3; $i++) {
         $left = 0
         $right = 0
@@ -252,29 +269,219 @@ function Read-YesNo([string]$Question, [string]$Preset) {
     return [bool]($answer -match '^\s*y(es)?\s*$')
 }
 
-# The "Add to game" button on the Wax site opens a wax:// link. This tells Windows to hand such links to Wax.
+# The file Windows starts for a link of Wax's kind: the last full path in the registered command. Nothing registered gives nothing.
+function Get-LinkTarget {
+    $command = $null
+    try { $command = [string](Get-ItemProperty -Path "HKCU:\Software\Classes\$LinkScheme\shell\open\command" -ErrorAction Stop).'(default)' } catch { return $null }
+    $target = $null
+    foreach ($quoted in [regex]::Matches($command, '"([^"]*)"')) {
+        if ($quoted.Groups[1].Value -match '^([A-Za-z]:\\|\\\\)') { $target = $quoted.Groups[1].Value }
+    }
+    if (-not $target -and $command -match '^\s*(([A-Za-z]:\\|\\\\)\S+)') { $target = $Matches[1] }
+    return $target
+}
+
 function Register-ModLinks([string]$Helper) {
-    if ($env:WAX_SETUP_NO_LINKS -or -not (Test-File $Helper)) { return }
+    if (-not (Test-File $Helper) -or $Helper.Contains('%') -or $Helper.Contains('"')) { return $false }
     try {
-        $key = 'HKCU:\Software\Classes\wax'
+        # Written again as a file made on this PC, so Windows runs it under its usual rule for local scripts.
+        $fresh = "$Helper.new"
+        [System.IO.File]::WriteAllBytes($fresh, [System.IO.File]::ReadAllBytes($Helper))
+        Move-Item -LiteralPath $fresh -Destination $Helper -Force
+        $key = "HKCU:\Software\Classes\$LinkScheme"
         $shell = Combine $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-        $command = '"{0}" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{1}" "%1"' -f $shell, $Helper
+        $command = '"{0}" -NoLogo -NoProfile -ExecutionPolicy RemoteSigned -File "{1}" "%1"' -f $shell, $Helper
         New-Item -Path "$key\shell\open\command" -Force | Out-Null
         Set-ItemProperty -Path $key -Name '(Default)' -Value 'URL:Wax mod link'
         Set-ItemProperty -Path $key -Name 'URL Protocol' -Value ''
         Set-ItemProperty -Path "$key\shell\open\command" -Name '(Default)' -Value $command
-        Write-Host 'The "Add to game" button on the Wax site now works on this PC.'
+        return $true
     } catch {
-        Write-Host 'The "Add to game" button on the Wax site could not be set up. Downloading a mod as a zip still works.'
+        return $false
     }
 }
 
-function Unregister-ModLinks {
-    if ($env:WAX_SETUP_NO_LINKS) { return }
+# Takes the registration away when it starts a file in this folder, or a file that is gone.
+function Remove-DeadModLinks([string]$Folder) {
+    $target = Get-LinkTarget
+    if (-not $target) { return }
+    $inside = $target.StartsWith($Folder.TrimEnd('\') + '\', [System.StringComparison]::OrdinalIgnoreCase)
+    if (-not $inside -and (Test-File $target)) { return }
     try {
-        $key = 'HKCU:\Software\Classes\wax'
-        if (Test-Path $key) { Remove-Item -Path $key -Recurse -Force }
+        Remove-Item -LiteralPath "HKCU:\Software\Classes\$LinkScheme" -Recurse -Force
+        Write-Host ('Windows no longer hands ' + $LinkScheme + ':// links to Wax. The registry entry for them is removed.')
+    } catch {
+        Write-Host ('The registry entry for ' + $LinkScheme + ':// links could not be removed. README.txt says how to remove it by hand.')
+    }
+}
+
+# Wax-Import.ps1 keeps one log outside the game, import.log. Its folder is removed when that log is all it holds.
+function Remove-ImportLog {
+    try {
+        $folder = Combine ([System.Environment]::GetFolderPath('LocalApplicationData')) $LocalFolder
+        if (-not [System.IO.Path]::IsPathRooted($folder) -or -not (Test-Folder $folder) -or (Test-Link $folder)) { return }
+        foreach ($item in (New-Object System.IO.DirectoryInfo $folder).GetFileSystemInfos()) {
+            if ($item.Name -ne 'import.log' -or $item -isnot [System.IO.FileInfo] -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+                Write-Host ''
+                Write-Host 'The log of mods added through links was left where it is, because its folder holds other files too:'
+                Write-Host "  $folder"
+                return
+            }
+        }
+        Remove-Tree $folder
+        Write-Host ''
+        Write-Host 'The log of mods added through links is removed too:'
+        Write-Host "  $folder"
     } catch { }
+}
+
+# The question is put once for each copy of Wax. The answer is kept in run\links.txt, and later installs leave things as they are.
+function Set-ModLinks([string]$Wax) {
+    $helper = Combine $Wax 'Wax-Import.ps1'
+    $note = Combine $Wax 'run\links.txt'
+    $target = Get-LinkTarget
+    $here = $target -and [string]::Equals($target, $helper, [System.StringComparison]::OrdinalIgnoreCase)
+    $button = 'The "Add to game" button on the Wax site'
+    if ($ModLinks -eq 'Ask' -and (Test-File $note)) {
+        # A yes also holds after the game was moved: then the registration names a file that is gone, and it is written for the new place.
+        $moved = $target -and -not $here -and -not (Test-File $target) -and (Read-Version $note) -eq 'yes'
+        if (($here -or $moved) -and -not (Register-ModLinks $helper)) { Write-Host "$button could not be set up again. Downloading a mod as a zip still works." }
+        return
+    }
+    $want = ($ModLinks -eq 'Yes')
+    if ($ModLinks -eq 'Ask') {
+        Write-Host ''
+        Write-Host "$button adds a mod without a download by hand."
+        Write-Host ('For that, Windows has to hand links that start with ' + $LinkScheme + ':// to Wax. That takes one entry in your own')
+        Write-Host ('part of the registry (HKEY_CURRENT_USER\Software\Classes\' + $LinkScheme + '). Uninstalling Wax removes it.')
+        Write-Host 'Such a link can come from any web page, not only from the Wax site. Wax shows you the mod and asks'
+        Write-Host 'before it downloads anything, and a mod it adds stays switched off until you switch it on.'
+        Write-Host 'Without the entry everything else works: download a mod as a zip and put it in the mods folder.'
+        $want = Read-YesNo 'Let that button open Wax on this PC?' 'Ask'
+    }
+    $answer = 'no'
+    if ($want) { $answer = 'yes' }
+    try { [System.IO.File]::WriteAllText($note, "$answer`r`n", [System.Text.Encoding]::ASCII) } catch { }
+    if ($want) {
+        if (Register-ModLinks $helper) { Write-Host "$button now opens Wax on this PC." }
+        else { Write-Host "$button could not be set up. Downloading a mod as a zip still works." }
+        return
+    }
+    if ($here) { Remove-DeadModLinks $Wax }
+    if (-not $here -and $target -and (Test-File $target)) {
+        Write-Host "$button opens another copy of Wax on this PC, and that was left as it is:"
+        Write-Host "  $target"
+        return
+    }
+    Write-Host "$button is not set up. README.txt says how to switch it on later."
+}
+
+# The account at the desk. It is another one than this runs as when a second account was used to run this as administrator.
+function Get-DeskUser {
+    try {
+        $session = (Get-Process -Id $PID).SessionId
+        foreach ($shell in @(Get-CimInstance -ClassName Win32_Process -Filter "Name = 'explorer.exe'")) {
+            if ($shell.SessionId -ne $session) { continue }
+            $owner = Invoke-CimMethod -InputObject $shell -MethodName GetOwnerSid
+            if ($owner -and $owner.Sid) { return New-Object System.Security.Principal.SecurityIdentifier ([string]$owner.Sid) }
+        }
+    } catch { }
+    return $null
+}
+
+function Get-Rules($Item) {
+    if ($AclOnItem) { return $Item.GetAccessControl() }
+    return [System.IO.FileSystemAclExtensions]::GetAccessControl($Item)
+}
+
+function Set-Rules($Item, $Rules) {
+    if ($AclOnItem) { $Item.SetAccessControl($Rules) }
+    else { [System.IO.FileSystemAclExtensions]::SetAccessControl($Item, $Rules) }
+}
+
+function New-Rules($Item) {
+    if ($Item -is [System.IO.DirectoryInfo]) { return New-Object System.Security.AccessControl.DirectorySecurity }
+    return New-Object System.Security.AccessControl.FileSecurity
+}
+
+# Makes a file or folder the installing user's. With -Plain it also loses rules of its own, so the rules of Wax's folder apply to it.
+function Reset-Rules($Item, $Me, [switch]$Plain) {
+    $sid = [System.Security.Principal.SecurityIdentifier]
+    $now = Get-Rules $Item
+    if ($Plain -and ($now.AreAccessRulesProtected -or $now.GetAccessRules($true, $false, $sid).Count -gt 0)) {
+        $rules = New-Rules $Item
+        $rules.SetAccessRuleProtection($false, $false)
+        Set-Rules $Item $rules
+    }
+    if ($now.GetOwner($sid).Value -ne $Me.Value) {
+        $rules = New-Rules $Item
+        $rules.SetOwner($Me)
+        Set-Rules $Item $rules
+    }
+}
+
+# Wax's folder stops taking rules from the folder above. The installing user, Administrators and SYSTEM may change it, other users may read it.
+function Protect-Folder([string]$Wax) {
+    if (-not (Test-Folder $Wax) -or (Test-Link $Wax)) { return }
+    $stuck = 0
+    try {
+        $well = [System.Security.Principal.WellKnownSidType]
+        $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+        $change = @($me)
+        $change += New-Object System.Security.Principal.SecurityIdentifier ($well::BuiltinAdministratorsSid, $null)
+        $change += New-Object System.Security.Principal.SecurityIdentifier ($well::LocalSystemSid, $null)
+        $desk = Get-DeskUser
+        if ($desk -and $desk.Value -ne $me.Value) { $change += $desk }
+        $users = New-Object System.Security.Principal.SecurityIdentifier ($well::BuiltinUsersSid, $null)
+        $inside = [System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+        $none = [System.Security.AccessControl.PropagationFlags]::None
+        $allow = [System.Security.AccessControl.AccessControlType]::Allow
+        $rights = [System.Security.AccessControl.FileSystemRights]
+        $rules = New-Object System.Security.AccessControl.DirectorySecurity
+        $rules.SetAccessRuleProtection($true, $false)
+        foreach ($who in $change) {
+            $rules.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule ($who, $rights::FullControl, $inside, $none, $allow)))
+        }
+        $rules.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule ($users, $rights::ReadAndExecute, $inside, $none, $allow)))
+        $top = New-Object System.IO.DirectoryInfo $Wax
+        Set-Rules $top $rules
+        Reset-Rules $top $me
+
+        # A link inside is left as it is and not looked into.
+        $folders = New-Object System.Collections.Stack
+        $folders.Push($top)
+        while ($folders.Count -gt 0) {
+            foreach ($item in $folders.Pop().GetFileSystemInfos()) {
+                if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { continue }
+                try { Reset-Rules $item $me -Plain } catch { $stuck++ }
+                if ($item -is [System.IO.DirectoryInfo]) { $folders.Push($item) }
+            }
+        }
+    } catch {
+        $problem = $_.Exception
+        while ($problem.InnerException) { $problem = $problem.InnerException }
+        Write-Host 'Wax is installed, but Windows did not let this script close its folder to the other accounts on this PC:'
+        Write-Host "  $($problem.Message)"
+        return
+    }
+    if ($stuck -gt 0) {
+        Write-Host "Wax's folder can now only be changed by your Windows account and by administrators, except for $stuck things in it"
+        Write-Host 'that Windows did not let this script reach.'
+    } else {
+        Write-Host "Wax's folder can now only be changed by your Windows account and by administrators. Other accounts can read it."
+    }
+}
+
+# True when a UE4SS mod list in the game is the one that came with Wax before: today's list with all three mods switched on.
+function Test-EarlierList([string]$Shipped, [string]$Installed) {
+    $name = [System.IO.Path]::GetFileName($Shipped)
+    if ($name -ne 'mods.txt' -and $name -ne 'mods.json') { return $false }
+    $earlier = [System.IO.File]::ReadAllText($Shipped)
+    foreach ($mod in $CheatMods) {
+        $earlier = [regex]::Replace($earlier, "(?m)^($mod\s*:\s*)0", '${1}1')
+        $earlier = [regex]::Replace($earlier, "(`"mod_name`"\s*:\s*`"$mod`"\s*,\s*`"mod_enabled`"\s*:\s*)false", '${1}true')
+    }
+    return $earlier -ceq [System.IO.File]::ReadAllText($Installed)
 }
 
 function Install-Wax {
@@ -305,6 +512,7 @@ function Install-Wax {
     $backup = Combine $win64 ('ue4ss-backup-' + (Get-Date -Format 'yyyy-MM-dd_HHmmss'))
     $backedUp = 0
     $kept = @()
+    $switchedOff = $false
     $waxFiles = $packageWax + '\'
     foreach ($file in [System.IO.Directory]::GetFiles($Package, '*', [System.IO.SearchOption]::AllDirectories)) {
         if ($file.StartsWith($waxFiles, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
@@ -313,13 +521,24 @@ function Install-Wax {
         if (Test-File $target) {
             if (Test-Same $file $target) { continue }
             if ($sameUE4SS -and ($KeptSettings -contains $relative)) {
-                $kept += [System.IO.Path]::GetFileName($relative)
-                continue
+                if (-not (Test-EarlierList $file $target)) {
+                    $kept += [System.IO.Path]::GetFileName($relative)
+                    continue
+                }
+                $switchedOff = $true
+            } else {
+                Copy-File $target (Combine $backup $relative)
+                $backedUp++
             }
-            Copy-File $target (Combine $backup $relative)
-            $backedUp++
         }
         Copy-File $file $target
+    }
+    $stillOn = @()
+    if ($kept -contains 'mods.txt') {
+        $list = [System.IO.File]::ReadAllText((Combine $win64 'ue4ss\Mods\mods.txt'))
+        foreach ($mod in $CheatMods) {
+            if ($list -match "(?m)^$mod\s*:\s*1") { $stillOn += $mod }
+        }
     }
 
     [void][System.IO.Directory]::CreateDirectory($wax)
@@ -345,7 +564,8 @@ function Install-Wax {
     elseif ($before -eq $version) { Write-Host "Wax $version was installed again." }
     else { Write-Host "Wax was updated from $before to $version." }
     if ($hadMine) { Write-Host 'Your mods and settings were kept.' }
-    Register-ModLinks (Combine $wax 'Wax-Import.ps1')
+    Protect-Folder $wax
+    Set-ModLinks $wax
     if ($backedUp -gt 0) {
         Write-Host ''
         if ($hadUE4SS -and -not $sameUE4SS) { Write-Host 'A different UE4SS was already in the game folder.' }
@@ -357,10 +577,31 @@ function Install-Wax {
         Write-Host ''
         Write-Host ('Your own UE4SS settings were kept: ' + ($kept -join ', '))
     }
+    $modList = Combine $win64 'ue4ss\Mods\mods.txt'
+    if ($switchedOff) {
+        Write-Host ''
+        Write-Host ("UE4SS's own cheat and console mods are now switched off: " + ($CheatMods -join ', ') + '.')
+        Write-Host 'Wax does not need them, and earlier versions of Wax left them on. To switch one back on, change its 0 to 1 in:'
+        Write-Host "  $modList"
+    }
+    if ($stillOn.Count -gt 0) {
+        Write-Host ''
+        Write-Host ("In your mods.txt these mods of UE4SS are switched on: " + ($stillOn -join ', ') + '.')
+        Write-Host 'They open the game''s console and cheat commands. Wax does not need them, and a new install has them off.'
+        Write-Host 'Your file was not changed. To switch one off, change its 1 to 0 in:'
+        Write-Host "  $modList"
+    }
     if ($oldLayout) {
         Write-Host ''
         Write-Host 'An older UE4SS is also in the game folder (UE4SS.dll next to the game exe).'
         Write-Host 'It is not loaded any more. Mods in its Mods folder only run after you move them to ue4ss\Mods.'
+    }
+    if ($PSScriptRoot -match '\\Wax-update-[0-9a-f]{8}\\Wax$') {
+        Write-Host ''
+        Write-Host 'This update was started by an "Update Wax.cmd" from an older Wax. That file installs what it downloads'
+        Write-Host 'without checking who made it. The one that comes with this version checks the author''s signature first.'
+        Write-Host "Download Wax $version once from the site, use the files of that zip from now on, and delete the older folder:"
+        Write-Host "  $InstallPage"
     }
     Write-Host ''
     Write-Host 'Next:'
@@ -372,36 +613,146 @@ function Install-Wax {
     Write-Host "Docs: $DocsUrl"
 }
 
-function Get-LatestRelease([System.Net.WebClient]$Client) {
-    $text = $null
-    if (Test-File $ReleaseApi) {
-        $text = [System.IO.File]::ReadAllText($ReleaseApi)
-    } else {
-        try {
-            $text = $Client.DownloadString($ReleaseApi)
-        } catch {
-            $problem = $_.Exception
-            while ($problem -and -not ($problem -is [System.Net.WebException])) { $problem = $problem.InnerException }
-            if ($problem -and ($problem.Response -is [System.Net.HttpWebResponse])) {
-                $code = [int]$problem.Response.StatusCode
-                if ($code -eq 404) { Stop-Setup "There is no Wax release to download yet. Look here later:`r`n  $ReleasePage" }
-                Stop-Setup "GitHub answered with error $code. Try again later."
-            }
-            Stop-Setup 'GitHub could not be reached. Check your internet connection, then try again.'
+# Opens an address. A redirect is followed five times at most, and only to an address of the same kind as the release addresses (https).
+function Open-Address([string]$Address) {
+    $kind = (New-Object System.Uri $DownloadRoot).Scheme
+    $uri = New-Object System.Uri $Address
+    for ($hop = 0; $hop -le 5; $hop++) {
+        if ($uri.Scheme -cne $kind) { break }
+        $request = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create($uri)
+        $request.UserAgent = 'Wax-Setup'
+        $request.AllowAutoRedirect = $false
+        $request.Timeout = 30000
+        $request.ReadWriteTimeout = 30000
+        $response = $request.GetResponse()
+        $code = [int]$response.StatusCode
+        if ($code -lt 300 -or $code -gt 399) { return $response }
+        $next = $response.Headers['Location']
+        $response.Close()
+        if (-not $next) { break }
+        $uri = New-Object System.Uri ($uri, $next)
+    }
+    throw (New-Object System.Net.WebException 'The address led somewhere that is not followed.')
+}
+
+# Copies an answer into a stream and stops at the limit. Returns the number of bytes, or -1 when there were more.
+function Read-Answer($Response, [System.IO.Stream]$Into, [long]$Limit) {
+    if ($Response.ContentLength -gt $Limit) { return -1 }
+    $from = $Response.GetResponseStream()
+    try {
+        $buffer = New-Object byte[] 65536
+        $total = [long]0
+        while ($true) {
+            $count = $from.Read($buffer, 0, $buffer.Length)
+            if ($count -le 0) { return $total }
+            $total += $count
+            if ($total -gt $Limit) { return -1 }
+            $Into.Write($buffer, 0, $count)
         }
+    } finally {
+        $from.Dispose()
+    }
+}
+
+# A small file as bytes, or nothing when it is larger than the limit.
+function Get-Small([string]$Address, [long]$Limit) {
+    $response = Open-Address $Address
+    $memory = New-Object System.IO.MemoryStream
+    try {
+        if ((Read-Answer $response $memory $Limit) -lt 0) { return $null }
+        return , $memory.ToArray()
+    } finally {
+        $response.Close()
+        $memory.Dispose()
+    }
+}
+
+# The HTTP error behind a failed request, or 0 when there was no answer at all.
+function Get-HttpError($Failure) {
+    $problem = $Failure.Exception
+    while ($problem -and -not ($problem -is [System.Net.WebException])) { $problem = $problem.InnerException }
+    if ($problem -and ($problem.Response -is [System.Net.HttpWebResponse])) { return [int]$problem.Response.StatusCode }
+    return 0
+}
+
+# True when the text carries the signature of the key above: ECDSA on P-256 with SHA-256, the signature as r then s.
+function Test-Signature([byte[]]$Text, [string]$Signature) {
+    if ($Signature -cnotmatch '^[A-Za-z0-9+/]{85}[AQgw]==$') { return $false }
+    try {
+        $blob = New-Object byte[] 72
+        [System.Text.Encoding]::ASCII.GetBytes('ECS1').CopyTo($blob, 0)
+        $blob[4] = 32
+        for ($i = 0; $i -lt 64; $i++) { $blob[8 + $i] = [System.Convert]::ToByte($SigningKey.Substring($i * 2, 2), 16) }
+        $key = [System.Security.Cryptography.CngKey]::Import($blob, [System.Security.Cryptography.CngKeyBlobFormat]::EccPublicBlob)
+        $ecdsa = New-Object System.Security.Cryptography.ECDsaCng $key
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try { return [bool]$ecdsa.VerifyHash($sha.ComputeHash($Text), [System.Convert]::FromBase64String($Signature)) }
+        finally { $sha.Dispose(); $ecdsa.Dispose(); $key.Dispose() }
+    } catch {
+        return $false
+    }
+}
+
+# True when an address is the one this file of this release has under the project's releases, and nothing else.
+function Test-ReleaseAddress([string]$Address, [string]$Tag, [string]$Name) {
+    $uri = $null
+    if (-not [System.Uri]::TryCreate($Address, [System.UriKind]::Absolute, [ref]$uri)) { return $false }
+    $wanted = New-Object System.Uri ($DownloadRoot + $Tag + '/' + $Name)
+    return ($uri.Scheme -ceq $wanted.Scheme) -and ($uri.Host -ceq $wanted.Host) -and ($uri.Port -eq $wanted.Port) -and
+        [string]::Equals($uri.AbsolutePath, $wanted.AbsolutePath, [System.StringComparison]::OrdinalIgnoreCase) -and
+        (-not $uri.Query) -and (-not $uri.Fragment) -and (-not $uri.UserInfo)
+}
+
+# The signed list of a release: "release <version>", then one line "<sha256> <size> <name>" for each file. Returns the line of one file.
+function Read-ReleaseList([byte[]]$Bytes, [string]$Version, [string]$Name) {
+    $unreadable = "The signed list of files of this release could not be read, so nothing was installed. Get Wax from the site:`r`n  $InstallPage"
+    $lines = [System.Text.Encoding]::ASCII.GetString($Bytes).Split([char]10)
+    if ($lines.Count -lt 2 -or $lines[$lines.Count - 1] -ne '' -or $lines[0] -cnotmatch '^release (\d{1,5}\.\d{1,5}\.\d{1,5})$') { Stop-Setup $unreadable }
+    if ($Matches[1] -cne $Version) {
+        Stop-Setup "The signed list of files is for Wax $($Matches[1]), not for Wax $Version, so nothing was installed. Get Wax from the site:`r`n  $InstallPage"
+    }
+    $found = $null
+    for ($i = 1; $i -lt $lines.Count - 1; $i++) {
+        if ($lines[$i] -cnotmatch '^([0-9a-f]{64}) (\d{1,12}) ([A-Za-z0-9._-]{1,100})$') { Stop-Setup $unreadable }
+        if ($Matches[3] -cne $Name) { continue }
+        if ($found) { Stop-Setup $unreadable }
+        $found = New-Object PSObject -Property @{ Hash = $Matches[1]; Size = [long]$Matches[2] }
+    }
+    if (-not $found -or $found.Size -lt 1 -or $found.Size -gt $MaxZip) {
+        Stop-Setup "The signed list of files does not name a Wax zip this updater can use, so nothing was installed. Get Wax from the site:`r`n  $InstallPage"
+    }
+    return $found
+}
+
+# What GitHub says the newest release is: its version, its tag, and the address it gives for each of its files.
+function Get-LatestRelease {
+    $none = "There is no Wax release to download yet. Look here later:`r`n  $ReleasePage"
+    $bytes = $null
+    try {
+        $bytes = Get-Small $ReleaseApi 2MB
+    } catch {
+        $code = Get-HttpError $_
+        if ($code -eq 404) { Stop-Setup $none }
+        if ($code -ne 0) { Stop-Setup "GitHub answered with error $code. Try again later." }
+        Stop-Setup 'GitHub could not be reached. Check your internet connection, then try again.'
     }
     $release = $null
-    try { $release = $text | ConvertFrom-Json } catch { }
-    if (-not $release -or -not $release.PSObject.Properties['tag_name'] -or -not $release.tag_name) {
-        Stop-Setup "There is no Wax release to download yet. Look here later:`r`n  $ReleasePage"
+    try { $release = [System.Text.Encoding]::UTF8.GetString($bytes) | ConvertFrom-Json } catch { }
+    if (-not $release -or -not $release.PSObject.Properties['tag_name'] -or -not $release.tag_name) { Stop-Setup $none }
+    $tag = [string]$release.tag_name
+    if ($tag -cnotmatch '^[vV]?(\d{1,5}\.\d{1,5}\.\d{1,5})$') {
+        Stop-Setup "The newest release is called $tag, which this updater does not understand. Get Wax from the site:`r`n  $InstallPage"
     }
-    $url = $null
+    $version = $Matches[1]
+    $files = New-Object System.Collections.Hashtable ([System.StringComparer]::Ordinal)
     if ($release.PSObject.Properties['assets']) {
         foreach ($asset in @($release.assets)) {
-            if ($asset.name -match '^Wax-.+\.zip$') { $url = [string]$asset.browser_download_url; break }
+            if ($asset -and $asset.PSObject.Properties['name'] -and $asset.PSObject.Properties['browser_download_url']) {
+                $files[[string]$asset.name] = [string]$asset.browser_download_url
+            }
         }
     }
-    return New-Object PSObject -Property @{ Version = ([string]$release.tag_name -replace '^[vV]', ''); Url = $url }
+    return New-Object PSObject -Property @{ Version = $version; Tag = $tag; Files = $files }
 }
 
 function Update-Wax {
@@ -414,9 +765,7 @@ function Update-Wax {
     if (Test-Link $wax) { Stop-Setup "This is a link to another folder, so there is nothing to update here:`r`n  $wax" }
 
     try { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12 } catch { }
-    $client = New-Object System.Net.WebClient
-    $client.Headers['User-Agent'] = 'Wax-Setup'
-    $release = Get-LatestRelease $client
+    $release = Get-LatestRelease
 
     Write-Host ''
     if ($installed -eq '0') { Write-Host 'Installed: Wax, version not known' } else { Write-Host "Installed: Wax $installed" }
@@ -426,24 +775,59 @@ function Update-Wax {
         Write-Host 'You have the newest version. Nothing was changed.'
         return
     }
-    if (-not $release.Url) { Stop-Setup "The newest release has no Wax zip attached yet. Look here later:`r`n  $ReleasePage" }
-    if ($ReleaseApi -eq $DefaultApi -and -not $release.Url.StartsWith("https://github.com/$Repo/releases/download/", [System.StringComparison]::OrdinalIgnoreCase)) {
-        Stop-Setup "The download link in the release is not the one expected, so nothing was downloaded. Get the zip here:`r`n  $ReleasePage"
+    $zipName = "Wax-$($release.Version).zip"
+    $listName = "Wax-$($release.Version).manifest"
+    $signatureName = "$listName.sig"
+    if (-not $release.Files.ContainsKey($zipName)) { Stop-Setup "The newest release has no Wax zip attached yet. Look here later:`r`n  $ReleasePage" }
+    if (-not $release.Files.ContainsKey($listName) -or -not $release.Files.ContainsKey($signatureName)) {
+        Stop-Setup "This release has no signed list of its files, so this updater does not install it. Download Wax by hand from the site:`r`n  $InstallPage"
+    }
+    foreach ($name in $zipName, $listName, $signatureName) {
+        if (-not (Test-ReleaseAddress $release.Files[$name] $release.Tag $name)) {
+            Stop-Setup "The release gives an address for $name that is not under the Wax project's releases, so nothing was downloaded. Download Wax by hand from the site:`r`n  $InstallPage"
+        }
     }
     Assert-GameClosed $win64
 
-    $work = Combine ([System.IO.Path]::GetTempPath()) ('Wax-update-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $unfinished = "The download did not finish. Check your internet connection, then try again. You can also get Wax from the site:`r`n  $InstallPage"
+    $from = $DownloadRoot + $release.Tag + '/'
+    $work = Combine ([System.IO.Path]::GetTempPath()) ('Wax-checked-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     [void][System.IO.Directory]::CreateDirectory($work)
     try {
-        $zip = Combine $work 'Wax.zip'
-        $unpacked = Combine $work 'Wax'
         Write-Host ''
-        Write-Host "Downloading Wax $($release.Version) ..."
+        Write-Host "Checking the signature of Wax $($release.Version) ..."
+        $list = $null
+        $signature = $null
         try {
-            $client.Headers['User-Agent'] = 'Wax-Setup'
-            $client.DownloadFile($release.Url, $zip)
+            $list = Get-Small ($from + $listName) 65536
+            $signature = Get-Small ($from + $signatureName) 1024
         } catch {
-            Stop-Setup "The download did not finish. Check your internet connection, then try again. You can also get the zip here:`r`n  $ReleasePage"
+            Stop-Setup $unfinished
+        }
+        $signed = $false
+        if ($null -ne $list -and $null -ne $signature) { $signed = Test-Signature $list ([System.Text.Encoding]::ASCII.GetString($signature).Trim()) }
+        if (-not $signed) {
+            Stop-Setup "The list of files of this release does not carry the signature of Wax's author, so nothing was installed. Download Wax by hand from the site:`r`n  $InstallPage"
+        }
+        $entry = Read-ReleaseList $list $release.Version $zipName
+
+        Write-Host "Downloading Wax $($release.Version) ..."
+        $zip = Combine $work $zipName
+        $unpacked = Combine $work 'Wax'
+        $read = [long]0
+        try {
+            $response = Open-Address ($from + $zipName)
+            $file = [System.IO.File]::Create($zip)
+            try { $read = Read-Answer $response $file $entry.Size }
+            finally { $file.Dispose(); $response.Close() }
+        } catch {
+            Stop-Setup $unfinished
+        }
+        if ($read -lt 0) {
+            Stop-Setup 'The download is larger than the signed list says the zip is, so it was stopped and nothing was installed. Try again later.'
+        }
+        if ($read -ne $entry.Size -or (Get-Sha256 $zip) -cne $entry.Hash) {
+            Stop-Setup 'The downloaded zip is not the file the signed list describes, so nothing was installed. Try again later.'
         }
         try {
             Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -453,10 +837,14 @@ function Update-Wax {
         }
         $setup = Combine $unpacked 'Wax-Setup.ps1'
         if (-not (Test-File $setup) -or -not (Test-File (Combine $unpacked 'game\dwmapi.dll'))) {
-            Stop-Setup "The downloaded file is not a Wax release. Get the zip here:`r`n  $ReleasePage"
+            Stop-Setup "The downloaded file is not a Wax release. Get Wax from the site:`r`n  $InstallPage"
+        }
+        $inside = Read-Version (Combine $unpacked "game\$WaxPath\VERSION")
+        if ($inside -cne $release.Version) {
+            Stop-Setup "The downloaded zip holds Wax $inside, not Wax $($release.Version), so nothing was installed. Get Wax from the site:`r`n  $InstallPage"
         }
         $shell = (Get-Process -Id $PID).Path
-        & $shell -NoLogo -NoProfile -ExecutionPolicy Bypass -File $setup -Action Install -GameDir $win64
+        & $shell -NoLogo -NoProfile -ExecutionPolicy RemoteSigned -File $setup -Action Install -GameDir $win64
         if ($LASTEXITCODE -ne 0) { Stop-Setup 'The new version was downloaded but not installed. The reason is above.' }
     } finally {
         try { Remove-Tree $work } catch { }
@@ -473,41 +861,51 @@ function Uninstall-Wax {
     $hasUE4SS = (Test-File (Combine $win64 'dwmapi.dll')) -or (Test-Folder $ue4ss)
     if (-not $hasWax -and -not $hasUE4SS) {
         Write-Host ''
-        Write-Host 'Wax is not installed in this game. Nothing was changed.'
+        Write-Host 'Wax is not installed in this game. Nothing was changed in the game folder.'
+        Remove-DeadModLinks $wax
+        Remove-ImportLog
         return
     }
     Assert-GameClosed $win64
     Write-Host ''
+    try {
+        Remove-Wax $win64 $wax $hasWax
+    } finally {
+        Remove-DeadModLinks $wax
+    }
+    if ($hasUE4SS) { Remove-UE4SS $win64 }
+    Remove-ImportLog
+}
 
-    $keptMine = $false
-    if ($hasWax -and (Test-Link $wax)) {
-        Remove-Tree $wax
+function Remove-Wax([string]$Win64, [string]$Wax, [bool]$HasWax) {
+    if ($HasWax -and (Test-Link $Wax)) {
+        Remove-Tree $Wax
         Write-Host 'Wax was a link to another folder. The link is removed. The folder it points to was not touched.'
-    } elseif ($hasWax) {
-        $hasMine = -not ((Test-Empty (Combine $wax 'mods')) -and (Test-Empty (Combine $wax 'saved')))
+    } elseif ($HasWax) {
+        $hasMine = -not ((Test-Empty (Combine $Wax 'mods')) -and (Test-Empty (Combine $Wax 'saved')))
         $removeMine = $true
         if ($hasMine) {
             Write-Host 'Your mods are in Wax\mods and your settings are in Wax\saved.'
             $removeMine = Read-YesNo 'Remove your mods and settings too?' $RemoveMyFiles
         }
-        foreach ($item in (New-Object System.IO.DirectoryInfo $wax).GetFileSystemInfos()) {
+        foreach ($item in (New-Object System.IO.DirectoryInfo $Wax).GetFileSystemInfos()) {
             if (-not $removeMine -and ($Mine -contains $item.Name)) { continue }
             Remove-Tree $item.FullName
         }
-        foreach ($name in $Mine) { Remove-IfEmpty (Combine $wax $name) }
-        Remove-IfEmpty $wax
-        $keptMine = Test-Folder $wax
-        Unregister-ModLinks
+        foreach ($name in $Mine) { Remove-IfEmpty (Combine $Wax $name) }
+        Remove-IfEmpty $Wax
         Write-Host 'Wax is removed.'
-        if ($keptMine) {
+        if (Test-Folder $Wax) {
             Write-Host 'Your mods and settings are still here:'
-            Write-Host "  $wax"
+            Write-Host "  $Wax"
         }
     } else {
         Write-Host 'Wax is not in this game.'
     }
+}
 
-    if (-not $hasUE4SS) { return }
+function Remove-UE4SS([string]$Win64) {
+    $ue4ss = Combine $Win64 'ue4ss'
     $stock = $StockMods
     if (Test-Folder (Combine $Package 'ue4ss\Mods')) {
         $stock = @((New-Object System.IO.DirectoryInfo (Combine $Package 'ue4ss\Mods')).GetDirectories() | ForEach-Object { $_.Name })
@@ -526,7 +924,7 @@ function Uninstall-Wax {
         Write-Host 'UE4SS is still installed.'
         return
     }
-    Remove-Tree (Combine $win64 'dwmapi.dll')
+    Remove-Tree (Combine $Win64 'dwmapi.dll')
     if (Test-Link $ue4ss) {
         Remove-Tree $ue4ss
     } elseif (Test-Folder $ue4ss) {
@@ -546,7 +944,7 @@ function Uninstall-Wax {
     if ($others.Count -gt 0) {
         Write-Host 'The other mods were left where they are. They do not run without UE4SS.'
     }
-    $backups = @([System.IO.Directory]::GetDirectories($win64, 'ue4ss-backup-*'))
+    $backups = @([System.IO.Directory]::GetDirectories($Win64, 'ue4ss-backup-*'))
     if ($backups.Count -gt 0) {
         Write-Host ''
         Write-Host 'The UE4SS files that were there before Wax are still in:'
@@ -554,7 +952,6 @@ function Uninstall-Wax {
     }
 }
 
-if (-not $ReleaseApi) { $ReleaseApi = $DefaultApi }
 try {
     if ($Action -eq 'Install') { Install-Wax }
     elseif ($Action -eq 'Update') { Update-Wax }
@@ -568,6 +965,7 @@ try {
         Write-Host $problem.Message
     } elseif ($problem -is [System.UnauthorizedAccessException]) {
         Write-Host 'Windows did not let this script change the game folder.'
+        Write-Host 'It may belong to another Windows account on this PC: Wax''s folder can only be changed by the account that installed it.'
         Write-Host 'Right-click the .cmd file, choose "Run as administrator", and try again.'
         Write-Host "Details: $($problem.Message)"
     } else {

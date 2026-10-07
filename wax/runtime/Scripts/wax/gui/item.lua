@@ -11,6 +11,52 @@ local item = {}
 local V, H, VA = style.Visibility, style.HAlign, style.VAlign
 local INDENT, ARROW, ICON = 12, 16, 14
 local TONES = { text = true, dim = true, accent = true, accent_hover = true, good = true, warn = true, bad = true }
+local FIT = 0.90        -- text draws a few percent wider than its letters add up to, more at a fractional screen scale
+local TIP_LINE = 56     -- letters in one line of the tip that shows a cut line whole
+local VALUE_LEAST = 96  -- in a table a value is not cut below this (twelve letters) while its type could give way instead
+
+-- The name, note and value of a line that is `width` wide, each cut short with "..." where it has to be, and whether any was.
+local function fitted(width, columns, text, remark, shown, indent, icon, name_width)
+    local theme = style.theme
+    local size, small = theme.font_size, theme.small_size
+    local room = width - indent * INDENT - ARROW - 10 - (icon and ICON + 6 or 0)
+    local name, note, value, cut_name, cut_other = text, remark, shown, false, false
+    if columns then
+        name, cut_name = kit.shorten(text, (name_width or room) * FIT, size)
+        local left = (room - (name_width or kit.text_width(name, size)) - 18) * FIT
+        local wanted, type_width = kit.text_width(shown, small, "mono"), kit.text_width(remark, small)
+        if wanted + type_width > left then
+            -- the value comes first: a type that leaves it too little room is cut instead, or left to the tip
+            if left - type_width < math.min(wanted, VALUE_LEAST) then
+                note = kit.shorten(remark, left - math.min(wanted, VALUE_LEAST), small)
+                if #note < 7 then note = "" end
+                type_width = kit.text_width(note, small)
+            end
+            value = kit.shorten(shown, left - type_width, small, "mono")
+            cut_other = true
+        end
+    else
+        local left = room - 16 - kit.text_width(shown, small, "mono")
+        name, cut_name = kit.shorten(text, left * FIT, size)
+        -- a name that had to be cut leaves no room for a note
+        if cut_name then
+            note, cut_other = "", remark ~= ""
+        elseif remark ~= "" then
+            note, cut_other = kit.shorten(remark, (left - kit.text_width(name, size)) * FIT, small)
+            -- a note cut down to a letter or two says nothing: the tip has it whole
+            if cut_other and #note < 8 then note = "" end
+        end
+    end
+    return name, note, value, cut_name or cut_other
+end
+
+-- The whole of a line that was cut, for its tip.
+local function whole(text, remark, shown)
+    local lines = {}
+    if remark ~= "" then lines[1] = remark end
+    for at = 1, math.min(#shown, TIP_LINE * 4), TIP_LINE do lines[#lines + 1] = { shown:sub(at, at + TIP_LINE - 1), "text" } end
+    return { title = text, lines = lines }
+end
 
 -- Adds Container:Item. `tools` are the helpers every control in controls.lua is built with.
 function item.install(Container, tools)
@@ -20,6 +66,7 @@ function item.install(Container, tools)
     -- arrow is true (open), false (closed) or left out for none. on_click() runs for the line, on_arrow() for its arrow.
     -- columns = true makes it a line of a table: the name is name_width wide, the value starts where the name ends and
     -- the note sits at the right edge. divider = true draws a thin line under it.
+    -- fit = true cuts what is too long short with "..." and shows it whole as a tip. `width` is for a line narrower than its container.
     function Container:Item(options, on_click, on_arrow)
         options = options or {}
         local theme = style.theme
@@ -27,17 +74,17 @@ function item.install(Container, tools)
         local chosen = kit.box(style.with_alpha(theme.accent, 0.18), "round4")
         chosen:SetVisibility(V.Hidden)
         kit.slot(line:AddChild(chosen), { h = H.Fill, v = VA.Fill })
-        local row = root.new("HorizontalBox")
-        kit.slot(line:AddChild(row), { h = H.Fill, v = VA.Fill })
-        local gap = kit.sized(nil, 0)
-        kit.slot(row:AddChild(gap), { v = VA.Fill })
-        local arrow_icon = kit.icon("chevron-right", 12, theme.dim)
-        local arrow_box, arrow = kit.icon_button(nil, { content = arrow_icon, width = ARROW, height = ARROW })
-        arrow_box:SetVisibility(V.Hidden)
-        kit.slot(row:AddChild(arrow_box), { v = VA.Center })
+        -- the line is one button from edge to edge, so it has one shape under the mouse. Its arrow sits inside and draws no shape.
         local button = kit.button(nil, { shape = "round4", color = theme.clear, hover = style.with_alpha(theme.text, 0.07),
-            press = style.with_alpha(theme.text, 0.12), padding = style.margin(4, 0, 6, 0) })
+            press = style.with_alpha(theme.text, 0.12), padding = style.margin(0, 0, 6, 0) })
         local content = root.new("HorizontalBox")
+        local gap = kit.sized(nil, 0)
+        kit.slot(content:AddChild(gap), { v = VA.Fill })
+        local arrow_icon = kit.icon("chevron-right", 12, theme.dim)
+        local arrow_box, arrow = kit.icon_button(nil, { content = arrow_icon, width = ARROW, height = ARROW, hover = theme.clear,
+            press = theme.clear })
+        arrow_box:SetVisibility(V.Hidden)
+        kit.slot(content:AddChild(arrow_box), { v = VA.Center, pad = style.margin(0, 0, 4, 0) })
         local picture = kit.icon("circle", ICON, theme.dim)
         picture:SetVisibility(V.Collapsed)
         kit.slot(content:AddChild(picture), { v = VA.Center, pad = style.margin(0, 0, 6, 0) })
@@ -54,7 +101,7 @@ function item.install(Container, tools)
             kit.slot(content:AddChild(value), { v = VA.Center, pad = style.margin(8, 0, 0, 0) })
         end
         kit.fill_content(button, content)
-        kit.slot(row:AddChild(button), { v = VA.Fill, fill = 1 })
+        kit.slot(line:AddChild(button), { h = H.Fill, v = VA.Fill })
         if options.divider then
             local rule = kit.image(theme.line, nil, 1, 1)
             rule:SetVisibility(V.HitTestInvisible)
@@ -68,21 +115,42 @@ function item.install(Container, tools)
         control.Toggled = sched.Signal.new("Toggled")
         local now = { text = "", note = "", value = "", icon = false, indent = 0, arrow = nil, selected = false, tone = "text",
             faint = false, name_width = false }
+        local drawn = { text = "", note = "", value = "" }      -- what the three texts show, which is less when they were cut
+        local fits, container, last = options.fit == true, self, nil
+        local set_tip = fits and tools.hover_tip(control, button) or nil
+        local fit = {}      -- what the texts were last cut from, and what came of it
+        control.drawn = drawn
 
         -- Describes the whole line: what is left out goes back to nothing. Only what changed reaches the engine.
         function control:Set(fields)
             fields = fields or {}
             local text, remark, shown = tostring(fields.text or ""), tostring(fields.note or ""), tostring(fields.value or "")
-            if text ~= now.text then
-                now.text = text
+            now.text, now.note, now.value, last = text, remark, shown, fields
+            if fits then
+                local width, indent = fields.width or tools.wrap_width(container), fields.indent or 0
+                local pictured, column = fields.icon and true or false, name_box and fields.name_width or false
+                -- a line that is told the same again is not worked out again
+                if text ~= fit.text or remark ~= fit.note or shown ~= fit.value or width ~= fit.width or indent ~= fit.indent
+                    or pictured ~= fit.pictured or column ~= fit.column then
+                    fit.text, fit.note, fit.value, fit.width, fit.indent, fit.pictured, fit.column = text, remark, shown, width, indent,
+                        pictured, column
+                    local cut
+                    fit.name_cut, fit.note_cut, fit.value_cut, cut = fitted(width, options.columns, text, remark, shown, indent, pictured,
+                        column or nil)
+                    set_tip(cut and whole(text, remark, shown) or nil)
+                end
+                text, remark, shown = fit.name_cut, fit.note_cut, fit.value_cut
+            end
+            if text ~= drawn.text then
+                drawn.text = text
                 name:SetText(kit.text(text))
             end
-            if remark ~= now.note then
-                now.note = remark
+            if remark ~= drawn.note then
+                drawn.note = remark
                 note:SetText(kit.text(remark))
             end
-            if shown ~= now.value then
-                now.value = shown
+            if shown ~= drawn.value then
+                drawn.value = shown
                 value:SetText(kit.text(shown))
             end
             local icon = fields.icon or false
@@ -143,7 +211,14 @@ function item.install(Container, tools)
             if on_arrow then sched.task.spawn(on_arrow) end
             control.Toggled:Fire()
         end)
+        if on_arrow then
+            -- the arrow answers the mouse by getting brighter
+            listen(control, arrow, "OnHovered", function() style.tint(arrow_icon, "image", style.theme.text) end)
+            listen(control, arrow, "OnUnhovered", function() style.tint(arrow_icon, "image", style.theme.dim) end)
+        end
         control:Set(options)
+        -- a line that cuts its text to fit does so again when it gets another width
+        if fits then tools.fit_later(self, function() control:Set(last) end) end
         return control
     end
 end

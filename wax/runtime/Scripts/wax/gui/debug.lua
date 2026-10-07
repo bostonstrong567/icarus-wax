@@ -265,6 +265,7 @@ end
 
 -- The quiet line beside "Check now": what the updater is doing, or when it last asked the catalogue.
 local function update_line(updates)
+    if updates.look == false then return "Not looking for updates. Nothing is asked of the catalogue." end
     if updates.checking then return "Checking ..." end
     if next(updates.installing) then return "Updating ..." end
     local ago = os.time() - updates.last
@@ -330,12 +331,16 @@ local function rebuild_mods(list, updates)
             local updating = newer and updates.installing[mod.id]
             -- cards start closed, so the list stays short. One with a problem or an update to put in starts open, and a closed one says its state
             local open = mods_open[mod.id]
-            if open == nil then open = mod.error ~= nil or mod.waiting ~= nil or (newer ~= nil and not updating) end
-            local state = off and " (switched off)" or (not healthy and (" (%s)"):format(mod.status) or "")
+            if open == nil then open = mod.error ~= nil or mod.waiting ~= nil or mod.fresh == true or (newer ~= nil and not updating) end
+            local state = off and (mod.fresh and " (new, switched off)" or " (switched off)") or (not healthy and (" (%s)"):format(mod.status) or "")
             if newer then state = state .. (" (%s available)"):format(newer) end
             local section = mods_page:Section(("%s  %s%s"):format(mod.name, mod.version or "", state), { open = open })
-            section:Field("Status", healthy and "loaded" or (off and (mod.fresh and "new: switched off until you enable it" or "switched off") or mod.status))
+            section:Field("Status", healthy and "loaded" or (off and (mod.fresh and "new, switched off" or "switched off") or mod.status))
                 :SetColor(healthy and style.theme.good or (off and (mod.fresh and style.theme.warn or style.theme.dim) or style.theme.bad))
+            if off and mod.fresh then
+                section:Label("This mod is new here, so it is switched off. It starts when you switch on Enabled below. A mod is code that can do what a program can, so switch on only the ones you trust.",
+                    { color = style.theme.warn, size = style.theme.small_size })
+            end
             if updating then
                 section:Label(("Updating to %s ..."):format(newer), { dim = true })
             elseif newer then
@@ -435,13 +440,20 @@ local function refresh()
             shown.note:Set(updates.problem or "")
             shown.note:SetVisible(updates.problem ~= nil)
         end
+        local looking = updates.look ~= false
+        if shown.look and shown.look:Get() ~= looking then shown.look:Set(looking) end
         if shown.switch:Get() ~= updates.auto then shown.switch:Set(updates.auto) end
-        -- without the helper neither control does anything
-        local stopped = updates.stopped == true
+        -- without the helper no control here does anything, and while nothing is looked for the two below the first do nothing
+        local helpless = updates.stopped == true
+        local stopped = helpless or not looking
         if stopped ~= shown.stopped then
             shown.stopped = stopped
             shown.switch:SetEnabled(not stopped)
             shown.check:SetEnabled(not stopped)
+        end
+        if shown.look and helpless ~= shown.helpless then
+            shown.helpless = helpless
+            shown.look:SetEnabled(not helpless)
         end
     end
     local newest = log.newest_id()
@@ -493,9 +505,9 @@ function panel.start()
 
         status = window:StatusBar("Starting")
         mods_page = window:Page("Mods", { icon = "package" })
-        mods_page:Title("Mods", "Every mod in the mods folder. New ones appear on their own, and saving a file reloads its mod.")
+        mods_page:Title("Mods", "Every mod in the mods folder. A new one appears on its own, switched off until you switch it on. Saving a file reloads its mod.")
         local mod_tools = mods_page:Row()
-        mod_tools:Input(nil, { hint = "Search mods: a name, loaded, off, failed, new ..." }).Typed:Connect(function(text)
+        mod_tools:Input(nil, { hint = "Search mods: a name, loaded, off, failed, new ...", clear = true }).Typed:Connect(function(text)
             mod_filter = text
             filter_mods()
         end)
@@ -504,7 +516,11 @@ function panel.start()
         -- mods that were added from the catalogue: a switch, and a button to ask now
         local updates = update_state()
         if updates then
-            local shown = { buttons = {}, hold = 0, text = update_line(updates), stopped = false }
+            local shown = { buttons = {}, hold = 0, text = update_line(updates), stopped = false, helpless = false }
+            -- the one switch for the network: off, neither mods nor Wax itself are looked for and nothing is downloaded
+            if Wax.update.set_looking then
+                shown.look = mods_page:Toggle("Look for updates", updates.look ~= false, function(on) Wax.update.set_looking(on) end)
+            end
             shown.switch = mods_page:Toggle("Auto Update", updates.auto, function(on) Wax.update.set_auto(on) end)
             local asking = mods_page:Row()
             shown.check = asking:Button("Check now", function()
@@ -531,7 +547,7 @@ function panel.start()
             end)
         end
         local tools = log_page:Row()
-        local find = tools:Input(nil, { hint = "Search the log" })
+        local find = tools:Input(nil, { hint = "Search the log", clear = true })
         find.Typed:Connect(function(text)
             search = text
             refresh_log()
@@ -606,7 +622,7 @@ function panel.start()
         local icons_page = window:Page("Icons", { icon = "shapes", scroll = false })
         icons_page:Title("Icons")
         local found = icons_page:Label("", { dim = true })
-        local icon_search = icons_page:Input(nil, { hint = "Search icons: arrow, map, user ..." })
+        local icon_search = icons_page:Input(nil, { hint = "Search icons: arrow, map, user ...", clear = true })
         local every = #ui.Icons.Find("")
         local grid = icons_page:Grid({
             cell = 38,

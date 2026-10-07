@@ -1,4 +1,4 @@
-// Finds mod folders and writes the index the game reads
+// Finds mod folders and writes the index the game reads in developer mode
 import fs from 'node:fs';
 import path from 'node:path';
 import { ROOT, RUN, evalLua, gameRunning } from './bridge.mjs';
@@ -80,32 +80,42 @@ export function writeIndex() {
 }
 
 const REPORT = `
-local out = { mods = Wax.mods.list(), errors = {} }
-local since = ...
+local since, accepted = ...
+local out = { mods = Wax.mods.list(), errors = {}, accepted = accepted }
 for _, entry in ipairs(Wax.log.since(since, { level = "warn" })) do
     out.errors[#out.errors + 1] = { level = entry.level, channel = entry.channel, message = entry.message }
 end
 return out`;
 
-// Tells the running game to pick up the index and, optionally, reload some mods. Returns the game's reply.
-export async function applyInGame(reloadIds = []) {
+// Tells the running game to pick up the index, switch on those of acceptIds it has not seen (it holds every new mod otherwise) and reload reloadIds. Returns the game's reply.
+export async function applyInGame(reloadIds = [], acceptIds = []) {
   if (!gameRunning()) return { ok: false, error: 'the game is not running' };
   const ids = reloadIds.map(luaString).join(', ');
+  const accept = acceptIds.map(luaString).join(', ');
   return evalLua(`
 if not (rawget(_G, "Wax") and Wax.mods) then error("the Wax core is not running in the game") end
 local since = Wax.log.newest_id()
 Wax.mods.sync()
+local accepted = {}
+for _, id in ipairs({ ${accept} }) do
+    local mod = Wax.mods.get(id)
+    -- a copy the site's button put in (it carries wax.new) is left for the player to switch on
+    if mod and mod.fresh and not mod.mark and Wax.mods.set_enabled(id, true) then accepted[#accepted + 1] = id end
+end
+if #accepted > 0 then Wax.mods.sync() end
 for _, id in ipairs({ ${ids} }) do Wax.mods.reload(id) end
-return (function(...) ${REPORT} end)(since)`, { timeoutSec: 30 });
+return (function(...) ${REPORT} end)(since, accepted)`, { timeoutSec: 30 });
 }
 
 function describe(reply, started, { withErrors = true } = {}) {
   if (!reply.ok) return `  ! ${reply.error}`;
-  const { mods, errors } = reply.values[0];
+  const { mods, errors, accepted } = reply.values[0];
   const lines = [];
+  if (Array.isArray(accepted) && accepted.length) lines.push(`  new to the game, switched on: ${accepted.join(', ')}`);
   for (const mod of Array.isArray(mods) ? mods : []) {
     const mark = mod.status === 'loaded' ? 'ok ' : '!! ';
-    lines.push(`  ${mark}${mod.id} ${mod.version ?? ''} ${mod.status}${mod.error ? ': ' + mod.error : ''}`);
+    const held = mod.fresh ? ' (new: the game holds it until it is switched on in the Mods page)' : '';
+    lines.push(`  ${mark}${mod.id} ${mod.version ?? ''} ${mod.status}${held}${mod.error ? ': ' + mod.error : ''}`);
   }
   if (withErrors) {
     for (const e of Array.isArray(errors) ? errors : []) lines.push(`  [${e.level}] ${e.channel}: ${String(e.message).split('\n').slice(0, 6).join('\n      ')}`);
@@ -119,7 +129,8 @@ export async function sync() {
   const { mods, skipped } = writeIndex();
   for (const note of skipped) console.log(`  skipped ${note}`);
   console.log(`${mods.length} mod(s) indexed: ${mods.map((m) => m.id).join(', ') || 'none'}`);
-  const reply = await applyInGame([]);
+  // what this tool lists is the developer's own work, so a mod the game has not seen is switched on by it
+  const reply = await applyInGame([], mods.map((mod) => mod.id));
   console.log(describe(reply, started));
   return reply;
 }
@@ -163,7 +174,7 @@ export async function watch() {
       const started = performance.now();
       writeIndex();
       console.log(`\n${new Date().toLocaleTimeString()}  changed: ${ids.join(', ')}`);
-      const reply = await applyInGame(ids);
+      const reply = await applyInGame(ids, ids);
       // Everything the reload logged (the mod's own prints, any error with its traceback), then the verdict.
       if (reply.ok) lastLogId = await printNewLog(lastLogId);
       console.log(describe(reply, started, { withErrors: false }));

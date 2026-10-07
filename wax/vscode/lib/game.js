@@ -12,17 +12,20 @@ const GAME_EXE = 'Icarus-Win64-Shipping.exe';
 
 function isGameRunning() {
   if (process.platform !== 'win32') return Promise.resolve(false);
+  // by its full path, so that no other program named tasklist is started
+  const tasklist = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tasklist.exe');
   return new Promise((resolve) => {
-    execFile('tasklist', ['/FI', `IMAGENAME eq ${GAME_EXE}`, '/NH'], { windowsHide: true, timeout: 5000 },
+    execFile(tasklist, ['/FI', `IMAGENAME eq ${GAME_EXE}`, '/NH'], { windowsHide: true, timeout: 5000 },
       (error, stdout) => resolve(!error && String(stdout).includes(GAME_EXE)));
   });
 }
 
-// The bridge client: the workspace's own next to a source checkout, otherwise the copy packed into the extension.
+// The bridge client: the workspace's own inside a source checkout (wax\vscode beside wax\cli and wax\runtime), otherwise the copy packed into the extension.
 function loadBridge(extensionDir) {
-  const candidates = [path.join(extensionDir, '..', 'cli', 'bridge.mjs'), path.join(extensionDir, 'bundled', 'bridge.mjs')];
-  const file = candidates.find((candidate) => fs.existsSync(candidate));
-  if (!file) return Promise.reject(new Error('bridge.mjs is missing from the extension (bundled\\bridge.mjs).'));
+  const own = path.join(extensionDir, '..', 'cli', 'bridge.mjs');
+  const checkout = fs.existsSync(own) && fs.existsSync(path.join(extensionDir, '..', 'runtime', 'Scripts', 'main.lua'));
+  const file = checkout ? own : path.join(extensionDir, 'bundled', 'bridge.mjs');
+  if (!fs.existsSync(file)) return Promise.reject(new Error('bridge.mjs is missing from the extension (bundled\\bridge.mjs).'));
   return import(pathToFileURL(file).href);
 }
 
@@ -32,7 +35,10 @@ const asArray = (value) => (Array.isArray(value) ? value : []);
 const signature = (mods) => JSON.stringify(mods.map((mod) =>
   [mod.id, mod.name, mod.version, mod.status, mod.enabled, mod.error, mod.generation, mod.fresh, mod.dir]));
 
-// state: "unset" (no runtime folder), "absent" (no game), "busy" (not answering), "nocore" (bridge without the core), "connected"
+// What the game answers to Lua while developer mode is off.
+const DEV_OFF = 'dev-off';
+
+// state: "unset" (no runtime folder), "absent" (no game), "busy" (not answering), "nocore" (bridge without the core), "devoff" (it answers, and runs no Lua while developer mode is off), "connected"
 class Game extends EventEmitter {
   constructor({ runtime = null, bridge, running = isGameRunning, interval = 1000, backlog = 40 }) {
     super();
@@ -100,14 +106,28 @@ class Game extends EventEmitter {
     if (changed) this.emit('mods', mods);
   }
 
-  // Runs one of the files in lua/ in the game and returns what it returned. Throws with the game's own message.
+  // Runs one of the files in lua/ in the game and returns what it returned. Throws with the game's own message, and its code when it gives one.
   async call(name, args = [], { timeoutSec = 10 } = {}) {
     if (!this.runtime) throw new Error('The Wax folder of the game was not found.');
     const bridge = await this.loadBridge();
-    const reply = await bridge.evalLua(chunks.call(name, ...args), { timeoutSec, runtime: this.runtime });
-    if (!reply.ok) throw new Error(firstLine(reply.error) || 'the game did not answer');
+    const warn = (text) => this.emit('problem', new Error(text));
+    const reply = await bridge.evalLua(chunks.call(name, ...args), { timeoutSec, runtime: this.runtime, warn });
+    if (!reply.ok) {
+      const error = new Error(firstLine(reply.error) || 'the game did not answer');
+      if (reply.code) error.code = reply.code;
+      throw error;
+    }
     const value = asArray(reply.values)[0];
     return value === '<nil>' ? undefined : value;
+  }
+
+  // While developer mode is off the game is asked with a command, so no Lua is sent that it would refuse again. True when it is still off.
+  async stillOff(timeoutSec) {
+    const bridge = await this.loadBridge();
+    if (typeof bridge.ping !== 'function') return false;
+    const info = await bridge.ping(timeoutSec, { runtime: this.runtime });
+    if (!info) throw new Error('the game stopped answering');
+    return info.dev === false;
   }
 
   // One look at the game. False when it did not answer.
@@ -125,8 +145,16 @@ class Game extends EventEmitter {
   async look(timeoutSec) {
     let reply;
     try {
+      if (this.state === 'devoff' && (await this.stillOff(timeoutSec))) return true;
       reply = await this.call('poll', [this.core, this.lastId, this.lastCount, this.backlog], { timeoutSec });
     } catch (error) {
+      if (error.code === DEV_OFF) {
+        // the game is there and answered: it is not a problem, and not a connection either
+        this.lastProblem = null;
+        this.forget();
+        this.setState('devoff');
+        return true;
+      }
       // said once per outage, so a game that is loading does not fill the log
       if (error.message !== this.lastProblem) this.emit('problem', error);
       this.lastProblem = error.message;
@@ -152,7 +180,7 @@ class Game extends EventEmitter {
     if (!this.active || !this.runtime) return;
     let wait = this.interval;
     try {
-      const wasAnswering = this.state === 'connected' || this.state === 'nocore';
+      const wasAnswering = this.state === 'connected' || this.state === 'nocore' || this.state === 'devoff';
       if (!wasAnswering && !(await this.running())) {
         this.setState('absent');
         wait = 5000;
@@ -160,7 +188,7 @@ class Game extends EventEmitter {
         const running = wasAnswering ? await this.running() : true;
         this.setState(running ? 'busy' : 'absent');
         wait = running ? 3000 : 5000;
-      } else if (this.state === 'nocore') {
+      } else if (this.state === 'nocore' || this.state === 'devoff') {
         wait = 3000;
       }
     } catch (error) {

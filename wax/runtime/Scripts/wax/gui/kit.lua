@@ -28,6 +28,49 @@ function kit.label(content, options)
     return widget
 end
 
+-- Widths of the interface font's letters at size 11, measured from the game. A letter that is not listed is LETTER wide.
+local LETTERS, LETTER = {}, 7.9
+local MONO = 0.8        -- of the size: every letter of the fixed-width font
+for chars, width in pairs({ ["iljI.,:;'!| "] = 3.3, ["frt-()[]{}/*\""] = 6.1, mw = 11.7, MW = 13.6,
+    ABCDEFGHJKLNOPQRSTUVXYZ = 9.2 }) do
+    for at = 1, #chars do LETTERS[chars:byte(at)] = width end
+end
+
+-- How wide a line of text draws, worked out from its letters. A text block cannot be asked before it has been drawn.
+function kit.text_width(content, size, family)
+    local text = tostring(content)
+    size = size or style.theme.font_size
+    if family == "mono" then return (utf8.len(text) or #text) * MONO * size end
+    local total = 0
+    for at = 1, #text do
+        local byte = text:byte(at)
+        -- the later bytes of a letter outside ASCII add nothing
+        if byte < 128 or byte >= 192 then total = total + (LETTERS[byte] or LETTER) end
+    end
+    return total * size / 11
+end
+
+-- The text if it fits in `width`, else its start with "..." after it (its end, with from_end). Also returns whether it was cut.
+function kit.shorten(content, width, size, family, from_end)
+    local text = tostring(content)
+    if kit.text_width(text, size, family) <= width then return text, false end
+    local room = width - kit.text_width("...", size, family)
+    if room <= 0 then return "", true end
+    local letters = {}
+    for letter in text:gmatch(utf8.charpattern) do letters[#letters + 1] = letter end
+    local first, last, step = 1, #letters, 1
+    if from_end then first, last, step = #letters, 1, -1 end
+    local used, kept = 0, 0
+    for at = first, last, step do
+        used = used + kit.text_width(letters[at], size, family)
+        if used > room then break end
+        kept = kept + 1
+    end
+    if kept == 0 then return "", true end
+    if from_end then return "..." .. table.concat(letters, "", #letters - kept + 1), true end
+    return (table.concat(letters, "", 1, kept):gsub("%s+$", "")) .. "...", true
+end
+
 -- options: pad (margin), h, v (alignment), fill (a weight for sharing the leftover space)
 function kit.slot(layout_slot, options)
     if not options then return layout_slot end

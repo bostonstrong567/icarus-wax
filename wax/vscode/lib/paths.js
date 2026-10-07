@@ -95,7 +95,8 @@ function steamFromRegistry(keys = STEAM_KEYS) {
     if (registry.has(where)) continue;
     registry.set(where, null);
     try {
-      const out = execFileSync('reg', ['query', where, '/v', name],
+      // by its full path, so that no other program named reg is started
+      const out = execFileSync(path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'reg.exe'), ['query', where, '/v', name],
         { encoding: 'utf8', windowsHide: true, timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] });
       const match = out.match(new RegExp(`${name}\\s+REG_(?:EXPAND_)?SZ\\s+(.+)`));
       if (match) registry.set(where, path.normalize(match[1].trim()));

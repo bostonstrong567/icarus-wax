@@ -221,6 +221,45 @@ game = {}
 """
 
 
+# A list shaped like wax\runtime\data\needs.lua, over the dump above.
+NEEDS = """-- what two made-up parts use
+return {
+    {
+        id = "state", name = "Actor state", without = "Nothing shows health.",
+        classes = {
+            { class = "/Script/Icarus.CharacterState", properties = { "Health", "Stamina" }, functions = { "IsAlive" } },
+            { class = "/Game/Mods/BP_Thing.BP_Thing_C", properties = { "Use Sun" }, functions = { "Get Fog Scale" } },
+        },
+        structs = { { struct = "/Script/Icarus.BigDamagePacket", fields = { "Amount", "Scale" } } },
+        enums = { { enum = "/Script/Icarus.EAliveState", values = { Alive = 0, Dead = 1 } } },
+        tables = {
+            { table = "D_Damage", fields = { "Amount", "Scale", "Causer" }, meta = { "Level.RowName" } },
+            { table = "D_Loose", fields = { "Hits.At.X", "Hits.Never.Filled" } },
+        },
+    },
+    { id = "screens", name = 'Screens', classes = { { class = "/Game/UI/UMG_Late.UMG_Late_C", late = true, properties = { "List" } } } },
+}
+"""
+NEEDS_CHANGES = (
+    ('"/Script/Icarus.CharacterState", properties = { "Health", "Stamina" }, functions = { "IsAlive" }',
+     '"/Script/Icarus.CharacterState", properties = { "Healt", "IsAlive" }, functions = { "GetHealthy" }'),
+    ("/Game/Mods/BP_Thing.BP_Thing_C", "/Game/Other/BP_Thing.BP_Thing_C"),
+    ('fields = { "Amount", "Scale" }', 'fields = { "Amount", "Scales" }'),
+    ("values = { Alive = 0, Dead = 1 }", "values = { Alive = 1, Deceased = 1, Gone = 9 }"),
+    ('fields = { "Amount", "Scale", "Causer" }, meta = { "Level.RowName" }',
+     'fields = { "Amounts", "Amount.More", "Causer" }, meta = { "Level.RowName" }'),
+    ('{ table = "D_Loose",', '{ table = "D_Lose", fields = { "A" } }, { table = "D_Loose",'),
+    ('functions = { "Get Fog Scale" } },', 'functions = { "Get Fog Scale" } }, { class = "/Script/Icarus.ActorStates" },'),
+)
+TABLES = {
+    "Traits/D_Damage.json": {"RowStruct": "/Script/Icarus.BigDamagePacket", "Defaults": {"Amount": 0, "Scale": 1, "Causer": None},
+                             "Rows": [{"Name": "Small", "Amount": 2, "Metadata": {"Level": {"RowName": "One"}}}, {"Name": "Big"}]},
+    "D_Loose.json": {"RowStruct": "/Script/Icarus.NotInTheDump", "Defaults": {"Hits": []},
+                     "Rows": [{"Name": "One", "Hits": [{"At": {"X": 1}}]}]},
+    "DataTableMetadata.json": {"LoadingPhases": {}},
+}
+
+
 class Scratch(unittest.TestCase):
     """A folder under build that is removed when the tests of the class are done."""
 
@@ -674,6 +713,98 @@ class HandWrittenDump(Scratch):
         self.assertEqual(gameindex.find(self.index, "nothing like this", 20), ([], 0))
         self.assertEqual(len(gameindex.find(self.index, "e", 5)[0]), 5)
 
+    def test_lua_data(self):
+        read = gameindex.read_lua_data
+        self.assertEqual(read('return { "a", \'b\', 3, -4, 1.5, true, false }'), ["a", "b", 3, -4, 1.5, True, False])
+        self.assertEqual(read('{ id = "x", ["a key"] = { 1, 2 }, nested = { deep = {} } } -- the end'),
+                         {"id": "x", "a key": [1, 2], "nested": {"deep": []}})
+        self.assertEqual(read('{ "first", name = "n", "second" }'), {"name": "n", 1: "first", 2: "second"})
+        self.assertEqual(read('{ "a \\"quoted\\" word", "back\\\\slash", "-- not a comment" } -- a comment'),
+                         ['a "quoted" word', "back\\slash", "-- not a comment"])
+        for text in ('return { a = function() end }', "{ 1, 2", "{ 1 } 2", "{ a + 1 }"):
+            with self.assertRaises(SystemExit, msg=text):
+                read(text)
+
+    def needs(self, text=NEEDS):
+        folder = os.path.join(self.dir, "tables")
+        for name, data in TABLES.items():
+            self.put("tables/" + name, json.dumps(data))
+        return gameindex.check_needs(gameindex.read_needs(self.put("needs/needs.lua", text)), self.index, gameindex.TableFiles(folder))
+
+    def test_what_wax_uses_is_found_in_the_index_and_the_tables(self):
+        state, screens = self.needs()
+        self.assertEqual((state["id"], state["name"], state["missing"]), ("state", "Actor state", []))
+        self.assertEqual(state["checked"], 21)
+        self.assertEqual([item["name"] for item in state["unknown"]], ["D_Loose:Hits.Never.Filled"])
+        self.assertEqual(screens["missing"], [])
+        self.assertEqual([(item["kind"], item["name"]) for item in screens["unknown"]], [("class", "/Game/UI/UMG_Late.UMG_Late_C")])
+        self.assertIn("not in this dump", screens["unknown"][0]["why"])
+        lines = gameindex.needs_lines([state, screens])
+        self.assertIn("Actor state (state): fine, 21 names, 1 could not be checked", lines)
+        self.assertIn("Screens (screens): fine, 2 names, 1 could not be checked", lines)
+        self.assertEqual(lines[-1], "All 2 parts are fine (23 names).")
+
+    def test_what_is_gone_is_named_with_the_closest_name(self):
+        text = NEEDS
+        for old, new in NEEDS_CHANGES:
+            self.assertIn(old, text)
+            text = text.replace(old, new)
+        state, screens = self.needs(text)
+        found = {item["name"]: (item["kind"], item["hint"], item["note"]) for item in state["missing"]}
+        self.assertEqual(found, {
+            "/Script/Icarus.CharacterState:Healt": ("property", "Health", None),
+            "/Script/Icarus.CharacterState:IsAlive": ("property", None, "it is a function now"),
+            "/Script/Icarus.CharacterState:GetHealthy": ("function", "GetHealth", None),
+            "/Game/Other/BP_Thing.BP_Thing_C": ("class", "/Game/Mods/BP_Thing.BP_Thing_C", "it is at another path"),
+            "/Script/Icarus.BigDamagePacket:Scales": ("field", "Scale", None),
+            "/Script/Icarus.EAliveState:Alive": ("value", None, "it is 0 now and Wax expects 1"),
+            "/Script/Icarus.EAliveState:Deceased": ("value", None, "Dead has its number, 1"),
+            "/Script/Icarus.EAliveState:Gone": ("value", None, None),
+            "D_Damage:Amounts": ("field", "Amount", "not in BigDamagePacket"),
+            "D_Damage:Amount.More": ("field", None, "Amount has no fields"),
+            "D_Lose": ("table", "D_Loose", None),
+            "/Script/Icarus.ActorStates": ("class", "/Script/Icarus.ActorState", None),
+        })
+        self.assertEqual(screens["missing"], [])
+        lines = gameindex.needs_lines([state, screens])
+        self.assertIn("Actor state (state): 12 of 25 names are gone, 1 could not be checked", lines)
+        self.assertIn("    - property /Script/Icarus.CharacterState:Healt  (closest: Health)", lines)
+        self.assertIn("    - field D_Damage:Amounts  (not in BigDamagePacket, closest: Amount)", lines)
+        self.assertEqual(lines[-1], "1 of 2 parts use names the game no longer has: Actor state.")
+
+    def test_a_field_the_table_lost_is_gone_whatever_the_dump_says(self):
+        tables = dict(TABLES)
+        try:
+            TABLES["Traits/D_Damage.json"] = {"RowStruct": "/Script/Icarus.BigDamagePacket", "Defaults": {"Amount": 0}, "Rows": []}
+            state, _ = self.needs()
+        finally:
+            TABLES.update(tables)
+        found = {item["name"]: item["note"] for item in state["missing"]}
+        self.assertEqual(found, {"D_Damage:Scale": "not among the table's fields", "D_Damage:Causer": "not among the table's fields"})
+        self.assertEqual(sorted(item["name"] for item in state["unknown"]),
+                         ["D_Damage (its meta table):Level.RowName", "D_Loose:Hits.Never.Filled"])
+
+    def test_needs_command_line(self):
+        script = os.path.join(HERE, "gameindex.py")
+        index = os.path.join(self.dir, "needs-cli", "index.json")
+        gameindex.write_index(self.index, index)
+        for name, data in TABLES.items():
+            self.put("tables/" + name, json.dumps(data))
+        broken = NEEDS.replace('"Stamina"', '"Stamna"')
+
+        def run(text, *more):
+            return subprocess.run([sys.executable, script, "needs", "--index", index, "--tables", os.path.join(self.dir, "tables"),
+                                   "--needs", self.put("needs-cli/needs.lua", text), *more], capture_output=True, text=True)
+
+        fine = run(NEEDS)
+        self.assertEqual(fine.returncode, 0, fine.stdout + fine.stderr)
+        self.assertIn("All 2 parts are fine (23 names).", fine.stdout)
+        gone = run(broken)
+        self.assertEqual(gone.returncode, 1, gone.stdout + gone.stderr)
+        self.assertIn("    - property /Script/Icarus.CharacterState:Stamna  (closest: Stamina)", gone.stdout)
+        self.assertEqual(json.loads(run(broken, "--json").stdout)[0]["missing"][0]["hint"], "Stamina")
+        self.assertNotEqual(run("return { { name = 'no id' } }").returncode, 0)
+
     def test_command_line(self):
         out = os.path.join(self.dir, "cli")
         script = os.path.join(HERE, "gameindex.py")
@@ -775,6 +906,17 @@ class RealDump(Scratch):
         site, manifest = gameindex.make_site(self.index)
         self.assertLessEqual(max(c["bytes"] for c in manifest["chunks"]), gameindex.SITE_CHUNK_LIMIT)
         self.assertLess(manifest["search"]["bytes"], 400 * 1024)
+
+    def test_the_game_still_has_what_wax_uses(self):
+        if not os.path.isdir(gameindex.TABLES_DIR):
+            self.skipTest(f"the game's tables are not at {gameindex.TABLES_DIR} (scripts\\Export-GameData.ps1)")
+        parts = gameindex.read_needs(gameindex.NEEDS)
+        results = gameindex.check_needs(parts, self.index, gameindex.TableFiles(gameindex.TABLES_DIR))
+        gone = [line for line in gameindex.needs_lines(results) if line.startswith("    - ")]
+        self.assertEqual(gone, [], "wax\\runtime\\data\\needs.lua names what the game no longer has (python scripts\\gameindex.py needs)")
+        self.assertGreater(sum(result["checked"] for result in results), 400)
+        for part in parts:
+            self.assertTrue(part.get("without", "").endswith("."), f"{part['id']} says what stops working without it")
 
     @unittest.skipUnless(os.path.isfile(LANGUAGE_SERVER), "the Lua language server is not installed (scripts\\Get-Tools.ps1)")
     def test_the_language_server_knows_the_members_and_their_types(self):

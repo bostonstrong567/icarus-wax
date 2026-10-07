@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { require, scratch, put, writeIndex, startStandInGame, ROOT, EXTENSION, LUA } from './helpers.mjs';
+import { require, scratch, put, writeIndex, startStandInGame, waxIn, ROOT, EXTENSION, LUA } from './helpers.mjs';
 
 const { Game, loadBridge, asArray } = require('../lib/game.js');
 const chunks = require('../lib/chunks.js');
@@ -16,22 +16,23 @@ const { formatEntry, locateInChunk } = require('../lib/logformat.js');
 const noLua = !fs.existsSync(LUA) && 'standalone Lua is not installed (scripts\\Get-Tools.ps1)';
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// A bridge that answers from a list of replies and remembers what it was sent.
-function fakeBridge(replies) {
+// A bridge that answers from a list of replies and remembers what it was sent. pings: what its ping command answers, when it has one.
+function fakeBridge(replies, pings) {
   const sent = [];
-  return {
-    sent,
-    load: async () => ({
-      evalLua: async (code, options) => {
-        sent.push({ code, options });
-        const next = replies.shift();
-        return next ?? { ok: false, error: 'timeout: the game did not pick up the request (game thread not ticking?)' };
-      },
-    }),
+  const client = {
+    evalLua: async (code, options) => {
+      sent.push({ code, options });
+      const next = replies.shift();
+      return next ?? { ok: false, error: 'timeout: the game did not pick up the request (game thread not ticking?)' };
+    },
   };
+  if (pings) client.ping = async () => pings.shift() ?? null;
+  return { sent, load: async () => client };
 }
 
 const answer = (value) => ({ ok: true, values: [value], output: {} });
+// What the game answers to Lua while developer mode is off.
+const refusal = () => ({ ok: false, code: 'dev-off', output: {}, error: 'Developer mode is off, so this was not run. Wax only runs Lua sent from outside the game while a file named dev.txt is in its folder.' });
 
 test('a request is one of the lua files, called with the values given', () => {
   const text = chunks.call('mods', 'reload', 'Hello');
@@ -78,6 +79,43 @@ test('a game that is there but silent is "busy"; one whose core did not start is
   assert.equal(bridge.sent[0].options.runtime, 'X:/Wax');
   // why it is not answering is said once, not on every try
   assert.deepEqual(problems, ['timeout: the game did not pick up the request (game thread not ticking?)']);
+});
+
+test('a game with developer mode off is "devoff": no Lua is sent to it again until a command says the mode is on', async () => {
+  const mods = [{ id: 'Hello', name: 'Hello', status: 'loaded', enabled: true, generation: 1 }];
+  const bridge = fakeBridge([refusal(), answer({ core: 'table: 0x01', newest: 1, entries: {}, mods }), refusal()],
+    [{ dev: false, core: true }, { dev: false, core: true }, { dev: true, core: true }]);
+  const game = new Game({ runtime: 'X:/Wax', bridge: bridge.load, running: async () => true });
+  const states = [];
+  const problems = [];
+  game.on('state', (state) => states.push(state));
+  game.on('problem', (error) => problems.push(error.message));
+  game.active = true;
+  await game.tick();
+  assert.equal(game.state, 'devoff');
+  assert.equal(game.connected, false);
+  assert.deepEqual(game.mods, []);
+  await game.tick();
+  await game.tick();
+  assert.equal(bridge.sent.length, 1, 'while the mode is off the game is asked with a command, not with Lua');
+  await game.tick();
+  assert.equal(game.state, 'connected');
+  assert.equal(bridge.sent.length, 2);
+  assert.deepEqual(game.mods.map((mod) => mod.id), ['Hello']);
+  // the mode goes off again while connected: the next look says so
+  await game.tick();
+  game.stop();
+  assert.deepEqual(states, ['devoff', 'connected', 'devoff']);
+  assert.deepEqual(problems, [], 'a game that answers is not a problem');
+});
+
+test('what the user asks for while developer mode is off fails with the game\'s own words and a code', async () => {
+  const bridge = fakeBridge([refusal(), refusal(), refusal()]);
+  const game = new Game({ runtime: 'X:/Wax', bridge: bridge.load, running: async () => true });
+  for (const ask of [() => game.reload('Hello'), () => game.setEnabled('Hello', true), () => game.run({ source: 'return 1', chunkname: 'x.lua' })]) {
+    await assert.rejects(ask(), (error) => error.code === 'dev-off' && /^Developer mode is off, so this was not run\./.test(error.message));
+  }
+  assert.equal(bridge.sent.length, 3);
 });
 
 test('a bridge client that cannot be loaded is reported, not mistaken for a missing game', async () => {
@@ -154,7 +192,7 @@ test('the bridge client is the workspace\'s own beside a source checkout, the pa
 });
 
 test('against the real bridge and the real Wax core', { skip: noLua }, async (t) => {
-  const dir = scratch(t);
+  const dir = waxIn(scratch(t));
   const modsDir = path.join(dir, 'mods');
   const index = () => writeIndex(dir, modsDir);
   put(dir, {
@@ -322,6 +360,114 @@ test('against the real bridge and the real Wax core', { skip: noLua }, async (t)
     await game.poll();
     assert.ok(log.length > before + 5, 'the log was read again from the start of what is kept');
     assert.equal(game.state, 'connected');
+  });
+
+  assert.equal(standIn.stderr, '');
+});
+
+test('against the real bridge, in a game without dev.txt: commands are answered and Lua is not run', { skip: noLua }, async (t) => {
+  const dir = waxIn(scratch(t));
+  const modsDir = path.join(dir, 'mods');
+  const counts = 'raw.MARKED_RAN = (raw.MARKED_RAN or 0) + 1\nreturn {}\n';
+  put(dir, {
+    'mods/Alpha/mod.lua': 'return { name = "Alpha Mod", version = "1.2.3" }\n',
+    'mods/Alpha/init.lua': 'return { made = "first" }\n',
+    'mods/Marked/mod.lua': 'return { name = "Marked Mod", version = "1.0.0" }\n',
+    'mods/Marked/init.lua': counts,
+  });
+  const standIn = await startStandInGame(t, dir, { dev: false });
+  const bridge = await import(pathToFileURL(path.join(ROOT, 'wax', 'cli', 'bridge.mjs')).href);
+  const game = new Game({ runtime: dir, bridge: async () => bridge, running: async () => true });
+  const at = { runtime: dir, timeoutSec: 10 };
+
+  await t.test('Lua is refused in the game\'s own words, and the game is "devoff"', async () => {
+    const refused = await bridge.evalLua('raw.RAN = true return 1 + 1', at);
+    assert.deepEqual([refused.ok, refused.code], [false, 'dev-off']);
+    assert.match(refused.error, /^Developer mode is off, so this was not run\. .*dev\.txt.*"Wax: Switch Developer Mode On"/);
+    assert.match(bridge.devModeHelp(dir), /put a file named dev\.txt in that folder/);
+    assert.equal(await game.poll(), true);
+    assert.equal(game.state, 'devoff');
+    assert.deepEqual(game.mods, []);
+    await assert.rejects(game.reload('Alpha'), (error) => error.code === 'dev-off');
+    await assert.rejects(game.run({ source: 'return 1', chunkname: 'x.lua' }), (error) => error.code === 'dev-off');
+  });
+
+  await t.test('ping says the game is there, that the core is up and that developer mode is off', async () => {
+    const info = await bridge.ping(5, { runtime: dir });
+    assert.deepEqual([info.thread, info.core, info.dev, typeof info.frame], ['game', true, false, 'number']);
+  });
+
+  await t.test('mod-added for a mod the player did not have lists it switched off', async () => {
+    put(modsDir, { 'Arrives/mod.lua': 'return { name = "Arrives Mod", version = "2.0.0" }\n', 'Arrives/init.lua': 'raw.ARRIVES_RAN = true\nreturn {}\n' });
+    const reply = await bridge.command('mod-added', { id: 'Arrives' }, at);
+    assert.equal(reply.ok, true);
+    assert.deepEqual(reply.values[0], { id: 'Arrives', name: 'Arrives Mod', version: '2.0.0', status: 'disabled', enabled: false, fresh: true });
+  });
+
+  await t.test('mod-added for a mod that was running loads its new files', async () => {
+    put(modsDir, { 'Alpha/mod.lua': 'return { name = "Alpha Mod", version = "1.3.0" }\n', 'Alpha/init.lua': 'return { made = "second" }\n' });
+    const reply = await bridge.command('mod-added', { id: 'Alpha' }, at);
+    assert.deepEqual(reply.values[0], { id: 'Alpha', name: 'Alpha Mod', version: '1.3.0', status: 'loaded', enabled: true, fresh: false });
+  });
+
+  await t.test('mod-added for a copy that carries wax.new holds it, though the player had the mod and it was running', async () => {
+    // deleted by hand, then put back by the button, which marks a copy it puts where no folder was
+    fs.rmSync(path.join(modsDir, 'Marked'), { recursive: true });
+    put(modsDir, {
+      'Marked/mod.lua': 'return { name = "Marked Mod", version = "1.1.0" }\n', 'Marked/init.lua': counts,
+      'Marked/wax.origin': 'id=Marked\nversion=1.1.0\n', 'Marked/wax.new': 'new\n',
+    });
+    const reply = await bridge.command('mod-added', { id: 'Marked' }, at);
+    assert.equal(reply.ok, true);
+    assert.deepEqual(reply.values[0], { id: 'Marked', name: 'Marked Mod', version: '1.1.0', status: 'disabled', enabled: false, fresh: true });
+  });
+
+  await t.test('a command that is not one, or names no mod, is refused with a code', async () => {
+    const code = async (name, values) => {
+      const reply = await bridge.command(name, values, at);
+      return [reply.ok, reply.code];
+    };
+    assert.deepEqual(await code('mod-added', { id: 'Ghost' }), [false, 'no-mod']);
+    assert.deepEqual(await code('mod-added', { id: '../Alpha' }), [false, 'bad-request']);
+    assert.deepEqual(await code('mod-added', {}), [false, 'bad-request']);
+    assert.deepEqual(await code('mod-added', { id: 'Alpha', name: 'Another name' }), [false, 'bad-request']);
+    assert.deepEqual(await code('ping', { id: 'Alpha' }), [false, 'bad-request']);
+    assert.deepEqual(await code('run', { code: 'raw.RAN = true' }), [false, 'unknown-command']);
+    assert.throws(() => bridge.command('Mod Added'), /not the name of a command/);
+    assert.throws(() => bridge.command('mod-added', { id: 'Alpha\n--wax:ping' }), /cannot be sent/);
+  });
+
+  await t.test('with dev.txt put there the next look connects, and shows what the player was told and that nothing ran', async () => {
+    fs.writeFileSync(path.join(dir, 'dev.txt'), '');
+    const log = [];
+    game.on('log', (entries) => log.push(...entries));
+    assert.equal(await game.poll(), true);
+    assert.equal(game.state, 'connected');
+    assert.deepEqual(game.mods.map((mod) => [mod.id, mod.status, mod.fresh ?? false]),
+      [['Alpha', 'loaded', false], ['Arrives', 'disabled', true], ['Marked', 'disabled', true]]);
+    assert.deepEqual(log.filter((entry) => entry.channel === 'notification').map((entry) => entry.message), [
+      'New mod: Arrives Mod 2.0.0 was added. It stays switched off until you switch it on in the Mods page.',
+      'Mods: Alpha Mod 1.3.0 was put in and is running.',
+      'New mod: Marked Mod 1.1.0 was added. It stays switched off until you switch it on in the Mods page.',
+    ]);
+    const ran = await game.run({ source: 'return raw.RAN, raw.ARRIVES_RAN, exports.Alpha.made, raw.MARKED_RAN', chunkname: 'peek.lua', fresh: true });
+    assert.deepEqual(ran.values, ['nil', 'nil', 'second', '1'], 'the marked copy has not run: the one count is from before it was replaced');
+    assert.equal((await bridge.ping(5, { runtime: dir })).dev, true);
+  });
+
+  await t.test('switching the marked mod on takes its mark away and runs it', async () => {
+    await game.setEnabled('Marked', true);
+    assert.equal(game.mods.find((mod) => mod.id === 'Marked').status, 'loaded');
+    assert.equal(fs.existsSync(path.join(modsDir, 'Marked', 'wax.new')), false);
+    assert.ok(fs.existsSync(path.join(modsDir, 'Marked', 'wax.origin')));
+  });
+
+  await t.test('and with it taken away again the game is back to commands only', async () => {
+    fs.rmSync(path.join(dir, 'dev.txt'));
+    assert.equal(await game.poll(), true);
+    assert.equal(game.state, 'devoff');
+    assert.equal(await game.poll(), true);
+    assert.equal(game.state, 'devoff');
   });
 
   assert.equal(standIn.stderr, '');

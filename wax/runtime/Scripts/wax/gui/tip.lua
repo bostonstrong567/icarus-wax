@@ -15,6 +15,7 @@ local AWAY_X, AWAY_Y = 16, 20
 local V = style.Visibility
 local panel = nil       -- { outer, slot, title, lines = { label }, destroyed }
 local shown, flipped_x, flipped_y = false, nil, nil
+local keep = nil        -- asked every frame while a tip shows: false takes the tip away
 
 local function build()
     local theme = style.theme
@@ -36,6 +37,7 @@ local function build()
         local outline = kit.image(theme.outline, "frame6", 1, 1)
         kit.slot(frame:AddChild(outline), { h = style.HAlign.Fill, v = style.VAlign.Fill })
         made.outer = kit.scaled(frame)
+        made.zoom = tip.ZOOM
         made.outer:SetUserSpecifiedScale(style.scale * tip.ZOOM)
         made.outer:SetVisibility(V.Collapsed)
         made.slot = root.layer("toasts"):AddChild(made.outer)
@@ -47,7 +49,8 @@ local function build()
 end
 
 -- content: a text, { title = "...", lines = { "text" or { text, tone } } }, or a function that returns one of those.
-function tip.show(content)
+-- options: { keep = function that says each frame whether the tip stays, zoom = its size beside a window's text (1.2 when left out) }
+function tip.show(content, options)
     if not root.exists() then return end
     if type(content) == "function" then
         local ok, result = guard.call("tooltip", content)
@@ -55,6 +58,12 @@ function tip.show(content)
     end
     if content == nil or content == "" then return tip.hide() end
     panel = panel or build()
+    keep = options and options.keep or nil
+    local zoom = options and options.zoom or tip.ZOOM
+    if zoom ~= panel.zoom then
+        panel.zoom = zoom
+        panel.outer:SetUserSpecifiedScale(style.scale * zoom)
+    end
     local title, lines = content, nil
     if type(content) == "table" then title, lines = content.title or content[1] or "", content.lines end
     title = tostring(title)
@@ -95,14 +104,19 @@ end
 
 function tip.hide()
     if shown and panel then panel.outer:SetVisibility(V.Collapsed) end
-    shown = false
+    shown, keep = false, nil
 end
 
-function tip.showing() return shown end
+-- Whether a tip shows, and its first line.
+function tip.showing() return shown, shown and panel and panel.title_text or nil end
 
 -- Every frame while it shows: stay beside the mouse, on the side that has room.
 function tip.step()
     if not (shown and panel) then return end
+    if keep then
+        local ok, stay = pcall(keep)
+        if not (ok and stay) then return tip.hide() end
+    end
     local x, y = root.mouse()
     local width, height = root.viewport_size()
     local left, up = x > width * 0.66, y > height * 0.7
@@ -114,13 +128,13 @@ function tip.step()
 end
 
 function tip.rescale()
-    if panel then panel.outer:SetUserSpecifiedScale(style.scale * tip.ZOOM) end
+    if panel then panel.outer:SetUserSpecifiedScale(style.scale * panel.zoom) end
 end
 
 -- The interface was rebuilt: the old panel must not be touched again.
 function tip.forget()
     if panel then panel.destroyed = true end
-    panel, shown = nil, false
+    panel, shown, keep = nil, false, nil
 end
 
 return tip

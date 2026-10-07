@@ -1,9 +1,24 @@
-/* waxnet: downloads files from the Wax mod catalogue for Lua, which cannot make web requests. It never touches Lua. */
+/* waxnet: downloads files from the Wax mod catalogue for Lua, which cannot make web requests, and checks the owner's signature on a list of files. It never touches Lua. */
 #include <windows.h>
 #include <winhttp.h>
 #include <bcrypt.h>
 
+/* The owner's public key: a P-256 point, X then Y, in hex. `node wax/market/cli.mjs wax-key` prints the line that replaces the second one. */
+#define WAX_NO_PUBLIC_KEY "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+#define WAX_PUBLIC_KEY "8b37ac88ea0d9e8a8d239b731f1ba1d12fe163c605f6fe3c3933253e36421a953c5d04fdcb94e3934223e41aeb511593788140a7865c00ab2f6ad67746900d62"
+
+#define QUOTED_AS_IS(value) #value
+#define QUOTED(value) QUOTED_AS_IS(value)
+#ifdef WAX_TEST_KEY
+__attribute__((used)) static const char public_key[] = QUOTED(WAX_TEST_KEY);
+#else
+__attribute__((used)) static const char public_key[] = WAX_PUBLIC_KEY;
+#endif
+_Static_assert(sizeof public_key == 129, "the public key is 128 hex digits");
+
 #define HOST L"wax-icarus.duckdns.org"
+#define MAX_LIST (4 * 1024 * 1024)
+#define BAD_SIGNATURE ((NTSTATUS)0xC000A000L)
 #define MAX_JOBS 600
 #define MAX_ANSWER (25ULL * 1024 * 1024)
 #define MAX_RUN (64ULL * 1024 * 1024)
@@ -434,6 +449,105 @@ static void clear(Run *run, const char *out, DWORD out_len)
     say(run, out, out_len, ok ? 200 : 0, 0, NULL, ok ? "" : "the folder could not be cleared");
 }
 
+/* The key this file was built with, as 64 bytes. 0 while it is the placeholder, and then no signature is good. */
+static int own_key(unsigned char *point)
+{
+    DWORD i;
+    unsigned char any = 0;
+    for (i = 0; i < 64; i++) {
+        int high = hex_value(public_key[2 * i]), low = hex_value(public_key[2 * i + 1]);
+        if (high < 0 || low < 0) return 0;
+        point[i] = (unsigned char)(high * 16 + low);
+        any |= point[i];
+    }
+    return any != 0;
+}
+
+static int base64_value(char c)
+{
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    return c == '+' ? 62 : c == '/' ? 63 : -1;
+}
+
+/* A signature file: the 64 bytes as 88 characters of base64, with or without a line ending after them. */
+static int read_signature(const char *text, DWORD n, unsigned char *out)
+{
+    DWORD i, at = 0;
+    int a, b, c, d;
+    while (n > 88 && (text[n - 1] == '\n' || text[n - 1] == '\r')) n--;
+    if (n != 88 || text[86] != '=' || text[87] != '=') return 0;
+    for (i = 0; i < 84; i += 4) {
+        a = base64_value(text[i]); b = base64_value(text[i + 1]); c = base64_value(text[i + 2]); d = base64_value(text[i + 3]);
+        if (a < 0 || b < 0 || c < 0 || d < 0) return 0;
+        out[at++] = (unsigned char)(a << 2 | b >> 4);
+        out[at++] = (unsigned char)(b << 4 | c >> 2);
+        out[at++] = (unsigned char)(c << 6 | d);
+    }
+    a = base64_value(text[84]); b = base64_value(text[85]);
+    if (a < 0 || b < 0 || (b & 15)) return 0;
+    out[at] = (unsigned char)(a << 2 | b >> 4);
+    return 1;
+}
+
+/* 1 when the signature over the checksum was made with the private half of the key, 0 when not, -1 when Windows could not say. */
+static int signed_by(const unsigned char *point, unsigned char *digest, unsigned char *signature)
+{
+    BCRYPT_ALG_HANDLE ecdsa = NULL;
+    BCRYPT_KEY_HANDLE key = NULL;
+    BCRYPT_ECCKEY_BLOB head;
+    unsigned char blob[sizeof head + 64];
+    NTSTATUS status = -1;
+    DWORD i;
+    head.dwMagic = BCRYPT_ECDSA_PUBLIC_P256_MAGIC;
+    head.cbKey = 32;
+    for (i = 0; i < sizeof head; i++) blob[i] = ((const unsigned char *)&head)[i];
+    for (i = 0; i < 64; i++) blob[sizeof head + i] = point[i];
+    if (BCryptOpenAlgorithmProvider(&ecdsa, BCRYPT_ECDSA_P256_ALGORITHM, NULL, 0) < 0) return -1;
+    if (BCryptImportKeyPair(ecdsa, NULL, BCRYPT_ECCPUBLIC_BLOB, &key, blob, sizeof blob, 0) >= 0) {
+        status = BCryptVerifySignature(key, NULL, digest, 32, signature, 64, 0);
+        BCryptDestroyKey(key);
+    }
+    BCryptCloseAlgorithmProvider(ecdsa, 0);
+    return status == 0 ? 1 : status == BAD_SIGNATURE ? 0 : -1;
+}
+
+static int plain_file(const WCHAR *path)
+{
+    DWORD kind = GetFileAttributesW(path);
+    return kind != INVALID_FILE_ATTRIBUTES && !(kind & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT));
+}
+
+/* A request line "=<TAB><list>" checks the file <list> against the owner's signature in <list>.sig. Only a status of 200 means it is good. */
+static void verify(Run *run, const char *out, DWORD out_len)
+{
+    WCHAR status[MAX_PATH], list_path[MAX_PATH], signature_path[MAX_PATH];
+    unsigned char point[64], signature[64], digest[32];
+    BCRYPT_HASH_HANDLE hash = NULL;
+    char *list = NULL, *text = NULL;
+    const char *why = NULL;
+    DWORD size = 0, text_size = 0;
+    int answer;
+    if (!join(run, out, out_len, L".status", status) || !join(run, out, out_len, L"", list_path) || !join(run, out, out_len, L".sig", signature_path)) return;
+    if (!make_parents(run, out, out_len)) return;
+    DeleteFileW(status);
+    if (!own_key(point)) why = "this build has no signing key";
+    else if (!plain_file(list_path) || !(list = slurp(list_path, MAX_LIST, &size))) why = "the list is missing or too large";
+    else if (!plain_file(signature_path) || !(text = slurp(signature_path, 256, &text_size))) why = "the signature is missing";
+    else if (!read_signature(text, text_size, signature)) why = "the signature is not 64 bytes in base64";
+    else if (BCryptCreateHash(run->sha, &hash, NULL, 0, NULL, 0, 0) < 0) { hash = NULL; why = "could not start the checksum"; }
+    else if (BCryptHashData(hash, (PUCHAR)list, size, 0) < 0 || BCryptFinishHash(hash, digest, 32, 0) < 0) why = "could not work out the checksum";
+    else {
+        answer = signed_by(point, digest, signature);
+        if (answer != 1) why = answer == 0 ? "the signature does not match" : "the signature could not be checked";
+    }
+    say(run, out, out_len, why ? 0 : 200, size, why ? NULL : digest, why);
+    if (hash) BCryptDestroyHash(hash);
+    if (list) HeapFree(GetProcessHeap(), 0, list);
+    if (text) HeapFree(GetProcessHeap(), 0, text);
+}
+
 /* "Wax/<version>", the version being the first line of <Wax root>\VERSION. */
 static void name_agent(Run *run)
 {
@@ -496,6 +610,7 @@ static void work(void)
         if (++jobs > MAX_JOBS) break;
         if (!good_out(text + tab + 1, end - tab - 1)) continue;
         if (tab - start == 1 && text[start] == '-') clear(run, text + tab + 1, end - tab - 1);
+        else if (tab - start == 1 && text[start] == '=') verify(run, text + tab + 1, end - tab - 1);
         else get(run, text + start, tab - start, text + tab + 1, end - tab - 1);
     }
 

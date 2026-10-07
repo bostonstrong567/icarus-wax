@@ -56,8 +56,8 @@ for _, size in ipairs(SCREENS) do
         t.ok(L.column_left > width * 0.6, "the column is not most of the screen")
         t.ok(L.column * layout.ZOOM <= 300, "the column is as wide as on a 16 by 9 screen, " .. L.column * layout.ZOOM)
         -- the shelf: on the screen, left of the column
-        t.ok(L.shelf_x >= layout.EDGE - 0.01)
-        t.ok(L.shelf_x + L.shelf * layout.ZOOM <= L.column_left - 4, "the shelf ends before the column")
+        t.ok(L.shelf_x >= 2 - 0.01, "the shelf starts on the screen, at " .. L.shelf_x)
+        t.ok(L.shelf_x + L.shelf * layout.ZOOM <= L.column_left - 1.5, "the shelf ends before the column")
         t.ok(L.favourite_columns * (L.shelf_cell + layout.GAP) - layout.GAP <= L.shelf - 12 + 0.01, "a full row fits the shelf")
         for name in pairs(layout.SCREENS) do
             for lines = 0, layout.FAVOURITE_ROWS do

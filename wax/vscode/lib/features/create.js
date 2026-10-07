@@ -21,11 +21,11 @@ function register(app) {
       if (seen && seen.status === 'loaded') {
         text = `${made.id} was created and is running in the game.`;
       } else if (seen) {
-        text = `${made.id} was created. A mod that shows up while the game is running starts switched off.`;
+        text = `${made.id} was created. The game lists a mod it has not seen before switched off.`;
         actions.push('Enable in Game');
       }
     } else {
-      text += ' It loads the next time the game starts.';
+      text += ' The game lists it switched off, as it does every mod it has not seen before. Switch it on in the Mods view here, or on the Mods page of the Wax menu.';
     }
     const inWorkspace = app.folders.some((folder) => isInside(folder, made.dir));
     if (!inWorkspace) actions.push('Add Folder to Workspace');

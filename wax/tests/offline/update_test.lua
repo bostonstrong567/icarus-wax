@@ -114,6 +114,27 @@ local function digest(text)
     return ("%08x"):format(b * 65536 + a):rep(8)
 end
 
+-- Stands in for the owner's signature: 88 characters that depend on the text and on who signed it.
+local function sign(text, key)
+    return digest((key or "the owner") .. "\n" .. text) .. ("A"):rep(22) .. "=="
+end
+
+local function bytes_before(a, b)
+    for index = 1, math.min(#a, #b) do
+        if a:byte(index) ~= b:byte(index) then return a:byte(index) < b:byte(index) end
+    end
+    return #a < #b
+end
+
+-- The text the files of a mod are signed over, put together apart from the code under test.
+local function signed_text(id, version, files, head)
+    local lines = {}
+    for index, file in ipairs(files) do lines[index] = { file.path, ("%s %d %s\n"):format(file.sha256, file.size, file.path) } end
+    table.sort(lines, function(a, b) return bytes_before(a[1], b[1]) end)
+    for index, line in ipairs(lines) do lines[index] = line[2] end
+    return (head or ("mod %s %s"):format(id, version)) .. "\n" .. table.concat(lines)
+end
+
 local OLD = {
     ["mod.lua"] = 'return { name = "Listed Mod", version = "1.0.0" }',
     ["init.lua"] = 'return { made = "old" }',
@@ -134,9 +155,15 @@ local function world(setup)
     count = count + 1
     local root = ("%s/%d/Binaries/Win64/ue4ss/Mods/Wax"):format(base, count)
     os.execute(('mkdir "%s\\mods" "%s\\saved" "%s\\run" >nul 2>nul'):format(win(root), win(root), win(root)))
-    local w = { root = root, mods = root .. "/mods", net = root .. "/run/net", now = 1000, notes = {}, asked = {}, published = {},
+    local w = { root = root, mods = root .. "/mods", net = root .. "/run/net", now = 1000, notes = {}, asked = {}, checked = {}, published = {},
         runs = 0, calls = 0, changes = 0 }
     current = w
+
+    -- What the owner's tool sends with a list. A list too broken to sign gets a signature of nothing.
+    local function signature_of(plan)
+        local ok, text = pcall(signed_text, plan.id, plan.version, plan.files)
+        return sign(ok and text or "")
+    end
 
     function w.mod(id, files, origin)
         for name, text in pairs(files) do write(w.mods .. "/" .. id .. "/" .. name, text) end
@@ -160,7 +187,12 @@ local function world(setup)
                 plan.total = plan.total + #text
             end
             table.sort(plan.files, function(a, b) return a.path < b.path end)
+            local signed = signature_of(plan)
             if w.plan then plan = w.plan(plan) or plan end
+            -- the owner signs what the catalogue lists, unless the test has the catalogue change the list afterwards
+            local signature = w.changed_after_signing and signed or signature_of(plan)
+            if w.signature then signature = w.signature(signature, plan) end
+            plan.signature = signature or nil
             return 200, encode(plan)
         end
         local path = rest:match("^/(.+)$")
@@ -183,6 +215,25 @@ local function world(setup)
                     os.execute(('rmdir /s /q "%s" >nul 2>nul'):format(win(w.net .. "/" .. output)))
                     write(w.net .. "/" .. output .. ".status", "200 0 -\n")
                 end
+            elseif address == "=" and w.old_helper then
+                w.asked[#w.asked + 1] = "verify " .. output
+                write(w.net .. "/" .. output .. ".status", "0 0 - this address is not allowed\n")
+            elseif address == "=" then
+                w.asked[#w.asked + 1] = "verify " .. output
+                local list, signature = read(w.net .. "/" .. output), read(w.net .. "/" .. output .. ".sig")
+                local said = ("200 %d %s\n"):format(#(list or ""), digest(list or ""))
+                if w.no_key then
+                    said = "0 0 - this build has no signing key\n"
+                elseif not list then
+                    said = "0 0 - the list is missing or too large\n"
+                elseif not signature then
+                    said = "0 0 - the signature is missing\n"
+                elseif signature ~= sign(list) .. "\n" then
+                    said = "0 0 - the signature does not match\n"
+                end
+                w.checked[#w.checked + 1] = { output = output, list = list, signature = signature, good = said:sub(1, 4) == "200 " }
+                if w.verify then said = w.verify(output, said) end
+                if said then write(w.net .. "/" .. output .. ".status", said) end
             elseif address then
                 w.asked[#w.asked + 1] = address
                 local code, body = 0, ""
@@ -367,6 +418,7 @@ t.test("a newer version is checked, swapped in, and the old folder is kept", fun
     t.eq(read(w.mods .. "/Listed/read me.txt"), "hello")
     t.eq(read(w.mods .. "/Listed/old only.lua"), nil, "a file the new version does not have is gone")
     t.eq(read(w.mods .. "/Listed/wax.origin"), "id=Listed\nversion=1.1.0\n")
+    t.eq(read(w.mods .. "/Listed/wax.new"), nil, "a mod the player had switched on gets no mark from an update")
     for name in pairs(files_under(w.mods .. "/Listed")) do
         t.ok(not name:find("%.status$") and not name:find("%.part$"), "no helper file went along: " .. name)
     end
@@ -379,10 +431,13 @@ t.test("a newer version is checked, swapped in, and the old folder is kept", fun
     t.eq(w.notes[1].text, "Listed Mod was updated to 1.1.0.")
     t.eq(w.asked[1], "/api/versions")
     t.eq(w.asked[2], "/api/mods/Listed/files/1.1.0?update=1")
-    t.eq(w.asked[3], "clear stage/Listed", "the staging folder is emptied before anything is fetched into it")
+    t.eq(w.asked[3], "verify plan/Listed.list", "the owner's signature on the list is checked before anything else is asked for")
+    t.eq(w.asked[4], "clear stage/Listed", "the staging folder is emptied before anything is fetched into it")
     t.eq(w.count_asked("^/api/mods/Listed/files/1%.1%.0/read%%20me%.txt$"), 1, "each part of a path is encoded")
     t.eq(w.count_asked("^/api/mods/Listed/files/1%.1%.0/lib/util%.lua$"), 1)
-    t.eq(#w.asked, 3 + 5)
+    t.eq(#w.asked, 4 + 5)
+    t.eq(#w.checked, 1)
+    t.ok(w.checked[1].good, "the list the helper was given carries the owner's signature")
     t.ok(w.loaded_from:find("/bin/waxnet.dll", 1, true))
     local state = w.update.state()
     t.eq(next(state.available), nil)
@@ -414,7 +469,69 @@ t.test("a mod that is switched off is updated and stays switched off, and saved 
     t.eq(w.loader.list()[1].enabled, false)
     t.eq(w.loader.list()[1].fresh, nil, "and not treated as a mod that was just added")
     t.eq(read(w.root .. "/saved/Listed.settings.lua"), 'return { volume = 3 }')
-    t.eq(w.logged("stays switched off until you enable it"), 0)
+    t.eq(w.logged("stays switched off until you switch it on"), 0)
+end)
+
+t.test("an update of a mod that still carries wax.new keeps the mark, so an update never switches anything on", function()
+    for _, name in ipairs({ "wax.new", "WAX.NEW" }) do
+        local w = world(function(w)
+            listed(w)
+            write(w.mods .. "/Listed/" .. name, "new\n")
+        end)
+        t.eq(w.loader.list()[1].status, "disabled", name)
+        t.eq(w.loader.list()[1].fresh, true, "the mark holds it, though nothing was written down about it")
+        t.eq(w.made(), nil)
+        w.run(60)
+        t.eq(read(w.mods .. "/Listed/init.lua"), NEW["init.lua"], "the new version is in")
+        t.eq(read(w.mods .. "/Listed/wax.origin"), "id=Listed\nversion=1.1.0\n")
+        t.eq(files_under(w.mods .. "/Listed")["wax.new"], true, "and carries the mark")
+        t.eq(read(w.mods .. "/Listed/wax.new"), "new\n")
+        t.eq(w.loader.list()[1].status, "disabled", "it is still held")
+        t.eq(w.loader.list()[1].fresh, true)
+        t.eq(w.made(), nil, "none of its code has run")
+        t.eq(w.loader.get("Listed").exports, nil)
+        t.eq(read(w.mods .. "/" .. w.kept() .. "/" .. name), "new\n", "the copy before is kept as it was")
+        t.eq(next(files_under(w.net .. "/stage")), nil, "nothing is left in the staging folder")
+        t.eq(w.notes[1].text, "Listed Mod was updated to 1.1.0.")
+        t.eq(w.logged("", "warn") + w.logged("", "error"), 0)
+        -- the player switches it on: the mark goes and the new version runs
+        w.loader.set_enabled("Listed", true)
+        w.run(1)
+        t.eq(read(w.mods .. "/Listed/wax.new"), nil)
+        t.eq(w.made(), "new")
+        t.eq(w.loader.list()[1].fresh, nil)
+    end
+end)
+
+t.test("with the mark carried along, files are still handled one a frame", function()
+    local w = world(function(w)
+        listed(w)
+        write(w.mods .. "/Listed/wax.new", "new\n")
+    end)
+    local most = 0
+    for _ = 1, 60 / 0.05 do
+        w.now = w.now + 0.05
+        w.loader.step()
+        w.storage.step()
+        local before = opens
+        w.sched.step()
+        most = math.max(most, opens - before)
+    end
+    t.eq(read(w.mods .. "/Listed/wax.new"), "new\n")
+    t.eq(read(w.mods .. "/Listed/wax.origin"), "id=Listed\nversion=1.1.0\n")
+    t.eq(most, 1, "never more than one file opened by the updater in a frame")
+end)
+
+t.test("an updated mod is not a new mod: it runs on, and stays on the list of mods the player has seen", function()
+    local w = world(listed)
+    w.run(60)
+    t.eq(w.made(), "new")
+    t.eq(w.loader.list()[1].fresh, nil)
+    t.eq(w.logged("is new here"), 0)
+    w.storage.flush()
+    local saved = load(read(w.root .. "/saved/wax.mods.lua"), "=saved", "t", {})()
+    t.eq(saved.known.Listed, true)
+    t.eq(saved.disabled.Listed, nil)
 end)
 
 t.test("a mod that depends on the updated one loads again with it", function()
@@ -565,9 +682,13 @@ end)
 refused_entries("a path is not allowed", { "../evil.lua", "sub/../../evil.lua", "/abs.lua", "C:/abs.lua", "sub\\evil.lua", "a//b.lua",
     "trail./x.lua", "nul.lua", "sub/COM1.txt/x.lua", "caf\195\169.lua", "semi;colon.lua", " lead.lua", "a..b.lua", "tab\there.lua", "" },
     function() return "it holds a path that is not allowed" end)
-refused_entries("a kind of file is not allowed", { "tool.exe", "lib/native.dll", "run.bat", "noextension", "wax.origin",
+refused_entries("a kind of file is not allowed", { "tool.exe", "lib/native.dll", "run.bat", "noextension", "wax.old",
     "init.lua.status", "script.LUAC", "page.html" },
     function(path) return "it holds a kind of file that is not allowed: " .. path end)
+-- wax.origin says where a mod came from and wax.new that the player has not switched it on: neither can come with a mod's own files
+refused_entries("a file is named as one of the two that are Wax's own", { "wax.new", "WAX.NEW", "Wax.New", "wax.origin", "WAX.ORIGIN",
+    "Wax.Origin", "sub/wax.new", "lib/deep/Wax.Origin" },
+    function(path) return "it holds a file under a name that is Wax's own: " .. path end)
 
 t.test("a refused list is refused before any file is fetched", function()
     local w = world(function(w)
@@ -578,6 +699,102 @@ t.test("a refused list is refused before any file is fetched", function()
     t.eq(w.count_asked("^/api/mods/Listed/files/1%.1%.0/"), 0)
     t.eq(w.count_asked("^clear "), 0)
     t.eq(read(w.root .. "/run/evil.lua"), nil)
+end)
+
+local NOT_SIGNED = "the catalogue gives no signature for the list of its files"
+local NOT_OURS = "the list of its files is not signed with Wax's key (the signature does not match)"
+
+-- Nothing is fetched and the installed mod stays, with the reason said once. setup(w) makes the signature of the new version's list bad.
+local function signature_case(name, reason, setup, checks)
+    t.test("nothing is downloaded when " .. name, function()
+        local w = world(function(w)
+            listed(w)
+            setup(w)
+        end)
+        w.run(60)
+        untouched(w, reason)
+        w.later(6 * 3600)
+        untouched(w, reason)
+        t.eq(w.count_asked("^/api/mods/Listed/files/1%.1%.0/"), 0, "not one file was asked for")
+        t.eq(w.count_asked("^clear "), 0, "and no folder was made for a download")
+        t.eq(w.count_asked("^verify plan/Listed%.list$"), checks, "times the helper was asked")
+        t.eq(next(files_under(w.net .. "/stage")), nil)
+        t.eq(w.logged("", "warn"), 1, "one line in the log")
+    end)
+end
+
+local function with_signature(make)
+    return function(w) w.signature = function(signature, plan) return make(signature, plan) end end
+end
+
+signature_case("the list of files comes without a signature", NOT_SIGNED, with_signature(function() return false end), 0)
+signature_case("the signature is empty in the answer", NOT_SIGNED, with_signature(function() return NULL end), 0)
+signature_case("the signature is not 64 bytes in base64", NOT_SIGNED, with_signature(function(signature) return signature:sub(1, 87) end), 0)
+signature_case("the signature holds something that is not base64", NOT_SIGNED,
+    with_signature(function(signature) return signature:sub(1, 40) .. "*" .. signature:sub(42) end), 0)
+signature_case("the signature was made with another key", NOT_OURS,
+    with_signature(function(_, plan) return sign(signed_text(plan.id, plan.version, plan.files), "someone else") end), 2)
+signature_case("the signature is the one of another version of the mod", NOT_OURS,
+    with_signature(function(_, plan) return sign(signed_text(plan.id, "1.0.9", plan.files)) end), 2)
+signature_case("the signature is over the same files under another mod's name", NOT_OURS,
+    with_signature(function(_, plan) return sign(signed_text("Other", plan.version, plan.files)) end), 2)
+signature_case("the signature is one for Wax's own files, over the same list", NOT_OURS,
+    with_signature(function(_, plan) return sign(signed_text(nil, nil, plan.files, "wax " .. plan.version)) end), 2)
+signature_case("the signature is the one of the mod's zip", NOT_OURS,
+    with_signature(function(_, plan) return sign(("zip %s %s\n%s %d\n"):format(plan.id, plan.version, digest("the zip"), 1234)) end), 2)
+signature_case("a file was changed in the list after the owner signed it", NOT_OURS, function(w)
+    w.changed_after_signing = true
+    w.plan = function(plan)
+        for _, file in ipairs(plan.files) do
+            if file.path == "init.lua" then file.sha256 = digest("return os.execute('calc')") end
+        end
+    end
+end, 2)
+signature_case("a file was added to the list after the owner signed it", NOT_OURS, function(w)
+    w.changed_after_signing = true
+    w.plan = function(plan)
+        plan.files[#plan.files + 1] = { path = "extra.lua", size = 8, sha256 = digest("return 1") }
+        plan.total = plan.total + 8
+    end
+end, 2)
+signature_case("this copy of the helper was built without the owner's key", "the list of its files is not signed with Wax's key (this build has no signing key)",
+    function(w) w.no_key = true end, 2)
+signature_case("the helper is one from before signatures", "the list of its files is not signed with Wax's key (this address is not allowed)",
+    function(w) w.old_helper = true end, 2)
+signature_case("the helper answers for a list of another size", "the helper checked another list than the one written for it", function(w)
+    w.verify = function() return ("200 5 %s\n"):format(digest("other")) end
+end, 2)
+signature_case("the helper says nothing about the list", "the list of its files is not signed with Wax's key (no answer)", function(w)
+    w.verify = function() return nil end
+end, 2)
+
+t.test("the text the helper checks is the one the owner signs: the mod, the version, then every file in the order of its path's bytes", function()
+    local files = {
+        ["init.lua"] = "return {}",
+        ["Zed.lua"] = "return 1",
+        ["a_b.lua"] = "return 2",
+        ["a-b.lua"] = "return 3",
+        ["a b.lua"] = "return 4",
+        ["lib/util.lua"] = "return 5",
+        ["lib.lua"] = "return 6",
+    }
+    local w = world(function(w)
+        w.mod("Listed", OLD, "1.0.0")
+        w.published.Listed = { version = "1.1.0-beta.2", files = files }
+        -- the catalogue may list the files in any order
+        w.plan = function(plan) table.sort(plan.files, function(a, b) return a.path > b.path end) end
+    end)
+    w.run(60)
+    local lines = { "mod Listed 1.1.0-beta.2" }
+    for _, path in ipairs({ "Zed.lua", "a b.lua", "a-b.lua", "a_b.lua", "init.lua", "lib.lua", "lib/util.lua" }) do
+        lines[#lines + 1] = ("%s %d %s"):format(digest(files[path]), #files[path], path)
+    end
+    t.eq(#w.checked, 1)
+    t.eq(w.checked[1].output, "plan/Listed.list")
+    t.eq(w.checked[1].list, table.concat(lines, "\n") .. "\n")
+    t.eq(w.checked[1].signature, sign(w.checked[1].list) .. "\n", "the signature goes to the helper as the catalogue gave it, with a line ending")
+    t.eq(read(w.mods .. "/Listed/Zed.lua"), "return 1", "and with a good signature the version is put in")
+    t.eq(read(w.mods .. "/Listed/wax.origin"), "id=Listed\nversion=1.1.0-beta.2\n")
 end)
 
 t.test("a version that needs a newer Wax is skipped, and that is said once", function()
@@ -634,11 +851,80 @@ t.test("switching updates on puts in what was only offered, and the switch is re
     t.eq(w.made(), "old")
     t.eq(w.update.state().available.Listed, "1.1.0")
     t.ok(read(w.root .. "/saved/wax.updates.lua"):find("%[\"auto\"%] = false"))
-    t.eq(read(w.root .. "/saved/wax.mods.lua"), nil, "it is not kept in the loader's file")
+    t.ok(not (read(w.root .. "/saved/wax.mods.lua") or ""):find("auto", 1, true), "it is not kept in the loader's file")
     w.update.set_auto(true)
     w.run(20)
     t.eq(w.made(), "new")
     t.ok(read(w.root .. "/saved/wax.updates.lua"):find("%[\"auto\"%] = true"))
+end)
+
+t.test("with looking for updates switched off nothing is asked, the helper is not loaded and no request file is written", function()
+    local w = world(function(w)
+        listed(w)
+        write(w.root .. "/saved/wax.updates.lua", "return { look = false }")
+    end)
+    t.eq(w.update.state().look, false, "the setting is read from the updater's file")
+    t.eq(w.update.state().auto, true)
+    w.run(60)
+    w.later(6 * 3600)
+    w.later(6 * 3600)
+    t.eq(w.calls, 0, "the helper was not called")
+    t.eq(w.loaded_from, nil, "or even loaded")
+    t.eq(#w.asked, 0)
+    t.eq(next(files_under(w.root .. "/run")), nil, "no request file, and nothing else, was written")
+    t.eq(snapshot(w.mods), w.before)
+    t.eq(next(w.update.state().available), nil, "nothing is offered")
+    t.eq(w.update.state().last, 0, "and nothing counts as a check")
+    t.eq(w.update.check_now(), false)
+    t.eq(w.update.install("Listed"), false)
+    t.eq(w.logged("", "warn") + w.logged("", "error"), 0)
+    t.eq(#w.notes, 0)
+    -- Auto Update on or off makes no difference to that
+    w.update.set_auto(false)
+    w.update.set_auto(true)
+    w.later(6 * 3600)
+    t.eq(w.calls, 0)
+    -- switched on, the catalogue is asked at once and the newer version is put in
+    w.update.set_looking(true)
+    w.run(20)
+    t.eq(w.made(), "new")
+    t.ok(read(w.root .. "/saved/wax.updates.lua"):find('%["look"%] = true'), "the switch is remembered")
+end)
+
+t.test("switching looking for updates off takes back what was offered, and a download under way is not put in", function()
+    local w = world(function(w)
+        listed(w)
+        write(w.root .. "/saved/wax.updates.lua", "return { auto = false }")
+    end)
+    t.eq(w.update.state().look, true, "a file from before the switch means it is on")
+    w.run(60)
+    t.eq(w.update.state().available.Listed, "1.1.0")
+    local asked = #w.asked
+    w.update.set_looking(false)
+    t.eq(next(w.update.state().available), nil)
+    t.eq(w.update.install("Listed"), false)
+    w.later(6 * 3600)
+    t.eq(#w.asked, asked, "nothing more is asked")
+    t.ok(read(w.root .. "/saved/wax.updates.lua"):find('%["look"%] = false'))
+    t.ok(read(w.root .. "/saved/wax.updates.lua"):find('%["auto"%] = false'), "the other switch is left as it was")
+
+    -- switched off while the files of a version are on the way
+    w = world(function(w)
+        listed(w)
+        w.status = function(output)
+            if output:find("init.lua", 1, true) then w.update.set_looking(false) end
+        end
+    end)
+    w.run(60)
+    t.eq(snapshot(w.mods), w.before, "the mods folder is as it was")
+    t.eq(w.made(), "old")
+    t.eq(#w.notes, 0)
+    t.eq(w.logged("Listed could not be updated to 1.1.0: looking for updates was switched off while it was downloaded", "warn"), 1)
+    t.eq(w.update.state().problem, nil, "what the player switched off is not shown as something that went wrong")
+    local calls = w.calls
+    w.later(6 * 3600)
+    t.eq(w.calls, calls, "and the helper is left alone from then on")
+    t.eq(w.made(), "old")
 end)
 
 t.test("when the new folder cannot be moved in, the old one is put back", function()

@@ -7,6 +7,10 @@ local members = Wax.import("gui.explorer_members")
 local inspect = Wax.import("engine.inspect")
 local instance = Wax.import("engine.instance")
 local game = Wax.import("engine.game").root
+local kit = Wax.import("gui.kit")
+local style = Wax.import("gui.style")
+local wrap_width = Wax.import("gui.controls").wrap_width
+local storage = Wax.import("core.storage")
 local sched = Wax.import("core.sched")
 local guard = Wax.import("core.guard")
 
@@ -24,20 +28,37 @@ M.HISTORY, M.CHANGES = 20, 200
 M.worst = { index = 0, list = 0 }       -- the longest the index step and a rebuild of the list took, in seconds
 
 local ROW, GAP = 26, 1
+local BAND = 36             -- the least height of the third row of each side, so both lists start at the same place
+local FIT = 0.97            -- text may draw a little wider than its letters add up to
+local LEAST = 290           -- the narrowest a side may be: two choices side by side still show whole
+local BUTTON, BACK = 38, 84 -- the room an icon button and the "List" button take in a row, with the gap before them
 local ICONS = { player = "user", creature = "paw-print", building = "hammer", item = "package", actor = "box",
     component = "puzzle", widget = "app-window", object = "circle-dot", world = "globe" }
 local KINDS = { { "Actors", "actors" }, { "Creatures", "creature" }, { "Players", "player" }, { "Items", "item" },
     { "Buildings", "building" }, { "Components", "components" }, { "Everything", "everything" } }
 local SORTS = { { "By name", "name" }, { "By class", "class" }, { "Nearest first", "distance" }, { "Newest first", "newest" } }
-local RANGES = { { "Any distance", false }, { "Within 25 m", 25 }, { "Within 50 m", 50 }, { "Within 100 m", 100 },
-    { "Within 250 m", 250 }, { "Within 500 m", 500 } }
+local RANGES = { { "Any distance from you", false }, { "Within 25 m of you", 25 }, { "Within 50 m of you", 50 },
+    { "Within 100 m of you", 100 }, { "Within 250 m of you", 250 }, { "Within 500 m of you", 500 } }
+local NOUNS = { actors = { "actor", "actors" }, creature = { "creature", "creatures" }, player = { "player", "players" },
+    item = { "item", "items" }, building = { "building", "buildings" }, components = { "component", "components" },
+    everything = { "actor or component", "actors and components" } }
 local SHOWS = { "Properties", "Functions", "All", "Changed" }
 local ORDERS = { "By name", "Changed first" }
 local NAME_SHARE = 0.44     -- of a details line: where the names end and the values start
+local HELP = {
+    "Click a row in the list to see everything it holds. The small arrow beside a row opens what is inside it.",
+    "Click a value to change it: type the new one in the box that appears above the list and press Enter. "
+        .. "A value that is true or false has a switch.",
+    "A value in colour is another object. Click it to go there. The curved arrow at the top brings you back.",
+    "Whatever you change is written down as Lua at the bottom of the page, ready to copy into a mod.",
+}
+local GONE = "Pick something else in the list, or use the curved arrow to step back."
+local HINTS = { int = "a whole number, then Enter", float = "a number, then Enter", text = "text, then Enter",
+    bool = "true or false, then Enter" }
 
 local view = nil        -- what belongs to the page that is built now
 local changes = {}      -- one line of Lua for every change made here, oldest first
-local settings = { text = "", kind = "actors", sort = "name", near = false, range = 50 }
+local settings = { text = "", kind = "actors", sort = "name", near = false, range = 50, show = SHOWS[1], order = ORDERS[1] }
 
 -- A page from an earlier load of this file is stopped before this one takes over.
 if Wax.explorer_stop then pcall(Wax.explorer_stop) end
@@ -55,7 +76,49 @@ local function pick(pairs_list, wanted, by)
     return nil
 end
 
-local function filtering() return settings.text:find("%S") ~= nil or settings.kind ~= "actors" or settings.near end
+local function one_of(list, wanted)
+    for _, name in ipairs(list) do
+        if name == wanted then return true end
+    end
+    return false
+end
+
+-- The filters are kept from one session to the next. What was typed in a search is not.
+local function recall()
+    local ok, saved = pcall(storage.load, "wax", "explorer", {})
+    if not ok or type(saved) ~= "table" then return end
+    if pick(KINDS, saved.kind, 2) then settings.kind = saved.kind end
+    if pick(SORTS, saved.sort, 2) then settings.sort = saved.sort end
+    if type(saved.range) == "number" and pick(RANGES, saved.range, 2) then
+        settings.range, settings.near = saved.range, saved.near == true
+    end
+    if one_of(SHOWS, saved.show) then settings.show = saved.show end
+    if one_of(ORDERS, saved.order) then settings.order = saved.order end
+end
+recall()
+
+local function remember()
+    pcall(storage.save, "wax", "explorer", { kind = settings.kind, sort = settings.sort, near = settings.near,
+        range = settings.range, show = settings.show, order = settings.order })
+end
+
+local function searching() return settings.text:find("%S") ~= nil or settings.near end
+local function filtering() return searching() or settings.kind ~= "actors" end
+
+-- What the list holds, in words: the line under the heading and the note beside the world.
+local function count_texts(shown)
+    local actors, parts = index.counts()
+    local kind = settings.kind
+    local noun = NOUNS[kind] or NOUNS.actors
+    if not searching() then
+        local text = ("%d %s"):format(shown, shown == 1 and noun[1] or noun[2])
+        return text .. " in this world.", text
+    end
+    local total = kind == "components" and parts or (kind == "everything" and actors + parts or actors)
+    local of = (kind == "components" or kind == "everything") and noun or NOUNS.actors
+    local note = ("%d of %d"):format(shown, total)
+    return ("%s %s fit."):format(note, total == 1 and of[1] or of[2]), note .. " fit"
+end
 
 local function apply_query()
     index.query({ text = settings.text, kind = settings.kind, sort = settings.sort, near = settings.near and settings.range or nil })
@@ -83,25 +146,74 @@ end
 
 local refresh_rows, show_edit, show_changes
 
+-- The heading and the line of Lua under it, each cut to the one line it has.
+local function fit_texts(v)
+    local picked, theme = v.picked, style.theme
+    local width = wrap_width(v.split.Right)
+    v.right_width = width
+    local room = (width - 2 * BUTTON - (v.split:IsSingle() and BACK or 0)) * FIT
+    local title = "Nothing picked"
+    if picked and v.sheet then
+        -- the heading is bold, which draws wider than the letter widths say
+        title = kit.shorten(picked.name, room * 0.84, theme.title_size)
+    elseif picked then
+        local ending = " is gone"
+        title = picked.name and (kit.shorten(picked.name, room * 0.84 - kit.text_width(ending, theme.title_size), theme.title_size) .. ending)
+            or "Nothing there right now"
+    end
+    if title ~= v.title_text then
+        v.title_text = title
+        v.name:Set(title)
+    end
+    -- the end of the Lua is what tells one object from another, so that is the part that stays
+    local code = picked and picked.code and kit.shorten(picked.code, width * FIT, theme.small_size, "mono", true) or ""
+    if code ~= v.path_text then
+        v.path_text = code
+        v.path:Set(code)
+    end
+end
+
+-- Shows what the right side has something to say with: help while nothing is picked, one line when it is gone, else the lists.
+local function arrange(v)
+    local picked = v.picked
+    local state = not picked and "none" or (v.sheet and "object" or "gone")
+    if state ~= v.state then
+        v.state = state
+        local there = state == "object"
+        for _, line in ipairs(v.help) do line:SetVisible(state == "none") end
+        v.gone:SetVisible(state == "gone")
+        v.path:SetVisible(there)
+        v.path_hint:SetVisible(not there)
+        v.path_hint:Set(state == "gone" and "It left the world, or nothing is there now." or "Pick something in the list.")
+        v.find:SetVisible(there)
+        v.filters.control:SetVisible(there)
+        v.rows:SetVisible(there)
+        v.bar.control:SetVisible(there)
+    end
+    fit_texts(v)
+    v.copy_path:SetEnabled(picked ~= nil and picked.code ~= nil)
+end
+
 local function adopt(v, inst)
     local picked = v.picked
     picked.address, picked.class_name = inst and instance.address(inst) or nil, inst and inst.ClassName or nil
     v.member = nil
-    if not inst then
-        v.sheet = nil
-        v.name:Set(picked.name and (picked.name .. " is gone") or "Nothing there right now")
-        refresh_rows(v, true)
-        show_edit(v)
-        return
+    if inst then
+        picked.name = inst.Name
+        local ok, list = pcall(inspect.members, inst)
+        v.sheet = members.new(ok and list or {}, inst:GetClassChain())
+        local found, code = pcall(paths.expression, inst, picked.path, index.unique)
+        picked.code = found and code or nil
+        if picked.code then
+            -- what was changed here stays marked when the object is picked again
+            v.written[picked.code] = v.written[picked.code] or {}
+            v.sheet.written = v.written[picked.code]
+        end
+        members.show(v.sheet, v.mode, v.member_text, v.order_by == ORDERS[2])
+    else
+        v.sheet, picked.code = nil, nil
     end
-    picked.name = inst.Name
-    local ok, list = pcall(inspect.members, inst)
-    v.sheet = members.new(ok and list or {}, inst:GetClassChain())
-    members.show(v.sheet, v.mode, v.member_text, v.order_by == ORDERS[2])
-    local found, code = pcall(paths.expression, inst, picked.path, index.unique)
-    picked.code = found and code or nil
-    v.name:Set(picked.name)
-    v.path:Set(picked.code or "")
+    arrange(v)
     refresh_rows(v, true)
     show_edit(v)
 end
@@ -126,24 +238,53 @@ local function current(v)
     return inst
 end
 
-local function select(v, target, remember)
+-- True when the target is what is picked already.
+local function is_picked(v, target)
+    local picked = v.picked
+    if not picked then return false end
+    if picked.instance or target.instance then return picked.instance ~= nil and rawequal(picked.instance, target.instance) end
+    return paths.same(picked.path, target.path)
+end
+
+-- The way back says where it leads.
+local function show_history(v)
+    local last = v.history[#v.history]
+    v.previous:SetEnabled(last ~= nil)
+    v.previous:SetTip(last and last.name and ("Back to " .. last.name) or "Back to what was picked before")
+end
+
+local function select(v, target, remember_it)
     if not target then return end
     local before = v.picked
-    if remember and before then
-        v.history[#v.history + 1] = { instance = before.instance, path = before.path }
+    if is_picked(v, target) then
+        if v.split:IsSingle() then v.split:Show("right") end
+        return
+    end
+    if remember_it and before then
+        v.history[#v.history + 1] = { instance = before.instance, path = before.path, name = before.name }
         if #v.history > M.HISTORY then table.remove(v.history, 1) end
     end
-    v.picked = { instance = target.instance, path = target.path, address = false }
-    v.previous:SetEnabled(#v.history > 0)
-    v.copy_path:SetEnabled(true)
+    v.picked = { instance = target.instance, path = target.path, name = target.name, address = false }
+    show_history(v)
     current(v)
     if v.split:IsSingle() then v.split:Show("right") end
     v.tree:Refresh()
 end
 
+-- True while what was picked earlier can still be shown.
+local function still_there(target)
+    if target.instance then return target.instance:IsValid() end
+    return paths.resolve(target.path) ~= nil
+end
+
+-- Steps back to what was picked before. What has left the world since is passed over.
 local function go_back(v)
-    local target = table.remove(v.history)
-    if target then select(v, target, false) end
+    while #v.history > 0 do
+        local target = table.remove(v.history)
+        local ok, there = pcall(still_there, target)
+        if ok and there then return select(v, target, false) end
+    end
+    show_history(v)
 end
 
 -- the tree
@@ -162,10 +303,18 @@ local function arrow_of(row)
     return row.open and true or false
 end
 
+-- How far away a row of the world is, while the list is being asked about distance.
+local function far(row)
+    local distance = row.distance
+    if not distance or not row.key or not index.current().distance then return nil end
+    if distance >= 1000 then return ("%.1f km"):format(distance / 1000) end
+    return ("%d m"):format(math.floor(distance + 0.5))
+end
+
 local function tree_look(v, row)
     local picked = v.picked
     return { text = row.name, note = row.note or row.class_name, icon = ICONS[row.kind] or ICONS.object, indent = row.depth,
-        arrow = arrow_of(row), faint = row.missing or row.gone or false,
+        arrow = arrow_of(row), faint = row.missing or row.gone or false, value = far(row), tone = "dim",
         selected = picked ~= nil and picked.address ~= nil and picked.address ~= false and row.address == picked.address }
 end
 
@@ -195,6 +344,17 @@ local function children(row, inst)
     end
     table.sort(kids, by_name)
     return kids
+end
+
+-- The line under the heading, cut to the one line it has.
+local function fit_count(v)
+    local width = wrap_width(v.split.Left)
+    v.left_width = width
+    local text = kit.shorten(v.summary or "", width * FIT, style.theme.small_size)
+    if text ~= v.count_text then
+        v.count_text = text
+        v.count:Set(text)
+    end
 end
 
 local function rebuild_tree(v)
@@ -231,17 +391,26 @@ local function rebuild_tree(v)
             end
         end
     end
-    local actors = index.counts()
-    world.note = narrowed and ("%d of %d fit"):format(#results, actors) or ("%d actors"):format(actors)
-    local text = index.seeding() and ("Finding what is in the world: %d so far."):format(actors)
-        or narrowed and ("%d of %d actors fit."):format(#results, actors)
-        or ("%d actors in this world."):format(actors)
+    local text, note = count_texts(#results)
+    world.note = note
+    if index.seeding() then
+        text = ("Listing the world: %d actors so far."):format((index.counts()))
+    elseif index.current().distance and v.character.missing then
+        text = "There is no character to measure from."
+    end
     if text ~= v.summary then
         v.summary = text
-        v.count:Set(text)
+        fit_count(v)
+    end
+    local folds = #opened > 0
+    if folds ~= v.folds then
+        v.folds = folds
+        v.fold:SetEnabled(folds)
     end
     v.flat, v.opened, v.tree_dirty = flat, opened, false
-    v.tree:SetItems(flat, true)
+    -- a new search or filter shows from its top. A list that only changed by itself stays where it is scrolled to.
+    v.tree:SetItems(flat, not v.tree_top)
+    v.tree_top = false
 end
 
 -- Looks at what game.Character and the other roots are now. Nothing is kept of them but names and an address to compare.
@@ -268,7 +437,7 @@ local function look_at_kids(v)
     if #opened == 0 then return end
     v.kid_at = v.kid_at % #opened + 1
     local row = opened[v.kid_at]
-    if row.gone or row.missing or row.root == "World" then return end
+    if row.gone or row.missing or row.root == "World" or not row.open or not row.kids then return end
     local inst = instance_of(row)
     if not inst or not inst:IsValid() then
         row.kids, row.open, v.tree_dirty = nil, false, true
@@ -287,7 +456,9 @@ local function press_tree(v, made)
     local row = made.row
     if not row or row.missing or row.gone then return end
     if row.root then return select(v, { path = paths.from_root(row.root) }, true) end
-    select(v, target_for(row.instance, nil), true)
+    local target = target_for(row.instance, nil)
+    if target then target.name = row.name end
+    select(v, target, true)
 end
 
 local function open_tree(v, made)
@@ -316,34 +487,46 @@ local function fold_all(v)
 end
 
 -- Both sides are laid out alike, so they line up: a heading with its buttons, one small line, a search box,
--- two choices side by side, the list, and one line under it.
+-- two choices side by side, one row that is BAND tall, and the list down to the bottom.
 local function build_tree(v, side)
-    local theme = Wax.import("gui.style").theme
+    local theme = style.theme
     local head = side:Row()
     v.title = head:Heading("Explorer")
-    v.fold = head:Button(nil, function() fold_all(v) end, { icon = "chevrons-down-up" })
+    v.fold = head:Button(nil, function() fold_all(v) end, { icon = "chevrons-down-up", tip = "Close every row that is open" })
+    v.fold:SetEnabled(false)
     v.count = side:Label("", { size = theme.small_size, dim = true })
-    v.search = side:Input(nil, { hint = "Search by name or class" })
+    v.search = side:Input(nil, { hint = "Search by name or class", text = settings.text, clear = true })
     v.search.Typed:Connect(function(text)
         settings.text = text
         apply_query()
-        v.tree_dirty, v.tree_now = true, true
+        v.tree_dirty, v.tree_now, v.tree_top = true, true, true
     end)
     local filters = side:Row()
     v.kind = filters:Dropdown(nil, labels(KINDS), pick(KINDS, settings.kind, 2), function(choice)
         settings.kind = pick(KINDS, choice, 1)
+        remember()
         apply_query()
-        v.tree_dirty, v.tree_now = true, true
+        v.tree_dirty, v.tree_now, v.tree_top = true, true, true
     end)
     v.sort = filters:Dropdown(nil, labels(SORTS), pick(SORTS, settings.sort, 2), function(choice)
         settings.sort = pick(SORTS, choice, 1)
+        remember()
         apply_query()
-        v.tree_now = true
+        v.tree_dirty, v.tree_now, v.tree_top = true, true, true
+    end)
+    local third = side:Row({ height = BAND })
+    v.range = third:Dropdown(nil, labels(RANGES), pick(RANGES, settings.near and settings.range or false, 2), function(choice)
+        local metres = pick(RANGES, choice, 1)
+        settings.near = metres ~= false
+        if metres then settings.range = metres end
+        remember()
+        apply_query()
+        v.tree_dirty, v.tree_now, v.tree_top = true, true, true
     end)
     v.tree = side:Grid({ cell = 100000, cell_height = ROW, gap = GAP, batch = 3, warm = true,
         make = function(cell)
             local made = {}
-            made.line = cell:Item({}, function() press_tree(v, made) end, function() open_tree(v, made) end)
+            made.line = cell:Item({ fit = true }, function() press_tree(v, made) end, function() open_tree(v, made) end)
             v.tree_cells[#v.tree_cells + 1] = made
             return made
         end,
@@ -351,20 +534,12 @@ local function build_tree(v, side)
             made.row = row
             made.line:Set(tree_look(v, row))
         end })
-    local foot = side:Row()
-    foot:Label("How far from you", { dim = true })
-    v.range = foot:Dropdown(nil, labels(RANGES), pick(RANGES, settings.near and settings.range or false, 2), function(choice)
-        local metres = pick(RANGES, choice, 1)
-        settings.near = metres ~= false
-        if metres then settings.range = metres end
-        apply_query()
-        v.tree_dirty, v.tree_now = true, true
-    end)
     for _, name in ipairs(paths.ROOTS) do
         local row = { root = name, name = name, class_name = "none", kind = name == "World" and "world" or "object", depth = 0,
             missing = true, address = false, open = name == "World" }
         v.roots[#v.roots + 1] = row
         if name == "World" then v.world = row end
+        if name == "Character" then v.character = row end
     end
 end
 
@@ -389,22 +564,86 @@ local function edit_text(v)
     return inspect.text(record, state.value)
 end
 
+-- Why the picked member has no box to type in, in one line.
+local function why_not(v, a_row)
+    local record, sheet = a_row.record, v.sheet
+    if a_row.type == "element" then return "One place of a list. Places are shown, not changed." end
+    if record.kind == "function" then return "A function. Copy it as Lua to call it from a mod." end
+    local state = sheet.state[record.name]
+    if state and state.failed then return "It could not be read, so it is left alone." end
+    if record.show == "struct" then return "Open it with its arrow and change one part." end
+    if record.show == "array" then
+        return members.opens(sheet, a_row) and "A list. Its arrow shows what is in it." or "A list with nothing to open."
+    end
+    if record.show == "object" then return "There is no object in it." end
+    return "Values of this kind are not shown."
+end
+
+-- True when the picked member's value can be typed: one of a kind that is written, and that could be read.
+local function types(v, a_row)
+    if not (a_row and v.sheet and members.editable(a_row)) then return false end
+    local state = v.sheet.state[a_row.record.name]
+    return not (state and state.failed)
+end
+
+-- What to type for the picked member.
+local function hint_for(a_row)
+    local record = a_row.record
+    if a_row.type == "field" then return record.fields.whole and HINTS.int or HINTS.float end
+    return HINTS[record.show] or ""
+end
+
+-- The row above the members is the picked member's name, or a word about it, cut to the room the box and the buttons leave.
+local function fit_bar(v)
+    local room = wrap_width(v.split.Right)
+    if v.bar_code then room = room - BUTTON end
+    if v.bar_edit then room = (room - BUTTON - 8) * 0.7 / 1.7 end
+    local text = kit.shorten(v.edit_label or "", room * FIT, style.theme.font_size)
+    if text ~= v.edit_text then
+        v.edit_text = text
+        v.edit_name:Set(text)
+    end
+end
+
+-- The name turns to the colour of a problem when what was typed was refused.
+local function mark_bar(v, bad)
+    if bad == v.edit_bad then return end
+    v.edit_bad = bad
+    v.edit_name:SetColor(bad and style.theme.bad or style.theme.dim)
+end
+
 function show_edit(v)
     local a_row = v.member
-    if not (a_row and v.sheet) then
-        v.edit_name:Set(v.sheet and "Pick a member" or "")
-        v.edit:Set("")
-        v.edit_shown = ""
-        v.edit:SetEnabled(false)
-        v.code:SetEnabled(false)
-        return
+    local member = a_row ~= nil and v.sheet ~= nil
+    local typed = types(v, a_row)
+    local copies = member and v.picked ~= nil and v.picked.code ~= nil
+    if typed ~= v.bar_edit then
+        v.bar_edit = typed
+        v.edit:SetVisible(typed)
+        v.set:SetVisible(typed)
     end
-    local name, kind = member_name(a_row)
-    v.edit_name:Set(kind ~= "" and ("%s  (%s)"):format(name, kind) or name)
-    v.edit_shown = edit_text(v)
+    if copies ~= v.bar_code then
+        v.bar_code = copies
+        v.code:SetVisible(copies)
+    end
+    if not member then
+        v.edit_label = "Click a value to change it."
+    elseif typed then
+        v.edit_label = member_name(a_row)
+    else
+        v.edit_label = why_not(v, a_row)
+    end
+    mark_bar(v, false)
+    fit_bar(v)
+    v.edit_shown = typed and edit_text(v) or ""
+    v.edit_typed = v.edit_shown
+    if not typed then return end
+    local hint = hint_for(a_row)
+    if hint ~= v.edit_hint then
+        v.edit_hint = hint
+        v.edit:SetHint(hint)
+    end
     v.edit:Set(v.edit_shown)
-    v.edit:SetEnabled(members.editable(a_row))
-    v.code:SetEnabled(v.picked ~= nil and v.picked.code ~= nil)
 end
 
 -- The Lua for the picked member: how to read it and, when it can be written, how to give it the value it has now.
@@ -427,24 +666,29 @@ end
 local function paint(v, made)
     local a_row, sheet = made.row, v.sheet
     if not a_row or not sheet then return end
-    local record = a_row.record
-    if record and record.kind == "property" then
-        local inst = current(v)
-        if inst then
-            if a_row.type == "element" then
-                members.items(sheet, inst, record)
-            else
-                members.read(sheet, inst, record)
-                if a_row.type == "member" and record.show == "array" and sheet.open[record.name] then members.items(sheet, inst, record) end
+    local width = made.cell and tonumber(made.cell.fixed_width) or 320
+    local look
+    if a_row.type == "note" then
+        -- one line that says why the list is empty
+        look = { text = a_row.text, faint = true, name_width = width }
+    else
+        local record = a_row.record
+        if record and record.kind == "property" then
+            local inst = current(v)
+            if inst then
+                if a_row.type == "element" then
+                    members.items(sheet, inst, record)
+                else
+                    members.read(sheet, inst, record)
+                    if a_row.type == "member" and record.show == "array" and sheet.open[record.name] then members.items(sheet, inst, record) end
+                end
             end
         end
+        look = members.look(sheet, a_row)
+        look.selected = v.member == a_row
+        -- names end at the same place on every line, however far a line is set in
+        look.name_width = math.max(80, math.floor(width * NAME_SHARE) - (look.indent or 0) * 12)
     end
-    local look = members.look(sheet, a_row)
-    look.selected = v.member == a_row
-    -- names end at the same place on every line, however far a line is set in
-    local width = made.cell and tonumber(made.cell.fixed_width) or 320
-    look.name_width = math.max(80, math.floor(width * NAME_SHARE) - (look.indent or 0) * 12)
-    made.line:Set(look)
     local flag = look.flag
     if flag ~= nil and not made.flag then
         -- the switch is made the first time this cell shows a true-or-false member
@@ -459,10 +703,31 @@ local function paint(v, made)
         end
         if shown and made.flag:Get() ~= flag then made.flag:Set(flag, true) end
     end
+    -- the line ends where its switch starts
+    look.width = width - (made.flag_shown and 50 or 0)
+    made.line:Set(look)
+end
+
+-- The one line shown in place of a list of members that has nothing in it.
+local function empty_note(v)
+    local text = "It has no members."
+    if v.member_text:find("%S") then
+        text = ("Nothing here has \"%s\" in its name or type."):format((v.member_text:gsub("^%s+", ""):gsub("%s+$", "")))
+    elseif v.mode == "Changed" then
+        text = "Nothing has changed since you picked it."
+    elseif v.mode == "Functions" then
+        text = "It has no functions."
+    elseif v.mode == "Properties" then
+        text = "It has no properties."
+    end
+    local note = v.note_row
+    note.text = text
+    return note
 end
 
 function refresh_rows(v, top)
     local rows = v.sheet and members.rows(v.sheet) or {}
+    if v.sheet and #rows == 0 then rows = { empty_note(v) } end
     local before = v.shown_rows
     local same = not top and #rows == #before
     for at = 1, same and #rows or 0 do
@@ -475,9 +740,16 @@ function refresh_rows(v, top)
     v.rows:SetItems(rows, not top)
 end
 
-local function refuse(v, problem)
+-- Says why a value was not changed. After typing, the box keeps what was typed and gets the keyboard back, so it can be put right.
+local function refuse(v, problem, typed)
     Wax.ui.Notify(tostring(problem), { title = "Not changed", kind = "bad", seconds = 5 })
-    show_edit(v)
+    if not typed then return end
+    mark_bar(v, true)
+    v.edit_keep = v.frame + 3
+    sched.task.spawn(function()
+        sched.task.wait()
+        if view == v and not v.edit.destroyed and v.bar_edit then v.edit:Focus() end
+    end)
 end
 
 local function note_change(v, line)
@@ -486,15 +758,13 @@ local function note_change(v, line)
     show_changes(v)
 end
 
--- Every write the Explorer makes goes through here: the checked write, then the line of Lua that does the same.
+-- Every write the Explorer makes goes through here: the checked write, then the line of Lua that does the same. False and why, if not.
 local function write(v, record, value)
     local inst, sheet, picked = current(v), v.sheet, v.picked
-    if not (inst and sheet) then return false end
+    if not (inst and sheet) then return false, "It is not there any more." end
     local ok, problem = inspect.write(inst, record, value)
-    if not ok then
-        refuse(v, problem)
-        return false
-    end
+    if not ok then return false, problem end
+    sheet.written[record.name] = true
     if picked.code then note_change(v, paths.write_of(picked.code, record.name, inspect.literal(record, value))) end
     members.read(sheet, inst, record)
     show_edit(v)
@@ -502,29 +772,33 @@ local function write(v, record, value)
     return true
 end
 
+-- Writes what was typed for the picked member. Only Enter and the button beside the box come here: leaving the box writes nothing.
 local function commit(v, text)
     local a_row, sheet, inst = v.member, v.sheet, current(v)
-    if not (a_row and sheet and inst and members.editable(a_row)) then return end
+    if not (inst and types(v, a_row)) then return end
+    -- the value it has already is not written again (a number would come back rounded to what the box shows)
+    if text == edit_text(v) then return end
     local record = a_row.record
     local value, problem = inspect.parse(record, text, a_row.field)
-    if value == nil then return refuse(v, ("%s: %s."):format(member_name(a_row), problem)) end
+    if value == nil then return refuse(v, ("%s: %s."):format(member_name(a_row), problem), true) end
     if a_row.type == "field" then
         -- one part of a struct: the whole struct is written, with the other parts as they are now
         local state = members.read(sheet, inst, record)
-        if state.failed or not state.seen then return refuse(v, state.problem or "It could not be read.") end
+        if state.failed or not state.seen then return refuse(v, state.problem or "It could not be read.", true) end
         local whole = {}
         for _, field in ipairs(record.fields) do whole[field] = state.value[field] end
         whole[a_row.field] = value
         value = whole
     end
-    write(v, record, value)
+    local ok, why = write(v, record, value)
+    if not ok then refuse(v, why, true) end
 end
 
 local function press_member(v, made)
     local a_row, sheet = made.row, v.sheet
     if not a_row or not sheet then return end
     if a_row.type == "class" then return v.open_member(made) end
-    if a_row.type == "ancestor" or a_row.type == "more" then return end
+    if a_row.type == "ancestor" or a_row.type == "more" or a_row.type == "note" then return end
     if members.links(sheet, a_row) then
         local inst, record = current(v), a_row.record
         if not inst then return end
@@ -539,20 +813,24 @@ local function press_member(v, made)
     end
     v.member = a_row
     show_edit(v)
+    -- a row with parts shows them when it is picked. Its arrow closes it again.
+    if members.opens(sheet, a_row) and not sheet.open[a_row.record.name] then return v.open_member(made) end
     v.rows:Refresh()
 end
 
 local function build_details(v, side)
-    local theme = Wax.import("gui.style").theme
+    local theme = style.theme
     local head = side:Row()
-    v.back = head:Button(nil, function() v.split:Show("left") end, { icon = "arrow-left" })
+    v.back = head:Button("List", function() v.split:Show("left") end, { icon = "arrow-left", stretch = false, tip = "Back to the list" })
     v.name = head:Heading("Nothing picked")
-    v.previous = head:Button(nil, function() go_back(v) end, { icon = "undo-2" })
-    v.copy_path = head:Button(nil, function() copy(v.copy_path, "copy", v.picked and v.picked.code) end, { icon = "copy" })
+    v.previous = head:Button(nil, function() go_back(v) end, { icon = "undo-2", tip = "Back to what was picked before" })
+    v.copy_path = head:Button(nil, function() copy(v.copy_path, "copy", v.picked and v.picked.code) end,
+        { icon = "copy", tip = "Copy the Lua that reaches this object" })
     v.previous:SetEnabled(false)
     v.copy_path:SetEnabled(false)
-    v.path = side:Label("Pick something in the list.", { family = "mono", size = theme.small_size, dim = true })
-    v.find = side:Input(nil, { hint = "Search by name or type" })
+    v.path = side:Label("", { family = "mono", size = theme.small_size, dim = true })
+    v.path_hint = side:Label("Pick something in the list.", { size = theme.small_size, dim = true })
+    v.find = side:Input(nil, { hint = "Search by name or type", clear = true })
     local function apply_members()
         if not v.sheet then return end
         members.show(v.sheet, v.mode, v.member_text, v.order_by == ORDERS[2])
@@ -562,20 +840,35 @@ local function build_details(v, side)
         v.member_text = text
         apply_members()
     end)
-    local filters = side:Row()
-    v.show = filters:Dropdown(nil, SHOWS, v.mode, function(choice)
-        v.mode = choice
+    v.filters = side:Row()
+    v.show = v.filters:Dropdown(nil, SHOWS, v.mode, function(choice)
+        v.mode, settings.show = choice, choice
+        remember()
         apply_members()
     end)
-    v.order = filters:Dropdown(nil, ORDERS, v.order_by, function(choice)
-        v.order_by = choice
+    v.order = v.filters:Dropdown(nil, ORDERS, v.order_by, function(choice)
+        v.order_by, settings.order = choice, choice
+        remember()
         apply_members()
     end)
+    v.bar = side:Row({ height = BAND })
+    v.edit_name = v.bar:Label("", { dim = true, weight = 0.7 })
+    v.edit = v.bar:Input(nil, { mono = true })
+    v.edit.Typed:Connect(function(text)
+        v.edit_typed = text
+        mark_bar(v, false)
+    end)
+    v.edit.Entered:Connect(function(text) commit(v, text) end)
+    v.set = v.bar:Button(nil, function() commit(v, v.edit_typed) end, { icon = "check", tip = "Write this value. Enter does the same." })
+    v.code = v.bar:Button(nil, function() copy(v.code, "code", member_code(v)) end,
+        { icon = "code", tip = "Copy as Lua: how a mod reads this, and how it changes it" })
+    for at, text in ipairs(HELP) do v.help[at] = side:Label(text, { dim = true }) end
+    v.gone = side:Label(GONE, { dim = true })
 
     v.open_member = function(made)
         local a_row, sheet = made.row, v.sheet
         if not a_row or not sheet then return end
-        local key = a_row.type == "class" and "#class" or (a_row.type == "member" and a_row.record.name or nil)
+        local key = a_row.type == "class" and "#class" or (members.opens(sheet, a_row) and a_row.record.name or nil)
         if not key then return end
         sheet.open[key] = not sheet.open[key] or nil
         local inst = current(v)
@@ -585,13 +878,16 @@ local function build_details(v, side)
     v.flip = function(made, on)
         local a_row = made.row
         if not (a_row and a_row.type == "member" and a_row.record.show == "bool") then return end
-        if not write(v, a_row.record, on) and made.flag and not made.flag.destroyed then made.flag:Set(not on, true) end
+        local ok, why = write(v, a_row.record, on)
+        if ok then return end
+        if made.flag and not made.flag.destroyed then made.flag:Set(not on, true) end
+        refuse(v, ("%s: %s"):format(a_row.record.name, tostring(why)), false)
     end
     v.rows = side:Grid({ cell = 100000, cell_height = ROW, gap = GAP, batch = 2, warm = true,
         make = function(cell)
             local made = {}
             made.box, made.cell = cell:Row(), cell
-            made.line = made.box:Item({ weight = 1, columns = true, divider = true }, function() press_member(v, made) end,
+            made.line = made.box:Item({ weight = 1, columns = true, divider = true, fit = true }, function() press_member(v, made) end,
                 function() v.open_member(made) end)
             v.cells[#v.cells + 1] = made
             return made
@@ -600,18 +896,12 @@ local function build_details(v, side)
             made.row = a_row
             paint(v, made)
         end })
-
-    local bar = side:Row()
-    v.edit_name = bar:Label("", { dim = true })
-    v.edit = bar:Input(nil, { mono = true }, function(text) commit(v, text) end)
-    v.code = bar:Button(nil, function() copy(v.code, "code", member_code(v)) end, { icon = "code" })
-    v.edit:SetEnabled(false)
-    v.code:SetEnabled(false)
 end
 
--- Under both sides: what was changed here, as Lua that does the same.
+-- Under both sides, once something has been changed: what was changed here, as Lua that does the same.
 local function build_changes(v, page)
     local log = page:Section("Changes as Lua", { open = false })
+    v.changes_card = log.control
     v.changes_note = log:Label("", { dim = true })
     v.log = log:Console({ height = 84, max = M.CHANGES })
     local tools = log:Row()
@@ -626,10 +916,13 @@ function show_changes(v)
     local lines = {}
     for index_, line in ipairs(changes) do lines[index_] = { line } end
     v.log:SetLines(lines)
-    v.changes_note:Set(#changes == 0 and "What you change here is listed as Lua that does the same."
-        or ("%d change%s, as Lua that does the same."):format(#changes, #changes == 1 and "" or "s"))
-    v.copy_changes:SetEnabled(#changes > 0)
-    v.clear_changes:SetEnabled(#changes > 0)
+    v.changes_note:Set(("%d change%s, as Lua that does the same."):format(#changes, #changes == 1 and "" or "s"))
+    -- with nothing changed it stays out of the way, and the lists have its room
+    local any = #changes > 0
+    if any ~= v.changes_shown then
+        v.changes_shown = any
+        v.changes_card:SetVisible(any)
+    end
 end
 
 -- the page
@@ -651,26 +944,30 @@ local function map_changed()
         if row.root ~= "World" then row.open = false end
     end
     v.opened, v.history, v.tree_dirty, v.roots_due, v.tree_due, v.tree_now = {}, {}, true, 0, 0, true
-    v.world_open = {}
+    v.world_open, v.written = {}, {}
     if v.picked then v.picked.frame = nil end
-    v.previous:SetEnabled(false)
+    show_history(v)
 end
 
 local function make(page)
     local v = { page = page, window = page.window, frame = 0, roots = {}, flat = {}, opened = {}, kid_at = 0, tree_cells = {},
-        cells = {}, cell_at = 0, history = {}, mode = SHOWS[1], order_by = ORDERS[1], member_text = "", tree_dirty = true,
-        world_open = {},
+        cells = {}, cell_at = 0, history = {}, mode = settings.show, order_by = settings.order, member_text = "", tree_dirty = true,
+        world_open = {}, written = {}, help = {}, note_row = { type = "note", key = "#note", depth = 0, text = "" },
         tree_due = 0, rows_due = 0,
         roots_due = 0, kids_due = 0, results_version = -1, shown_rows = {} }
     view = v
-    v.split = page:Split({ share = 0.42, least = 260 })
+    v.split = page:Split({ share = 0.42, least = LEAST })
     build_tree(v, v.split.Left)
     build_details(v, v.split.Right)
     build_changes(v, page)
     v.back:SetVisible(v.split:IsSingle() == true)
-    v.split.Changed:Connect(function(single) v.back:SetVisible(single == true) end)
+    v.split.Changed:Connect(function(single)
+        v.back:SetVisible(single == true)
+        fit_texts(v)
+    end)
     v.map_changed = game.MapChanged:Connect(map_changed)
     show_changes(v)
+    arrange(v)
     show_edit(v)
     apply_query()
 end
@@ -710,6 +1007,12 @@ local function step()
         index.wake()
         v.roots_due, v.tree_due = 0, 0
     end
+    -- lines that are cut to their width are cut again when a side gets another width
+    if wrap_width(v.split.Right) ~= v.right_width then
+        fit_texts(v)
+        fit_bar(v)
+    end
+    if wrap_width(v.split.Left) ~= v.left_width then fit_count(v) end
     local timed = precise()
     index.step()
     local spent = precise() - timed
@@ -759,12 +1062,13 @@ local function step()
         v.rows_due = now + M.ROWS_EVERY
         refresh_rows(v)
     end
-    -- the box for typing follows the value, unless something is being typed in it
-    if v.member then
+    -- the box for typing follows the value, and goes back to it when it is left without Enter
+    if v.member and v.bar_edit then
         local text = edit_text(v)
-        if text ~= v.edit_shown and not v.edit:HasFocus() then
-            v.edit_shown = text
+        if (text ~= v.edit_shown or v.edit_typed ~= text) and v.frame > (v.edit_keep or 0) and not v.edit:HasFocus() then
+            v.edit_shown, v.edit_typed = text, text
             v.edit:Set(text)
+            mark_bar(v, false)
         end
     end
 end
