@@ -395,6 +395,9 @@ function Highlight:Configure(options) end
 ---@field Recipes WaxRecipes The game's crafting recipes: finding them, and changing what they take, what they give, how long they take and where they are made.
 ---@field Assets WaxAssets The game's assets by path, pictures from a mod's own files, materials made from the game's, and shapes made of numbers, each kept in memory for the mod that asked.
 ---@field Blueprints WaxBlueprints Things described in Lua and spawned by the host: an actor of a class the game has, with parts, assets and functions of your own. The game does not save them.
+---@field Animations WaxAnimations The game's own clips on anything with a skeleton, and animations written as keys in Lua for bones and for things.
+---@field Effects WaxEffects The game's particle effects, lights, glowing trails and camera shakes, on anything.
+---@field Sounds WaxSounds The game's own sounds.
 ---@field Time WaxTime The time of day in the prospect: the hour, the clock as text, the part of the day, and a signal for a new hour.
 ---@field Weather WaxWeather The weather on your character, and for the host every weather event that is running on the map.
 ---@field Prospect WaxProspect The prospect you are in: which one it is, its mission, and how long it has run.

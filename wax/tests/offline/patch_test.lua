@@ -602,7 +602,8 @@ end)
 t.test("more than four entries, entries that can own memory, and a list inside another value are behind switches of their own", function()
     t.eq(patch.WRITES.long_lists, false, "off until the game has shown that it works")
     t.eq(patch.WRITES.owning_lists, false, "the game was only seen to take entries of numbers, names and handles")
-    t.eq(patch.WRITES.nested_lists, false)
+    t.eq(patch.WRITES.nested_lists, true, "on since a tag list of a new row was grown in the game")
+    patch.WRITES.nested_lists = false
     local writes, assigns = fake.writes, fake.assigns
     as(A, function()
         t.raises(function() crafts:Set("Chair", "Steps", { 1, 2, 3, 4, 5 }) end,
@@ -1800,7 +1801,8 @@ t.test("a Load that is under way still returns the rows a change made it forget"
 end)
 
 t.test("adding rows is behind its own switch, and a new row's name and start are checked", function()
-    t.eq(patch.WRITES.rows, false, "off until the game has shown that it works")
+    t.eq(patch.WRITES.rows, true, "on since six rows of a new item were added in the game")
+    patch.WRITES.rows = false
     as(A, function()
         t.raises(function() recipes:Add("ModA_Quick_Knife", {}, { like = "Bone_Knife" }) end,
             "adding rows to the game's tables is switched off in this version of Wax")

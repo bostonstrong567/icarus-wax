@@ -57,7 +57,7 @@ function boot.start()
         game = Wax.import("engine.game")
         game.start()
     end, debug.traceback)
-    local track, highlight, watch, hooks = nil, nil, nil, nil
+    local track, highlight, watch, hooks, animations, effects = nil, nil, nil, nil, nil, nil
     if ok then
         Wax.game = game.root
         Wax.instance = Wax.import("engine.instance")
@@ -136,6 +136,22 @@ function boot.start()
         if not assets_ok then core_log:error("game.Assets failed to start: %s", tostring(assets_err)) end
         local blueprints_ok, blueprints_err = xpcall(function() Wax.import("world.blueprints").start() end, debug.traceback)
         if not blueprints_ok then core_log:error("game.Blueprints failed to start: %s", tostring(blueprints_err)) end
+        local animations_ok, animations_err = xpcall(function()
+            animations = Wax.import("world.animations")
+            animations.start()
+        end, debug.traceback)
+        if not animations_ok then
+            animations = nil
+            core_log:error("game.Animations failed to start: %s", tostring(animations_err))
+        end
+        local effects_ok, effects_err = xpcall(function()
+            effects = Wax.import("world.effects")
+            effects.start()
+        end, debug.traceback)
+        if not effects_ok then
+            effects = nil
+            core_log:error("game.Effects failed to start: %s", tostring(effects_err))
+        end
     else
         game = nil
         core_log:error("the game object model failed to start: %s", tostring(err))
@@ -196,6 +212,8 @@ function boot.start()
             highlight.step()
         end
         if watch then watch.step() end
+        if animations then animations.step() end
+        if effects then effects.step() end
     end
 
     -- a version put in at this start is kept once it has run for a while
@@ -205,7 +223,7 @@ function boot.start()
         local current_ui = Wax.ui
         if current_ui and current_ui.check then guard.call("gui.check", current_ui.check) end
         if game then perf.run("game", guard.call, "game.step", game.step) end
-        if highlight or watch or hooks then perf.run("world", guard.call, "world.step", world_step) end
+        if highlight or watch or hooks or animations or effects then perf.run("world", guard.call, "world.step", world_step) end
         perf.run("mods", mods.step)
         storage.step()
         perf.run("tasks", sched.step)

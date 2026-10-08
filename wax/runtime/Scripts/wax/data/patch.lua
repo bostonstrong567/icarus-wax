@@ -24,8 +24,8 @@ M.WRITES = {
     lists = true,           -- a list of the row whose entries are numbers, names and handles: emptied, then filled entry by entry
     long_lists = false,     -- the same with more than ROOM entries before or after, which makes the engine move the list as it grows
     owning_lists = false,   -- the same when an entry is a string or can hold one or a list of its own, those lists empty before and after
-    nested_lists = false,   -- the same for a list inside a struct or a list entry, and emptying the lists of entries that go
-    rows = false,           -- a new row: AddRow from a row of the game, then RefreshConstants
+    nested_lists = true,    -- the same for a list inside a struct or a list entry, and emptying the lists of entries that go
+    rows = true,            -- a new row: AddRow from a row of the game, then RefreshConstants
     remove = false,         -- taking a switched-off row out at the title screen
 }
 M.ROOM = 4                  -- the entries the first block of a list has room for

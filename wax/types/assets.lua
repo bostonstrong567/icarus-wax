@@ -113,7 +113,7 @@ function Assets:Material(parent, options) end
 function Assets:Mesh(shape) end
 
 ---What game.Assets:Model takes besides the file.
----@class WaxModelOptions
+---@class WaxModelFileOptions
 ---@field scale? number How much larger the model is made. 100 when omitted, which fits a model made in metres: the game counts in centimetres.
 ---@field up? "y"|"z" Which way is up in the file. "y" when omitted, as most programs save an .obj. "z" for a file saved with Z up.
 ---@field flip? boolean True turns every triangle round. For a model that shows inside out.
@@ -123,7 +123,7 @@ function Assets:Mesh(shape) end
 ---gives: put it on a part with Apply, or name it as the mesh of a blueprint's part. No Unreal editor is needed. The
 ---file holds the shape only: give the part a material for its look. At most 65,000 vertices and 16 MB.
 ---@param file string The file's name inside the mod's folder, such as "models/rock.obj", or a whole path.
----@param options? WaxModelOptions
+---@param options? WaxModelFileOptions
 ---@return WaxMesh
 function Assets:Model(file, options) end
 
