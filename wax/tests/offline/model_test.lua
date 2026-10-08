@@ -219,6 +219,12 @@ function LoadAsset(path)
     rawget(object, "__values").ExtendedBounds = known.bounds
     return object
 end
+local find_object = StaticFindObject
+local registry = { IsValid = function() return true end, GetAsset = function() return { IsValid = function() return false end } end }
+function StaticFindObject(path)
+    if path == "/Script/AssetRegistry.Default__AssetRegistryHelpers" then return registry end
+    return find_object(path)
+end
 local function loads_of(path)
     local count = 0
     for _, loaded in ipairs(world.loads) do
@@ -982,6 +988,8 @@ t.test("a map change while the view is hidden touches nothing either", function(
 end)
 
 t.test("at most so many views draw a new picture in one frame", function()
+    local limit = model.RENDERING
+    model.RENDERING = 2
     local others = {}
     scope.run(owner, function()
         for index = 1, 3 do others[index] = window:Model(deer({ size = 100, spin = false })) end
@@ -1005,6 +1013,7 @@ t.test("at most so many views draw a new picture in one frame", function()
     for _, other in ipairs(others) do other:Destroy() end
     frames(2)
     t.eq(#world.actors, 1)
+    model.RENDERING = limit
 end)
 
 t.test("a view in a panel follows the panel, and is drawn with the pixels the panel's size gives it", function()

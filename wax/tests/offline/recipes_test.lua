@@ -643,7 +643,7 @@ t.test("SetOutputs and SetOutput change what comes out where it is: another coun
     end)
 end)
 
-t.test("outputs keep their number in this version, and a wrong output is refused in plain words", function()
+t.test("outputs keep their number, and a wrong output is refused in plain words", function()
     local writes = fake.writes
     as(A, function()
         local axe = Recipes:Get("Stone_Axe")
@@ -663,8 +663,11 @@ t.test("outputs keep their number in this version, and a wrong output is refused
             "Seed has 2 templates and none of its own name: Seed_Carrot and Seed_Wheat. Name the one you mean, as in "
             .. "{ Template = \"Seed_Carrot\", Count = 1 }")
         t.raises(function() axe:SetOutputs({ { "Stone", 1 }, { Template = "Stone", Count = 2 } }) end, "SetOutputs names Stone twice")
-        -- the output that would go holds a list of its own, which the write path does not give back in this version
+        -- the output that would go holds a list of its own: while the write path does not empty such lists, it is refused
+        local nested = patch.WRITES.nested_lists
+        patch.WRITES.nested_lists = false
         t.raises(function() Recipes:Get("Water_Fill"):SetOutputs({ Waterskin = 1 }) end, "Water_Fill: Outputs")
+        patch.WRITES.nested_lists = nested
     end)
     t.eq(fake.writes, writes, "not one write")
     t.eq(outputs("Water_Fill"), "Waterskin_Full x5")
@@ -1086,7 +1089,7 @@ end)
 
 t.test("Add is switched off with the write path's rows switch, and says so", function()
     fresh_mods()
-    t.eq(patch.WRITES.rows, false)
+    patch.WRITES.rows = false
     as(A, function()
         local err = t.raises(function() Recipes:Add("ModA_Quick_Axe", { like = "Stone_Axe", inputs = { Stone = 1 } }) end,
             "game.Recipes:Add is switched off in this version of Wax: adding a row to the game's tables while the game runs has not been "
