@@ -615,6 +615,50 @@ t.test("without developer mode the index is not read, and the mods it listed are
     t.eq(status("Reach").status, "loaded", "a mod the player had seen is back as it was")
 end)
 
+t.test("mod.OnUnload runs before the mod's things go, newest first, with why, and one that fails stops nothing", function()
+    shared.bye, shared.heard = {}, 0
+    put_mod("Bye", { ["init.lua"] = [[
+        shared.signal:Connect(function() shared.heard = shared.heard + 1 end)
+        local never = mod.OnUnload(function() shared.bye[#shared.bye + 1] = "never" end)
+        mod.OnUnload(function(why)
+            shared.signal:Fire()
+            shared.bye[#shared.bye + 1] = "first " .. why
+        end)
+        mod.OnUnload(function() error("boom on the way out") end)
+        mod.OnUnload(function(why) shared.bye[#shared.bye + 1] = "last " .. why end)
+        never()
+        shared.wrong = select(2, pcall(mod.OnUnload, 5))
+    ]] })
+    write_index()
+    sync()
+    t.eq(status("Bye").status, "loaded")
+    t.ok(tostring(shared.wrong):find("mod.OnUnload expects a function, got number", 1, true), tostring(shared.wrong))
+    t.eq(#shared.bye, 0, "nothing runs while the mod is loaded")
+
+    t.ok(loader.reload("Bye"))
+    t.eq(table.concat(shared.bye, ", "), "last reload, first reload")
+    t.eq(shared.heard, 1, "the mod's own connection was still there when its function ran")
+    t.ok(logged("boom on the way out"), "the one that failed is reported")
+    shared.bye = {}
+    loader.set_enabled("Bye", false)
+    look()
+    t.eq(table.concat(shared.bye, ", "), "last off, first off")
+    shared.bye = {}
+    look()
+    t.eq(#shared.bye, 0, "and they run once")
+
+    put_mod("Half", { ["init.lua"] = [[
+        mod.OnUnload(function(why) shared.bye[#shared.bye + 1] = "half " .. why end)
+        error("half way")
+    ]] })
+    write_index()
+    sync()
+    t.eq(status("Half").status, "failed")
+    t.eq(table.concat(shared.bye, ", "), "half failed", "what a mod set up before it failed to load is taken back too")
+    loader.set_enabled("Half", false)
+    look()
+end)
+
 t.test("unload_all leaves no connections or tasks behind", function()
     loader.unload_all()
     t.eq(signal.count, 0)

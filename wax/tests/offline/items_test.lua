@@ -1259,4 +1259,29 @@ if arg and arg[1] == "cost" then
     if not ok then print("the cost printout failed: " .. tostring(problem)) end
 end
 
+t.test("Resize adds and takes slots at the end, never a slot that holds something, and only for the host", function()
+    actions.host(true)
+    local who = hero()
+    possess(who)
+    local pack = who.instance.Backpack
+    local size, adds, takes = pack.Size, calls("AddSlots"), calls("RemoveSlots")
+    t.eq(pack:Resize(size + 20), size + 20)
+    t.eq(pack.Size, size + 20, "it reads the new size in the same frame")
+    t.eq(calls("AddSlots"), adds + 1)
+    t.eq(pack:Resize(size + 20), size + 20, "the size it has asks the game nothing")
+    t.eq(calls("AddSlots") + calls("RemoveSlots"), adds + takes + 1)
+    fake.put(who.backpack, size + 5, "Wood", 3)
+    local now, why = pack:Resize(size)
+    t.eq(now, size + 5, "it stops at the last slot that holds something")
+    t.ok(tostring(why):find(("slot %d holds something"):format(size + 5), 1, true), tostring(why))
+    fake.take(who.backpack, size + 5)
+    t.eq(pack:Resize(size), size)
+    t.eq(actions.untried, 0)
+    t.raises(function() pack:Resize(0) end, "Resize expects how many slots")
+    t.raises(function() pack:Resize("many") end, "Resize expects how many slots")
+    actions.host(false)
+    t.raises(function() pack:Resize(size + 1) end, "only the host can resize an inventory")
+    actions.host(true)
+end)
+
 t.finish("items")

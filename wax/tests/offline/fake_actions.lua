@@ -169,6 +169,7 @@ local function takes(inv, facts) return inv.accepts == nil or inv.accepts(facts.
 
 local function install_items()
     values.struct(ITEM_ROW, "/Script/IcarusUtilities.RowHandle", {})
+    values.struct("/Script/Icarus.TagQueriesRowHandle", "/Script/IcarusUtilities.RowHandle", {})
     values.struct(ITEM, nil, {
         { "ItemStaticData", "StructProperty", struct = ITEM_ROW }, { "ItemDynamicData", "ArrayProperty", inner = "StructProperty" },
         { "ItemCustomStats", "ArrayProperty", inner = "StructProperty" }, { "DatabaseGUID", "StrProperty" },
@@ -226,6 +227,22 @@ local function install_items()
                 items.set(inv, args.Location + 1, args.Property, args.Value)
                 return true
             end },
+        AddSlots = { { "SlotsToAdd", INT }, { "QueryOverride", "StructProperty", struct = "/Script/Icarus.TagQueriesRowHandle" },
+            call = function(self, args)
+                called("AddSlots")
+                local inv = items.of(self)
+                if args.SlotsToAdd < 1 then untried("AddSlots of less than one slot was never tried") end
+                items.resize(inv, #inv.slots + args.SlotsToAdd)
+            end },
+        RemoveSlots = { { "SlotsToRemove", INT }, call = function(self, args)
+            called("RemoveSlots")
+            local inv = items.of(self)
+            local size = #inv.slots - args.SlotsToRemove
+            for position = size + 1, #inv.slots do
+                if inv.slots[position].item then untried("RemoveSlots of a slot that holds something was never tried") end
+            end
+            items.resize(inv, size)
+        end },
         ConsumeItem = { { "Location", INT }, { "Amount", INT }, { "ClearItemSave", BOOL }, returns = BOOL, call = function(self, args)
             called("ConsumeItem")
             local inv = items.of(self)

@@ -115,7 +115,15 @@ local function make_env(mod)
     env.Signal = sched.Signal
     env.log = log.channel(mod.id)
     env.mod = setmetatable({ id = mod.id, name = mod.manifest.name or mod.id, version = mod.manifest.version or "0.0.0",
-        dir = mod.dir, Reload = function() pending[mod.id] = true end },
+        dir = mod.dir, Reload = function() pending[mod.id] = true end,
+        OnUnload = function(fn)
+            if type(fn) ~= "function" then error("mod.OnUnload expects a function, got " .. type(fn), 2) end
+            local list = mod.unloading
+            if not list then error("mod.OnUnload was called while the mod unloads, which is too late to ask", 2) end
+            local entry = { fn }
+            list[#list + 1] = entry
+            return function() entry[1] = nil end
+        end },
         { __index = function(_, key) return type(key) == "string" and file_of(mod, key) or nil end })
     for name, reason in pairs(BLOCKED) do env[name] = blocked(name, reason) end
     for name, value in pairs(extras) do env[name] = value end
@@ -206,7 +214,29 @@ function loader._require(mod, name, level)
 end
 
 -- loading and unloading one mod
+local WHY = { reloading = "reload", ["switched off"] = "off", removed = "removed", ["shutting down"] = "shutdown",
+    ["broken manifest"] = "off" }
+
+-- What the mod asked to run before it goes, newest first, while everything of the mod is still there.
+local function say_goodbye(mod, reason)
+    local list = mod.unloading
+    mod.unloading = nil
+    if not list or not mod.scope then return end
+    local why = WHY[reason] or (mod.status == "loaded" and "reload" or "failed")
+    local previous = scope.enter(mod.scope)
+    for i = #list, 1, -1 do
+        local fn = list[i][1]
+        if fn then
+            guard.arm()
+            local ok, err = xpcall(fn, guard.handler, why)
+            if not ok then guard.report(err, "mod.OnUnload of " .. mod.id, mod.scope) end
+        end
+    end
+    scope.leave(previous)
+end
+
 local function unload(mod, reason)
+    say_goodbye(mod, reason)
     if mod.scope then
         local failures = mod.scope:destroy()
         for _, failure in ipairs(failures) do guard.report(failure, "cleanup of " .. mod.id, mod.scope) end
@@ -234,6 +264,7 @@ local function load_mod(mod)
         end
     end
     mod.scope = scope.new(mod.id)
+    mod.unloading = {}
     mod.env = make_env(mod)
     mod.modules = {}
     local started = os.clock()

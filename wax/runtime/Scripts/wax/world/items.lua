@@ -811,7 +811,43 @@ local function character_take(self, raw, item, amount)
     return taken_answer(taken, wanted)
 end
 
-inventory_methods.Give, inventory_methods.Take = give, take
+M.MOST_SLOTS = 500      -- more slots than this in one inventory is refused
+
+local function add_slots(raw, more) raw:AddSlots(more, {}) end
+local function remove_slots(raw, fewer) raw:RemoveSlots(fewer) end
+
+-- Slots come and go at the end. A slot that holds something is never taken, nor any slot before it.
+local function resize(self, raw, wanted)
+    host_only("resize an inventory")
+    if math.type(wanted) ~= "integer" or wanted < 1 or wanted > M.MOST_SLOTS then
+        error(("Resize expects how many slots, a whole number from 1 to %d, got %s"):format(M.MOST_SLOTS,
+            type(wanted) == "number" and tostring(wanted) or described(wanted)), 0)
+    end
+    local copy = fresh(self, raw, "Resize")
+    local have, target = copy.size, wanted
+    if wanted < have then
+        for position = have, wanted + 1, -1 do
+            if copy.slots[position] then
+                target = position
+                break
+            end
+        end
+    end
+    if target > have then
+        ask("adding slots", add_slots, raw, target - have)
+    elseif target < have then
+        ask("taking slots", remove_slots, raw, have - target)
+    end
+    M.touch(copy.address)
+    local now = fresh(self, raw, "Resize").size
+    if now == wanted then return now end
+    if target ~= wanted and now == target then
+        return now, ("slot %d holds something, so %d slots stay"):format(target, now)
+    end
+    return now, ("the game left it at %d slots"):format(now)
+end
+
+inventory_methods.Give, inventory_methods.Take, inventory_methods.Resize = give, take, resize
 player_methods.Give, player_methods.Take = character_give, character_take
 
 -- For the module that hears the game's item events: the slot at `location` (counted from 0, as the game counts) of the

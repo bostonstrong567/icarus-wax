@@ -132,6 +132,16 @@ function Inventory:Give(item, count) end
 ---@return string? why Says how many there were, when there were fewer than asked for.
 function Inventory:Take(item, count) end
 
+---Gives the inventory this many slots, for the host only. Slots are added and taken at its end. A slot that holds
+---something is never taken, nor any slot before it: the inventory then keeps as many as it needs, and the second value
+---says so. Size, List and the others follow in the same frame.
+---It lasts as long as the inventory does: one the game makes anew, as on a map change, has the number of its row of
+---D_InventoryInfo again. It has been tried on the station's loadout, from 15 to 50 slots and back.
+---@param slots integer How many slots it should have, from 1 to 500.
+---@return integer size How many it has now.
+---@return string? why Why not what was asked, in plain words: "slot 31 holds something, so 31 slots stay".
+function Inventory:Resize(slots) end
+
 ---What Wax adds to a player's character for the things it carries: every Instance whose class is IcarusPlayerCharacter or
 ---is built on it, and game.Me. Each inventory is an Instance of the game's Inventory with what WaxInventory lists, and is
 ---nil when the character has no such inventory, as the character in the station has no backpack. An inventory Wax
