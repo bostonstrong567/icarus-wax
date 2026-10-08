@@ -14,7 +14,7 @@
 
 ---What game.Assets:Mesh makes a shape from. Give box, or vertices and triangles.
 ---@class WaxMeshShape
----@field vertices? ({ X: number, Y: number, Z: number }|number[])[] The corners, at least 3 and at most 20,000, each { X = 0, Y = 0, Z = 0 } or { 0, 0, 0 }. 100 is one metre, measured from the part's own place.
+---@field vertices? ({ X: number, Y: number, Z: number }|number[])[] The corners, at least 3 and at most 65,000, each { X = 0, Y = 0, Z = 0 } or { 0, 0, 0 }. 100 is one metre, measured from the part's own place.
 ---@field triangles? integer[] Three vertex numbers for each triangle, counted from 1. A triangle is seen from the side on which its corners run counter-clockwise.
 ---@field box? number|{ X: number, Y: number, Z: number } A box around the part's place in the stead of vertices and triangles: the length of its sides, or one length for each direction. It has 24 vertices, four a side, so each side is flat and takes a whole picture.
 ---@field normals? ({ X: number, Y: number, Z: number }|number[])[] The direction each vertex faces, one for each vertex. When omitted they are worked out from the triangles: a vertex that several triangles share faces between them, which shades a corner round. Give a side its own vertices to keep it flat.
@@ -121,7 +121,7 @@ function Assets:Mesh(shape) end
 
 ---Reads a 3D model from an .obj file in your mod's folder and gives it as a shape, the same kind game.Assets:Mesh
 ---gives: put it on a part with Apply, or name it as the mesh of a blueprint's part. No Unreal editor is needed. The
----file holds the shape only: give the part a material for its look. At most 20,000 vertices and 8 MB.
+---file holds the shape only: give the part a material for its look. At most 65,000 vertices and 16 MB.
 ---@param file string The file's name inside the mod's folder, such as "models/rock.obj", or a whole path.
 ---@param options? WaxModelOptions
 ---@return WaxMesh

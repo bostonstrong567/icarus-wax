@@ -12,7 +12,7 @@ local M = {}
 M.EXPLAIN = true            -- a path that gives nothing is looked up in the game's list of assets, to say what is near it
 M.EXPLAINED = 24            -- how many such lookups a session: each leaves a few kilobytes behind in UE4SS
 M.RETRY = 5                 -- seconds before a path that gave nothing is tried again
-M.MAX_VERTICES = 20000      -- UE4SS hands vertices over one at a time: a bigger model belongs in a cooked asset
+M.MAX_VERTICES = 65000      -- UE4SS hands vertices over one at a time: a bigger model belongs in a cooked asset
 M.MAX_SECTION = 15          -- the highest section of a part a mesh can go on
 M.MANY = 2000               -- held things at which the log says once that something is being made over and over
 M.clock = function() return sched.clock() end
@@ -855,7 +855,7 @@ function M.forget_all()
 end
 
 local MODEL_OPTIONS = { "scale", "up", "flip", "collision" }
-local MAX_MODEL_BYTES = 8 * 1024 * 1024
+local MAX_MODEL_BYTES = 16 * 1024 * 1024
 
 -- A 3D model from an .obj file in the mod's folder, as a shape for a part: what game.Assets:Mesh gives.
 -- options: scale (100 when omitted: a model made in metres), up ("y" as most programs save it, or "z"),
@@ -884,7 +884,7 @@ function members:Model(file, options)
     local size = handle:seek("end")
     if size > MAX_MODEL_BYTES then
         handle:close()
-        error("game.Assets:Model: the file is larger than 8 MB. A model that large belongs in a mod's game content", 2)
+        error("game.Assets:Model: the file is larger than 16 MB. A model that large belongs in a mod's game content", 2)
     end
     handle:seek("set", 0)
     local text = handle:read("a")

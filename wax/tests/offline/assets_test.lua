@@ -997,7 +997,7 @@ t.test("a shape that cannot be is refused in plain words", function()
     refused("collision is true or false", { box = 10, collision = "yes" })
     module.MAX_VERTICES = 23
     refused("24 vertices is more than the 23 a mesh made in Lua can have. A model that large belongs in a cooked asset", { box = 10 })
-    module.MAX_VERTICES = 20000
+    module.MAX_VERTICES = 65000
     t.raises(function() Assets.Mesh({ box = 10 }) end, "call Mesh with a colon")
     local box = Assets:Mesh({ box = 10 })
     t.raises(function() box.VertexCount = 3 end, "Mesh.VertexCount cannot be assigned: make another mesh with game.Assets:Mesh")
