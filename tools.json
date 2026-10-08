@@ -13,6 +13,21 @@
       "about": "UE4SS v3.0.1-1152-ge3ba1016, the build Wax is tested on. Kept zipped; Build-WaxRelease.ps1 and Install-UE4SS.ps1 unpack it."
     },
     {
+      "name": "pak\\repak",
+      "type": "github-release",
+      "repo": "trumank/repak",
+      "assets": [
+        "repak_cli-x86_64-pc-windows-msvc.zip"
+      ],
+      "exe": "repak.exe",
+      "smoke": [
+        "--version"
+      ],
+      "about": "Pak pack/unpack CLI. Used by the build scripts.",
+      "tag": "v0.2.3",
+      "sha256": "6720d602144d75df477a99d5bedb6ea780997546afc335901d4937cafeaa73fa"
+    },
+    {
       "name": "lua\\lua54",
       "type": "lua-source",
       "version": "5.4.8",
@@ -37,6 +52,21 @@
       "about": "Lua language server: autocomplete and diagnostics in VS Code, and headless type-checking of mods (--check). One exact version, checked by its sha256; change the tag, the file name and the sha256 together.",
       "tag": "3.19.1",
       "sha256": "fdb9a59108cf62517813c97fa5549b0e16d1ef0688306bac728b08434db7e4cd"
+    },
+    {
+      "name": "unreal\\legendary",
+      "type": "github-release",
+      "repo": "derrod/legendary",
+      "assets": [
+        "legendary_windows_x64.exe"
+      ],
+      "exe": "legendary_windows_x64.exe",
+      "smoke": [
+        "--version"
+      ],
+      "about": "Command-line Epic Games client. Used once by Install-UnrealEditor.ps1 to download Unreal Engine 4.27 into engine\\. Its login lives in this folder's config\\.",
+      "tag": "0.21.1",
+      "sha256": "6be77857dc0a6dd33ea7442ce8b5291944ec6da53757f81ca95b57ce794baf5b"
     }
   ],
   "manual": [],

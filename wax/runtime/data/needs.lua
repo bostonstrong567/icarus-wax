@@ -854,4 +854,17 @@ return {
             { enum = "/Script/Engine.ECollisionEnabled", values = { NoCollision = 0 } },
         },
     },
+    {
+        id = "content",
+        name = "Game content of mods",
+        without = "A mod's own game content (content/<Id>.pak) is not handed to the game, so mod.Content says off.",
+        files = { "mods/content.lua" },
+        classes = {
+            { class = "/Script/MobilePatchingUtils.MobilePatchingLibrary", functions = { "GetInstalledContent" } },
+            { class = "/Script/MobilePatchingUtils.MobileInstalledContent", functions = { "Mount" } },
+            { class = "/Script/Engine.BlueprintPathsLibrary", functions = { "FileExists", "ProjectPersistentDownloadDir" } },
+            { class = "/Script/Engine.KismetSystemLibrary", functions = { "CollectGarbage" } },
+            { class = "/Script/Sentry.SentryLibrary", functions = { "SaveStringToFile" } },
+        },
+    },
 }

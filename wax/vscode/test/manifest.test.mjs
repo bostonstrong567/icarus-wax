@@ -88,9 +88,9 @@ test('the context keys the menus wait for are set by the code, and the view exis
   assert.deepEqual(title, ['wax.newMod', 'wax.refreshMods']);
 });
 
-test('the settings are the three the code reads', () => {
+test('the settings are the ones the code reads', () => {
   const settings = contributes.configuration.properties;
-  assert.deepEqual(Object.keys(settings).sort(), ['wax.docsUrl', 'wax.gamePath', 'wax.runtimePath']);
+  assert.deepEqual(Object.keys(settings).sort(), ['wax.content.autoBuild', 'wax.docsUrl', 'wax.gamePath', 'wax.runtimePath']);
   assert.equal(settings['wax.docsUrl'].default, docs.DOCS);
   for (const name of Object.keys(settings)) assert.ok(source.includes(`get('${name.slice(4)}'`), name);
   // a path on this PC is no use on another one, so the two paths are not carried along by Settings Sync

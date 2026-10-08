@@ -1,0 +1,6 @@
+# Copies of the game's own cooked files in this project, made by scripts\Get-GameAsset.ps1. Do not edit.
+# They belong to the game: they are never cooked into a mod, packed or published.
+build 25621870
+asked /Game/BP/Utilities/WT/WT_CaveLight
+BP/Utilities/WT/WT_CaveLight.uasset
+BP/Utilities/WT/WT_CaveLight.uexp

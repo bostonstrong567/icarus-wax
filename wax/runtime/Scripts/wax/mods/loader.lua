@@ -124,7 +124,13 @@ local function make_env(mod)
             list[#list + 1] = entry
             return function() entry[1] = nil end
         end },
-        { __index = function(_, key) return type(key) == "string" and file_of(mod, key) or nil end })
+        { __index = function(_, key)
+            if key == "Content" then
+                local found, content = pcall(Wax.import, "mods.content")
+                return found and content.of(mod) or nil
+            end
+            return type(key) == "string" and file_of(mod, key) or nil
+        end })
     for name, reason in pairs(BLOCKED) do env[name] = blocked(name, reason) end
     for name, value in pairs(extras) do env[name] = value end
 
@@ -260,6 +266,19 @@ local function load_mod(mod)
         elseif other.status ~= "loaded" then
             mod.status, mod.error = "failed", ("needs mod '%s', which is not loaded"):format(dependency)
             core_log:error("%s: %s", mod.id, mod.error)
+            return false
+        end
+    end
+    -- game content the mod brings is mounted before its code runs
+    if mod.files["content/" .. mod.id .. ".pak"] then
+        local found, content = pcall(Wax.import, "mods.content")
+        local ok, answer = found, content
+        if found then ok, answer = pcall(content.prepare, mod) end
+        if not ok then
+            core_log:error("%s: its game content could not be looked at: %s", mod.id, tostring(answer))
+        elseif answer == "wait" then
+            mod.status = "unloaded"
+            pending[mod.id] = true
             return false
         end
     end
@@ -557,9 +576,11 @@ end
 
 function loader.list()
     local out = {}
+    local found, content = pcall(Wax.import, "mods.content")
     for _, id in ipairs(order) do
         local mod = mods[id]
         out[#out + 1] = {
+            content = found and mod.files["content/" .. id .. ".pak"] and (content.state(id) or { id = id, files = 0 }) or nil,
             id = id, name = mod.manifest.name or id, version = mod.manifest.version, status = mod.status, enabled = mod.enabled,
             fresh = mod.fresh, waiting = mod.held_back,
             error = mod.error, generation = mod.generation, owned = mod.scope and mod.scope:size() or 0,
@@ -661,6 +682,11 @@ function loader.console_env()
         })
     end
     env.mods, env.exports = view("env"), view("exports")
+    -- game content of mods: content.List(), content.State("Id"), content.Reload("Id")
+    local found, content = pcall(Wax.import, "mods.content")
+    if found then
+        env.content = { List = content.list, State = content.state, Reload = function(id) pending[id] = true end }
+    end
     return env
 end
 

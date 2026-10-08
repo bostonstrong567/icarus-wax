@@ -282,6 +282,7 @@ local function mod_list_signature(list, updates, keyed)
     for _, mod in ipairs(list) do
         local newer = updates and updates.available[mod.id]
         parts[#parts + 1] = mod.id .. ":" .. mod.status .. ":" .. mod.generation .. ":" .. (mod.waiting or "")
+            .. (mod.content and (":" .. tostring(mod.content.state) .. tostring(mod.content.mark)) or "")
             .. ":" .. (newer or "") .. (newer and updates.installing[mod.id] and "+" or "")
             .. (from_catalogue(updates, mod.id) and ":catalogue" or "") .. (keyed[mod.id] and ":window" or "")
     end
@@ -446,6 +447,15 @@ local function rebuild_mods(list, updates, keyed)
                     { color = style.theme.warn, size = style.theme.small_size })
             end
             if mod.loadMs and not off then section:Field("Load time", ("%.1f ms"):format(mod.loadMs)) end
+            -- a mod that brings game content of its own: whether the game has it
+            if mod.content and not off then
+                local state = mod.content.state
+                section:Field("Game content", state == "ready" and ("%d files, ready"):format(mod.content.files)
+                    or state == "restart" and "changed, restart the game" or state == "off" and "off" or "not looked at yet")
+                if mod.content.reason then
+                    section:Label(mod.content.reason, { color = state == "off" and style.theme.bad or style.theme.warn, size = style.theme.small_size })
+                end
+            end
             section:Toggle("Enabled", not off, function(on) Wax.mods.set_enabled(mod.id, on) end)
             local row = { control = section.control, section = section, built_open = open, mod = mod, visible = true, title = title }
             add_grip(row)
@@ -638,7 +648,7 @@ local function refresh_log()
     local lines = {}
     local needle = search ~= "" and search:lower() or nil
     for _, entry in ipairs(log.since(cleared_after)) do
-        if filters[entry.level] ~= false then
+        if filters[entry.level] ~= false and (filters.content ~= false or entry.channel ~= "wax.content") then
             local text = ("[%s] %s%s"):format(entry.channel, entry.message:gsub("[\r\n]+", " "), entry.count > 1 and (" (x" .. entry.count .. ")") or "")
             if not needle or text:lower():find(needle, 1, true) then
                 lines[#lines + 1] = { text, style.theme[LEVEL_COLOR[entry.level] or "text"] }
@@ -814,7 +824,7 @@ function panel.start()
         log_page = window:Page("Log", { icon = "scroll-text", scroll = false })
         log_page:Title("Log", "What Wax and the mods printed, newest at the bottom. Drag to select, Ctrl+C to copy.")
         local levels = log_page:Flow()
-        for _, level in ipairs({ { "error", "Errors" }, { "warn", "Warnings" }, { "info", "Prints" } }) do
+        for _, level in ipairs({ { "error", "Errors" }, { "warn", "Warnings" }, { "info", "Prints" }, { "content", "Game content" } }) do
             levels:Toggle(level[2], true, function(on)
                 filters[level[1]] = on
                 refresh_log()

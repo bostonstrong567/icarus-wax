@@ -2,7 +2,7 @@
   "name": "wax-icarus",
   "displayName": "Wax for Icarus",
   "description": "Write Lua mods for ICARUS with Wax. It starts new mods for you, completes and checks your code, runs it in the running game, and shows the game's log and errors.",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "publisher": "RobertCincotta",
   "icon": "icon.png",
   "homepage": "https://wax-icarus.duckdns.org/",
@@ -123,6 +123,18 @@
         "title": "Open Mod Folder in the Explorer",
         "category": "Wax",
         "icon": "$(folder-opened)"
+      },
+      {
+        "command": "wax.buildContent",
+        "title": "Build Game Content",
+        "category": "Wax",
+        "icon": "$(package)"
+      },
+      {
+        "command": "wax.openUnreal",
+        "title": "Open the Unreal Project",
+        "category": "Wax",
+        "icon": "$(tools)"
       },
       {
         "command": "wax.openDocs",
@@ -285,6 +297,11 @@
           "command": "wax.openModFolder",
           "when": "view == wax.mods && viewItem =~ /^mod\\./",
           "group": "wax@2"
+        },
+        {
+          "command": "wax.buildContent",
+          "when": "view == wax.mods && viewItem =~ /^mod\\./",
+          "group": "wax@3"
         }
       ],
       "explorer/context": [
@@ -346,6 +363,12 @@
           "default": "https://wax-icarus.duckdns.org/",
           "order": 3,
           "description": "The address of the Wax docs. \"Wax: Open Documentation\" opens it, and the links to single pages start with it."
+        },
+        "wax.content.autoBuild": {
+          "type": "boolean",
+          "default": false,
+          "order": 4,
+          "markdownDescription": "Build a mod's game content by itself when one of its assets is saved in the Unreal editor, and have the running game take the new pak. A build takes a minute or two. Only where the Wax source folder with its Unreal editor is open."
         }
       }
     },

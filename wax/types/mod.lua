@@ -11,13 +11,14 @@
 ---@class WaxFile
 
 ---What a mod knows about itself. Every Lua file and folder of the mod is a field too: `mod.Utils` is Utils.lua and
----`mod.extras.Utils` is extras/Utils.lua. A file called id, name, version, dir, Reload or OnUnload has to be required by its name instead.
+---`mod.extras.Utils` is extras/Utils.lua. A file called id, name, version, dir, Reload, OnUnload or Content has to be required by its name instead.
 ---@class WaxModInfo
 ---@field id string The mod's folder name.
 ---@field name string
 ---@field version string
 ---@field dir string Path of the mod's folder.
 ---@field Reload fun() Loads the mod again at the start of the next frame, as a saved file does.
+---@field Content WaxContent? The game content the mod brings in content/<Id>.pak: models, textures, blueprints. Nil for a mod without that file.
 ---@field OnUnload fun(fn: fun(why: "reload"|"off"|"removed"|"failed"|"shutdown")): fun() Runs `fn` once when the mod is about to unload, before anything of the mod is taken away: its windows, tasks, connections and table changes are all still there. `why` is "reload" when the mod loads again straight after, "off" when the player switched it off, "removed" when its folder went, "failed" when the mod raised an error while it loaded, and "shutdown" when Wax itself stops. Several run newest first, and one that raises an error is logged and stops none of the others. `fn` must return at once: it cannot wait. Use it for what Wax cannot undo for you, such as a change made to the world. It does not run when the game closes or the map changes. Returns a function that takes `fn` off again.
 mod = {}
 

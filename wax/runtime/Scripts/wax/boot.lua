@@ -141,6 +141,8 @@ function boot.start()
         core_log:error("the game object model failed to start: %s", tostring(err))
     end
 
+    local content_ok, content_err = xpcall(function() Wax.import("mods.content").start() end, debug.traceback)
+    if not content_ok then core_log:error("mods' game content failed to start: %s", tostring(content_err)) end
     local update_ok, update_err = xpcall(function()
         Wax.update = Wax.import("mods.update")
         Wax.update.start()

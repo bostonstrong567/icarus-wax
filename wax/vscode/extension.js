@@ -18,6 +18,7 @@ const FEATURES = [
   require('./lib/features/run'),
   require('./lib/features/log'),
   require('./lib/features/view'),
+  require('./lib/features/content'),
 ];
 
 let app = null;
