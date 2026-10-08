@@ -1082,18 +1082,60 @@
 ---@field SM_ORB_STN_FireExtinguisher_Tank StaticMeshComponent
 ---@field StaticMesh StaticMeshComponent
 
----@class BP_Radiation_Sphere_01_C : Actor
----@field DefaultSceneRoot SceneComponent
----@field Niagara NiagaraComponent
----@field OPacity_NewTrack_0_5BAC778644436C310C7B15A254278562 number
----@field OPacity__Direction_5BAC778644436C310C7B15A254278562 ETimelineDirection
----@field Opacity TimelineComponent
----@field SM_Radiation_Sphere_01 StaticMeshComponent
+---@class BP_Radiation_Sphere_01_C : RadiationFxSphere
+---@field BlendInTimer TimerHandle
+---@field CurrentCharacter Character
+---@field EffectRadiusDebug integer
+---@field FakeVolumetricTimer TimerHandle
+---@field Floor_GasClouds_Opacity TimelineComponent
+---@field Floor_GasClouds_Opacity_NewTrack_0_54C091024A5D801AC49B7E91740A48AA number
+---@field Floor_GasClouds_Opacity__Direction_54C091024A5D801AC49B7E91740A48AA ETimelineDirection
+---@field HeightLevels number[]
+---@field InnerMeshSpacing number
+---@field IsFadingOut boolean
+---@field LargeFloorRadius number
+---@field LastTransform Transform
+---@field MediumFloorRadius number
+---@field MinInnerRadius number
+---@field NS_MovingRad NiagaraComponent
+---@field NS_StaticVertRad NiagaraComponent
+---@field ["PP Radiation"] PostProcessComponent
+---@field PPMatOverlay MaterialInstanceDynamic
+---@field PPMatOverlayPersistent MaterialInstanceDynamic
+---@field RingSpacing number
+---@field SmallFloorRadius number
+---@field StaticRangeHandle TimerHandle
+---@field Timeline_0 TimelineComponent
+---@field Timeline_0_DayTimeIntensity_2FF0E41A4814726681E2ED942E4AA4E9 number
+---@field Timeline_0_NightTimeIntensity_2FF0E41A4814726681E2ED942E4AA4E9 number
+---@field Timeline_0__Direction_2FF0E41A4814726681E2ED942E4AA4E9 ETimelineDirection
+---@field Vertical_Rad_Opacity TimelineComponent
+---@field Vertical_Rad_Opacity_NewTrack_0_AE03D4E442C1833B1DAD40897141D057 number
+---@field Vertical_Rad_Opacity__Direction_AE03D4E442C1833B1DAD40897141D057 ETimelineDirection
+---@field bDebug boolean
 ---@field BlendIn fun(self: BP_Radiation_Sphere_01_C)
----@field OPacity__FinishedFunc fun(self: BP_Radiation_Sphere_01_C)
----@field OPacity__UpdateFunc fun(self: BP_Radiation_Sphere_01_C)
----@field SetEffectSize fun(self: BP_Radiation_Sphere_01_C, Radius: integer)
----@field SetIsMoving fun(self: BP_Radiation_Sphere_01_C, isMoving: boolean)
+---@field BlendPPOverlayBegin fun(self: BP_Radiation_Sphere_01_C)
+---@field BlendPPOverlayEnd fun(self: BP_Radiation_Sphere_01_C, CameraComponent: CameraComponent?)
+---@field Floor_GasClouds_Opacity__FinishedFunc fun(self: BP_Radiation_Sphere_01_C)
+---@field Floor_GasClouds_Opacity__UpdateFunc fun(self: BP_Radiation_Sphere_01_C)
+---@field GenerateDebugPreview fun(self: BP_Radiation_Sphere_01_C)
+---@field GenerateInstanceData fun(self: BP_Radiation_Sphere_01_C, Transforms: Transform[], Locations: Vector[])
+---@field InitClouds fun(self: BP_Radiation_Sphere_01_C)
+---@field IsMovableInit fun(self: BP_Radiation_Sphere_01_C)
+---@field OnPawnOverlappedBegin fun(self: BP_Radiation_Sphere_01_C, Pawn: Pawn?)
+---@field OnPawnOverlappedEnd fun(self: BP_Radiation_Sphere_01_C, Pawn: Pawn?)
+---@field PopulateFloorVolumetricClouds fun(self: BP_Radiation_Sphere_01_C, bGenerated: boolean)
+---@field PopulateVertRads fun(self: BP_Radiation_Sphere_01_C, TargetArray: Vector[])
+---@field ReceiveBeginPlay fun(self: BP_Radiation_Sphere_01_C)
+---@field ReceiveDestroyed fun(self: BP_Radiation_Sphere_01_C)
+---@field RegenerateInstanceData fun(self: BP_Radiation_Sphere_01_C): boolean
+---@field SetSphereScale fun(self: BP_Radiation_Sphere_01_C)
+---@field StaticRangeIntensity fun(self: BP_Radiation_Sphere_01_C)
+---@field Timeline_0__FinishedFunc fun(self: BP_Radiation_Sphere_01_C)
+---@field Timeline_0__UpdateFunc fun(self: BP_Radiation_Sphere_01_C)
+---@field TryPopulateFloorVolumetricClouds fun(self: BP_Radiation_Sphere_01_C)
+---@field Vertical_Rad_Opacity__FinishedFunc fun(self: BP_Radiation_Sphere_01_C)
+---@field Vertical_Rad_Opacity__UpdateFunc fun(self: BP_Radiation_Sphere_01_C)
 
 ---@class BP_Sandfalls_C : Actor
 ---@field AddParticles boolean
@@ -4517,6 +4559,7 @@
 ---@field ExaggerateEnable boolean
 ---@field Left number
 ---@field LeftEnable boolean
+---@field MouseMoved GameDelegate
 ---@field Right number
 ---@field RightEnable boolean
 ---@field Top number

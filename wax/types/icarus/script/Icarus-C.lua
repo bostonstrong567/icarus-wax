@@ -1453,6 +1453,7 @@
 ---@field WidgetsRef UserWidget[]
 ---@field AddItem fun(self: CustomComboBox, Name: string, Widget: UserWidget?)
 ---@field ClearChildren fun(self: CustomComboBox)
+---@field GetSelectedName fun(self: CustomComboBox): string
 ---@field GetSelectedWidget fun(self: CustomComboBox): UserWidget
 ---@field HideSearchBox fun(self: CustomComboBox, bHide: boolean)
 ---@field IsOpen fun(self: CustomComboBox): boolean

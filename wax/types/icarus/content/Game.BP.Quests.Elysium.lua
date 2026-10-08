@@ -1491,9 +1491,11 @@
 ---@field BPQC_SearchArea BPQC_SearchArea_C
 ---@field IcarusMapIcon IcarusMapIconComponent
 ---@field Sandworm Actor
+---@field SpawnLocation Vector
 ---@field Spawned boolean
 ---@field AIEndPlay fun(self: BPQ_ELY_Story_5_Draw_Sandworm_C, Actor: Actor?, EndPlayReason: EEndPlayReason)
 ---@field Check fun(self: BPQ_ELY_Story_5_Draw_Sandworm_C): boolean
+---@field GetDescription fun(self: BPQ_ELY_Story_5_Draw_Sandworm_C, InDescription: string, OutDescription: string, bOutComplete: boolean)
 ---@field ItemMatch fun(self: BPQ_ELY_Story_5_Draw_Sandworm_C, Deployable: IcarusActor?)
 ---@field OnCreatureKilled fun(self: BPQ_ELY_Story_5_Draw_Sandworm_C, Player: IcarusPlayerCharacter?, Causer: IcarusActor?, Creature: Actor?, KillingBlowFromPawn: Pawn?)
 ---@field ReceiveQuestEnded fun(self: BPQ_ELY_Story_5_Draw_Sandworm_C, bWasAbandoned: boolean)

@@ -808,18 +808,34 @@ end
 
 -- Whose windows are on screen is the menu's business (gui.init): it answers here for one owner, "Wax" or a mod's id.
 M.visible_for = function(_) return true end
+-- True while the mouse belongs to the interface: a pinned window takes clicks then, and lets them through otherwise.
+M.interactive = function() return true end
+
+function M.any_pinned()
+    for i = 1, #windows do
+        if windows[i].pinned and windows[i].shown then return true end
+    end
+    return false
+end
 
 -- Puts every window on or off the screen as its owner is. mode "fade" animates what changes, "logic" leaves the widgets as they are.
 function M.sync(mode)
     for i = 1, #windows do
         local window = windows[i]
-        local on = M.visible_for(window.owner_id) and true or false
+        local on = (window.pinned or M.visible_for(window.owner_id)) and true or false
         window.on_screen = on
+        -- a pinned window is there while you play, and only takes the mouse while the menu is open
+        local looks = (not window.pinned or M.interactive()) and V.Visible or V.HitTestInvisible
+        if on and window.outer_on and window.outer_looks ~= looks then
+            window.outer_looks = looks
+            window.outer:SetVisibility(looks)
+        end
         if mode ~= "logic" and on ~= window.outer_on then
+            window.outer_looks = looks
             window.outer_on = on
             if window.owner_animation then window.owner_animation.cancel() end
             if mode == "fade" then
-                if on then window.outer:SetVisibility(V.Visible) end
+                if on then window.outer:SetVisibility(looks) end
                 window.owner_animation = tween.run(style.theme.animation, function(progress)
                     window.outer:SetRenderOpacity(on and progress or 1 - progress)
                 end, function()
@@ -827,7 +843,7 @@ function M.sync(mode)
                 end, nil, window)
             else
                 window.outer:SetRenderOpacity(1)
-                window.outer:SetVisibility(on and V.Visible or V.Collapsed)
+                window.outer:SetVisibility(on and looks or V.Collapsed)
             end
         end
     end
@@ -850,15 +866,21 @@ function M.create(options, owner)
         height = math.max(nav == "top" and MIN_HEIGHT + 60 or MIN_HEIGHT, options.height or (nav and 380 or 420)),
         x = options.x or (60 + #windows * 30), y = options.y or (70 + #windows * 30),
         shown = false, minimized = false, horizontal = false, count = 0, resizable = options.resizable ~= false,
+        pinned = options.pinned == true,
         inset = theme.padding * 2 + 2,
         Opened = sched.Signal.new("Opened"), Closed = sched.Signal.new("Closed"), PageChanged = sched.Signal.new("PageChanged"),
     }, Window)
     window.window = window
     style.build(window, build, window, options)
     window.owner_id = owner or "Wax"
-    local on = M.visible_for(window.owner_id) and true or false
+    local on = (window.pinned or M.visible_for(window.owner_id)) and true or false
     window.on_screen, window.outer_on = on, on
-    if not on then window.outer:SetVisibility(V.Collapsed) end
+    if not on then
+        window.outer:SetVisibility(V.Collapsed)
+    elseif window.pinned and not M.interactive() then
+        window.outer_looks = V.HitTestInvisible
+        window.outer:SetVisibility(V.HitTestInvisible)
+    end
     windows[#windows + 1] = window
     window.owner, window.owner_slot = scope.own(function() window:Destroy() end)
     if options.visible ~= false then

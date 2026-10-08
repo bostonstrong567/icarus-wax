@@ -117,6 +117,7 @@
 ---@field nav? WaxNav Gives the window pages, listed down the side or along the top.
 ---@field nav_width? number Width of the side navigation column.
 ---@field remember? boolean False stops Wax remembering the window's position and size between sessions.
+---@field pinned? boolean True keeps the window on the screen while the player plays, with the menu closed. It takes no clicks then, so the mouse stays with the game. With a menu open it is a window like any other.
 ---@field key? string The key that shows and hides your mod's windows, such as "F6" or "Ctrl+K". The first window a mod makes decides. Without it Wax gives the mod a key, and the player can choose another on the mod's card of the Mods page.
 
 ---@class WaxPageOptions: WaxOptions

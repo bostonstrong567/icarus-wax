@@ -122,6 +122,8 @@ function boot.start()
         if not creature_ok then core_log:error("the creature fields failed to start: %s", tostring(creature_err)) end
         local models_ok, models_err = xpcall(function() Wax.import("world.creature_models").start() end, debug.traceback)
         if not models_ok then core_log:error("the creature models failed to start: %s", tostring(models_err)) end
+        local mounts_ok, mounts_err = xpcall(function() Wax.import("world.mounts").start() end, debug.traceback)
+        if not mounts_ok then core_log:error("mounts and creature models failed to start: %s", tostring(mounts_err)) end
         local data_ok, data_err = xpcall(function() Wax.import("data.tables").start() end, debug.traceback)
         if not data_ok then core_log:error("game.Data failed to start: %s", tostring(data_err)) end
         local patch_ok, patch_err = xpcall(function() Wax.import("data.patch").start() end, debug.traceback)

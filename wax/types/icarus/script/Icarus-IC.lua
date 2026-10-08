@@ -117,6 +117,7 @@
 ---@field Bloom CurveVector
 ---@field Cubemap TextureCube
 ---@field DistFogScale number
+---@field FishingBackground Texture2D
 ---@field FogColour CurveLinearColor
 ---@field Image_Large Texture2D
 ---@field Image_Medium Texture2D
@@ -1651,7 +1652,7 @@
 ---@field JoinProspectCallbackProxy JoinProspectCallbackProxyGen
 ---@field bJoinCancelled boolean
 ---@field bJoiningDedicated boolean
----@field IcarusJoinSession fun(self: IcarusJoinSession, WorldContextObject: Object?, IcarusSession: IcarusSession|{}, PlayerController: PlayerController?, OnlineProfileCharacter: OnlineProfileCharacter|{}, InConfirmationPopup: ConfirmationPopupBase?, ConfirmationSetups: table<EIcarusJoinConfirmationStep, ConfirmationPopupDetails>, Options: string): IcarusJoinSession Do not call from Lua: it needs 784 bytes and the call buffer holds 512.
+---@field IcarusJoinSession fun(self: IcarusJoinSession, WorldContextObject: Object?, IcarusSession: IcarusSession|{}, PlayerController: PlayerController?, OnlineProfileCharacter: OnlineProfileCharacter|{}, InConfirmationPopup: ConfirmationPopupBase?, ConfirmationSetups: table<EIcarusJoinConfirmationStep, ConfirmationPopupDetails>, Options: string): IcarusJoinSession Do not call from Lua: it needs 816 bytes and the call buffer holds 512.
 ---@field OnConfirmationCancel fun(self: IcarusJoinSession)
 ---@field OnJoinProspectFailure fun(self: IcarusJoinSession, Result: ResJoinProspect|{})
 ---@field OnJoinProspectSuccess fun(self: IcarusJoinSession, Result: ResJoinProspect|{})
@@ -2927,7 +2928,7 @@
 ---@field ResumeProspectCallbackProxy ResumeProspectCallbackProxyGen
 ---@field bAttemptHostMigration boolean
 ---@field bResumeCancelled boolean
----@field IcarusResumeSession fun(self: IcarusResumeSession, WorldContextObject: Object?, ProspectInfo: ProspectInfo|{}, PlayerController: PlayerController?, OnlineProfileCharacter: OnlineProfileCharacter|{}, InConfirmationPopup: ConfirmationPopupBase?, ConfirmationSetups: table<EIcarusResumeConfirmationStep, ConfirmationPopupDetails>, bAttemptHostMigration: boolean): IcarusResumeSession
+---@field IcarusResumeSession fun(self: IcarusResumeSession, WorldContextObject: Object?, ProspectInfo: ProspectInfo|{}, PlayerController: PlayerController?, OnlineProfileCharacter: OnlineProfileCharacter|{}, InConfirmationPopup: ConfirmationPopupBase?, ConfirmationSetups: table<EIcarusResumeConfirmationStep, ConfirmationPopupDetails>, bAttemptHostMigration: boolean): IcarusResumeSession Do not call from Lua: it needs 520 bytes and the call buffer holds 512.
 ---@field OnResumeProspectFailure fun(self: IcarusResumeSession, Result: ResResumeProspect|{})
 ---@field OnResumeProspectSuccess fun(self: IcarusResumeSession, Result: ResResumeProspect|{})
 ---@field ResumeCancel fun(self: IcarusResumeSession)

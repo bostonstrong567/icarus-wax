@@ -58,6 +58,11 @@ function Light:SetIntensity(intensity) end
 ---@field color? string|table Red when omitted.
 ---@field seconds? number How long the ribbon is, in time. 0.25 when omitted.
 ---@field life? number How long it runs. Until it is stopped when omitted.
+---@field width? number Makes it a streak this wide along the middle of the edge, always turned to face the view. Without it the ribbon lies between the edge's two ends, and a cut that comes straight at the view shows it from the side, as a line.
+---@field with_view? boolean True keeps the trail with the view, as the arms of first person are, instead of leaving it behind in the world. For something held in first person.
+---@field delay? number It starts this many seconds from now. A swing winds up first, and a trail that only runs during the cut is one clean arc. `life` counts from when it starts.
+---@field embers? number|{ rate?: number, size?: number, life?: number, speed?: number, rise?: number } Small glowing bits that come off the edge while it moves: how many a second, or a table. They drift, rise and shrink to nothing. None when omitted.
+---@field material? WaxInstance A material of your own in place of the plain glowing one, from game.Assets:Material. A thing held in first person is drawn bent toward the screen by its material, and a trail only lies on it when its material bends the same way.
 
 ---A trail that is running.
 ---@class WaxTrail

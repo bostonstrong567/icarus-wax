@@ -31,6 +31,7 @@ local ui = {}
 local V = style.Visibility
 local windows = window_module.windows
 local menu_open, preview = false, false
+local pinned_before = false
 local toggle_key = "F8"
 local layer_animation, layer_shown = nil, false
 local last_error_notice = -math.huge
@@ -204,6 +205,8 @@ local function anyone(windows_only)
     return false
 end
 
+window_module.interactive = function() return menu_open or preview end
+
 window_module.visible_for = function(id)
     local owner = owners[id]
     return preview or (menu_open and owner ~= nil and owner.open)
@@ -224,7 +227,7 @@ end
 
 -- Puts on screen what should be there now. The layer of the windows fades as a whole. With it staying up, single owners fade.
 local function arrange(fade)
-    local wanted = preview or (menu_open and anyone(true))
+    local wanted = preview or window_module.any_pinned() or (menu_open and anyone(true))
     if wanted ~= layer_shown then
         window_module.sync(not wanted and "logic" or nil)
         show_layer(wanted)
@@ -892,6 +895,12 @@ local function step()
     end
     -- with the windows away and the mouse over no panel, no slot can be under it
     slots.step(menu_open or panels, key_down, over_panel or menu_open or preview)
+    -- a pinned window came or went: the layer of the windows is put up or taken down for it
+    local pinned_now = window_module.any_pinned()
+    if pinned_now ~= pinned_before then
+        pinned_before = pinned_now
+        arrange()
+    end
     model.step()
     tip.step()
     fit.step()

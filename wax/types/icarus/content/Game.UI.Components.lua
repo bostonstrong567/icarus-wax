@@ -1510,6 +1510,12 @@
 ---@field Update fun(self: UMG_ExtractionElement_Resource_C, Progress: number)
 ---@field UpdateRecipeFrame fun(self: UMG_ExtractionElement_Resource_C): SlateBrush
 
+---@class UMG_FaceIcon_C : UserWidget
+---@field ChosenFace EFaceShapes
+---@field FaceToIcon table<EFaceShapes, Texture2D>
+---@field Icon Image
+---@field Construct fun(self: UMG_FaceIcon_C)
+
 ---@class UMG_FactionMissionProgress_C : UserWidget
 ---@field ProgressBar_78 ProgressBar
 

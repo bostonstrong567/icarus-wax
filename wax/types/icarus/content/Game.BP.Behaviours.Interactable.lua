@@ -641,7 +641,6 @@
 ---@field BP_Interactable_Milk_AutoGenFunc fun(self: BP_Interactable_Milk_C, Result: ViewTraceResult|{}): EViewTraceResultPriority
 ---@field CanInteract fun(self: BP_Interactable_Milk_C, Instigator: Actor?, HitResult: HitResult|{}): boolean Wax refuses this call from Lua.
 ---@field Interact fun(self: BP_Interactable_Milk_C, Instigator: Actor?, HitResult: HitResult|{})
----@field ReceiveTick fun(self: BP_Interactable_Milk_C, DeltaSeconds: number)
 
 ---@class BP_Interactable_Mission_STYX_D_Research2_Vacuum_Abyssal_Oxite_C : BP_Interactable_Interact_Vacuum_Items_Base_C
 

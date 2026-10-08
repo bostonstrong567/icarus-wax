@@ -650,7 +650,6 @@
 
 ---@class BP_Tame_Cow_C : BP_Tame_Base_C
 ---@field Fillable FillableComponent
----@field DebugText fun(self: BP_Tame_Cow_C)
 ---@field GetDamageSourceLocation fun(self: BP_Tame_Cow_C, Montage: AnimMontage?, SectionName: string): Vector
 ---@field IcarusBeginPlay fun(self: BP_Tame_Cow_C)
 ---@field OnFillableUnitsUpdated fun(self: BP_Tame_Cow_C)

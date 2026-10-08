@@ -9307,6 +9307,7 @@ RadialMenuDataLibrary
 RadialMenuDataTable
 RadialOptionsLibrary
 RadialOptionsTable
+RadiationFxSphere
 RadiationManager
 RangedWeaponDataLibrary
 RangedWeaponDataTable
@@ -10285,6 +10286,7 @@ UMG_CenterAlignedHorizontal_C
 UMG_Central_Scanner_C
 UMG_ChallengeExperienceNotification_C
 UMG_ChallengeProgressPopup_C
+UMG_CharacterBlending_DropBox_C
 UMG_CharacterCreation_C
 UMG_CharacterCustomisationContainer_C
 UMG_CharacterCustomization_Slider_C
@@ -10442,6 +10444,7 @@ UMG_ExtractionElement_C
 UMG_ExtractionElement_Resource_C
 UMG_FLODDebugOverlay_C
 UMG_FLODDebugOverlay_LoadedTileEntry_C
+UMG_FaceIcon_C
 UMG_FactionMissionProgress_C
 UMG_FatalSkyTrailerButton_C
 UMG_FeatureLevelIcon_C

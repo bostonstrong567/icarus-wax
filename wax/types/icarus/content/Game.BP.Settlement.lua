@@ -395,7 +395,6 @@
 ---@field Image_100 Image
 ---@field Image_Frame Image
 ---@field NearbySettlement Settlement
----@field RetainerBox_0 RetainerBox
 ---@field SettlementBuilding SettlementBuildingsRowHandle
 ---@field StatList VerticalBox
 ---@field VerticalBox_Cost VerticalBox

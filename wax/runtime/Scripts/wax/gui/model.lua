@@ -24,7 +24,7 @@ model.MIN_PIXELS, model.MAX_PIXELS = 64, 1024
 model.SHARP = 2                         -- pixels drawn for each pixel of the box, each way: edges and fur are smooth
 model.LEAST = 0.4                       -- the least of its box a model fills when it is shown beside a larger one
 model.BUDGET = 0.003                    -- seconds of loading a frame
-model.RENDERING = 2                     -- how many views draw a new picture in one frame
+model.RENDERING = 8                     -- how many views draw a new picture in one frame
 model.KEEP_SECONDS = 60                 -- a view that has not shown for this long gives its actor up
 model.NAP = 4                           -- a view that does not show is looked at every so many frames
 model.TWICE = 0.35                      -- seconds between two presses that put the view back
@@ -111,12 +111,25 @@ function model.check(source, blueprint)
     return source
 end
 
+-- An asset of a mod's own pak: the game's list of assets finds it where LoadAsset does not.
+local helpers = nil
+local function from_registry(path)
+    if helpers == nil then
+        local found = StaticFindObject("/Script/AssetRegistry.Default__AssetRegistryHelpers")
+        helpers = found:IsValid() and found or false
+    end
+    local package, name = path:match("^([^.]+)%.([^.]+)$")
+    if not helpers or not package then return nil end
+    return helpers:GetAsset({ ObjectPath = FName(path), PackageName = FName(package), AssetName = FName(name) })
+end
+
 -- Loads one thing of the game and makes sure it is what it will be used as. The object, or nil and why not.
 local function load(path, kind)
     local key = kind .. " " .. path
     if failed[key] then return nil, failed[key] end
     local began = now()
     local ok, object = pcall(LoadAsset, path)
+    if not ok or object == nil or not object:IsValid() then ok, object = pcall(from_registry, path) end
     local why = nil
     if not ok or object == nil or not object:IsValid() then
         why = path .. " could not be loaded. Is the path right?"
@@ -1125,6 +1138,34 @@ function model.install(Container, tools)
             rig.capture:ShowOnlyComponent(part)
         end
 
+        -- For that many seconds the body that shows holds its arms as the player's first-person arms hold theirs.
+        function control:MatchArms(seconds, options)
+            local rig = view.rig
+            if not (view.loaded and rig and rig.part) then error("MatchArms: the model is not in the picture yet. Wait for Loaded", 2) end
+            local given = {}
+            for key, value in pairs(options or {}) do given[key] = value end
+            given.on = Wax.import("engine.instance").wrap(rig.part)
+            local play = Wax.game.Animations:MatchArms(seconds, given)
+            local animations = Wax.import("world.animations")
+            animations.set_facing(rig.part, -(view.look and view.look.facing or 0))
+            local copy = animations.copy_of(rig.part)
+            if copy and rig.posed ~= copy:GetAddress() then
+                rig.capture:ShowOnlyComponent(copy)
+                rig.posed = copy:GetAddress()
+            end
+            rig.playing = true
+            return play
+        end
+
+        -- The names of the bones of the model that shows, for writing an animation for it.
+        function control:GetBones()
+            local rig = view.rig
+            if not (view.loaded and rig and rig.part) then return {} end
+            local names = {}
+            for index = 0, rig.part:GetNumBones() - 1 do names[#names + 1] = rig.part:GetBoneName(index):ToString() end
+            return names
+        end
+
         -- Plays an animation from game.Animations:Define on the model that shows, and gives the play.
         function control:Play(animation, options)
             if type(animation) ~= "table" or type(animation.Play) ~= "function" then
@@ -1135,7 +1176,8 @@ function model.install(Container, tools)
             local play = animation:Play(Wax.import("engine.instance").wrap(rig.part), options)
             -- the picture only draws what it was told of, so the posed copy is added to it
             local animations = Wax.import("world.animations")
-            animations.set_facing(rig.part, view.look and view.look.facing or 0)
+            -- a look's facing is how far the mesh is turned to face the view: the mesh itself faces the other way round
+            animations.set_facing(rig.part, -(view.look and view.look.facing or 0))
             local copy = animations.copy_of(rig.part)
             if copy and rig.posed ~= copy:GetAddress() then
                 rig.capture:ShowOnlyComponent(copy)

@@ -1,3 +1,7 @@
 # Written by scripts\Get-GameAsset.ps1 from GameFiles.txt: the game's own files are never committed.
+/ASS/CRE/Moa/SK_CRE_Moa_PhysicsAsset.uasset
+/ASS/CRE/Moa/SK_CRE_Moa_PhysicsAsset.uexp
+/ASS/CRE/Moa/SK_CRE_Moa_Skeleton.uasset
+/ASS/CRE/Moa/SK_CRE_Moa_Skeleton.uexp
 /BP/Utilities/WT/WT_CaveLight.uasset
 /BP/Utilities/WT/WT_CaveLight.uexp

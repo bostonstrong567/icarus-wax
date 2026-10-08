@@ -33,6 +33,10 @@
 ---A reach that also turns the end of the limb.
 ---@class WaxReach
 ---@field keys WaxAnimationKey[] X, Y and Z say where the end goes. Pitch, Yaw and Roll say how it is turned.
+---@field pin? boolean True holds the limb's end where the game has it, in place and in turn, whatever the bones above it do: a foot stays flat on the ground while the hips sink and turn. Keys are not needed then.
+---@field bend? { X: number, Y: number, Z: number }|number[] Which way the elbow or the knee points: forward, right and up.
+---@field bones? string[] The limb's own three bones, from its root to its end, for a skeleton that is not a person's.
+---@field straight? boolean True moves the end in straight lines between keys. When omitted it moves on a curve through them.
 ---@field from? "hand"|"shoulder" What this limb's keys are measured from, when it differs from the animation's reach_from.
 ---@field turn? boolean True uses Pitch, Yaw and Roll: with reach_from = "shoulder" they are the turn of what the hand holds, as the character stands. Otherwise they are added.
 

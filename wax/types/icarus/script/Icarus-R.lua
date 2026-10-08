@@ -202,11 +202,28 @@
 
 ---@class RadialOptionsTable : IcarusDataTable
 
+---@class RadiationFxSphere : Actor
+---@field CullingSpheres RadiationFxSphere[]
+---@field EffectRadius integer
+---@field GasCloudISM InstancedStaticMeshComponent
+---@field Seed integer
+---@field SphereComponent SphereComponent
+---@field bIsMovable boolean
+---@field GenerateDebugPreview fun(self: RadiationFxSphere)
+---@field RegenerateInstanceData fun(self: RadiationFxSphere): boolean
+---@field ShouldCullPoint fun(self: RadiationFxSphere, WorldPoint: Vector|{}): boolean
+---@field UpdateCullingData fun(self: RadiationFxSphere): boolean
+
 ---@class RadiationManager : IcarusActor
+---@field RadiationFxSpheres RadiationFxSphere[]
 ---@field RadioactiveInstances RadioactiveInstance[]
+---@field TimerHandle_ProcessRebuilds TimerHandle
+---@field GetCullingSpheres fun(self: RadiationManager, Sphere: RadiationFxSphere?): RadiationFxSphere[]
 ---@field GetInstancesAffectingLocation fun(self: RadiationManager, WorldLocation: Vector|{}, OptionalQuery: GameplayTagQuery|{}, OutInstances: RadioactiveInstance[])
 ---@field GetRadiationAtLocation fun(self: RadiationManager, Location: Vector|{}): number
 ---@field GetRadiationStrength fun(self: RadiationManager, Instance: RadioactiveInstance|{}, Location: Vector|{}): number
+---@field IsPointInsideAnySphere fun(self: RadiationManager, WorldPoint: Vector|{}, Spheres: RadiationFxSphere[]): boolean
+---@field MarkSphereDirty fun(self: RadiationManager, Sphere: RadiationFxSphere?)
 ---@field RegisterOrUpdateRadioactiveActor fun(self: RadiationManager, Actor: Actor?, Distance: number)
 ---@field UnregisterRadioactiveActor fun(self: RadiationManager, Actor: Actor?)
 

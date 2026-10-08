@@ -54,11 +54,13 @@
 ---@field SetFillingEffects fun(self: BP_Water_Purifier_T2_C, FillingEffectsOn: boolean)
 
 ---@class BP_Water_Purifier_T4_C : BP_Deployable_PowerToggleableBase_C
+---@field BP_IcarusPointLight BP_IcarusPointLight_C
+---@field BP_IcarusPointLight1 BP_IcarusPointLight_C
+---@field BP_IcarusPointLight2 BP_IcarusPointLight_C
+---@field BP_IcarusPointLight3 BP_IcarusPointLight_C
 ---@field Camera CameraComponent
----@field DividedFlowRate number
 ---@field FMOD_ActiveAudio_water FMODAudioComponent
 ---@field FillingEffectsON boolean
----@field Niagara_0 SceneComponent
 ---@field Niagara_Drip03_0 NiagaraComponent
 ---@field Niagara_Drip03_1 NiagaraComponent
 ---@field Niagara_Drip03_2 NiagaraComponent
@@ -66,7 +68,8 @@
 ---@field Niagara_Drip03_4 NiagaraComponent
 ---@field Niagara_Drip03_5 NiagaraComponent
 ---@field Niagara_TopFX_0 NiagaraComponent
----@field WaterUnitsPerTick integer
+---@field Scene_Lights SceneComponent
+---@field Scene_Niagara SceneComponent
 ---@field WidgetClassToOpen Class
 ---@field ActorsRequiringWater fun(self: BP_Water_Purifier_T4_C, NumActors: integer)
 ---@field Deployable_Interact fun(self: BP_Water_Purifier_T4_C, Interactor: Actor?)

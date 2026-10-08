@@ -28,6 +28,8 @@
 ---@field Customization_Age integer
 ---@field Customization_Body integer
 ---@field Customization_BodyColor integer
+---@field Customization_BottomFaceBlendValue number
+---@field Customization_BottomFaceShape integer
 ---@field Customization_CapLogo integer
 ---@field Customization_Complexion integer
 ---@field Customization_EyeColor integer
@@ -40,12 +42,18 @@
 ---@field Customization_HeadTattoo integer
 ---@field Customization_Helmet integer
 ---@field Customization_Hood integer
+---@field Customization_LeftFaceBlendValue number
+---@field Customization_LeftFaceShape integer
 ---@field Customization_Piercings integer
 ---@field Customization_Rebreather integer
+---@field Customization_RightFaceBlendValue number
+---@field Customization_RightFaceShape integer
 ---@field Customization_SkinSaturation_V2 number
 ---@field Customization_SkinTint_V2 number
 ---@field Customization_SkinTone integer
 ---@field Customization_SkinTone_V2 number
+---@field Customization_TopFaceBlendValue number
+---@field Customization_TopFaceShape integer
 ---@field Customization_Voice integer
 ---@field IsMale boolean
 ---@field IsReworkedCharacter boolean

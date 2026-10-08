@@ -1000,7 +1000,9 @@ local function described()
 end
 
 t.test("while data.patch adds no rows, a described store is checked and then refused in plain words", function()
-    t.eq(patch.WRITES.rows, false, "the write path's switch is off in this version")
+    -- the switch is on since 0.3.6; with it off the refusal has to stay plain
+    local rows_were = patch.WRITES.rows
+    patch.WRITES.rows = false
     local F = mod("FieldKit")
     local added, writes = tables.rows_added, tables.writes
     as(F, function()
@@ -1027,6 +1029,7 @@ t.test("while data.patch adds no rows, a described store is checked and then ref
     unload("FieldKit")
     frames(1)
     clean()
+    patch.WRITES.rows = rows_were
 end)
 
 t.test("a checked plan is rows and their whole fields, each a copy of a row of the game to start from", function()
@@ -1229,9 +1232,10 @@ local function read(path)
     return text
 end
 
-t.test("nothing in the writing side buys, and the only thing it asks of the store's screen is to read again", function()
+t.test("nothing in the writing side buys, and all it asks of the store's screen is to read again or be built again", function()
     local spending = { "UnlockNextTalentRank", "Client_ResearchWorkshopItem", "Client_PurchaseWorkshopItem", "PurchaseMetaItem",
-        "GrantMetaResource", "ConsumeMetaResource", "ConvertCurrency", "ClientGrantAccountTalents", "SetModelView" }
+        "GrantMetaResource", "ConsumeMetaResource", "ConvertCurrency", "ClientGrantAccountTalents", "SetModelView",
+        "ResetTalents", "RefundTalent" }
     local direct = { "AddRow", "RemoveRow", "ImportText", "RefreshConstants", "FindRow", "StaticFindObject" }
     for _, path in ipairs({ "wax/runtime/Scripts/wax/world/workshop_rows.lua", "wax/runtime/Scripts/wax/world/workshop.lua",
         "wax/tests/live/workshop_write.lua" }) do
@@ -1244,7 +1248,10 @@ t.test("nothing in the writing side buys, and the only thing it asks of the stor
     local calls = {}
     for call in text:gmatch("[%w_]+:([%u][%w_]*)%(") do calls[call] = true end
     for _, allowed in ipairs({ "Table", "Has", "Add", "Set", "Changes", "Connect", "Disconnect", "IsValid", "GetArrayNum",
-        "GetChildrenCount", "GetChildAt", "ToString", "BP_ForceRefresh", "OnTalentSet", "RefreshState" }) do
+        "GetChildrenCount", "GetChildAt", "ToString", "BP_ForceRefresh", "OnTalentSet", "RefreshState",
+        -- building the store again when a node joins or leaves it: the game's own set-up, and the new view put on the screen
+        "DoesModelContainTalent", "GetParent", "GetActiveWidget", "Setup", "GetAddress", "GetClass", "GetFName", "SetContent",
+        "OnClick" }) do
         calls[allowed] = nil
     end
     t.eq(next(calls), nil, "workshop_rows.lua calls " .. tostring(next(calls)) .. " on something")

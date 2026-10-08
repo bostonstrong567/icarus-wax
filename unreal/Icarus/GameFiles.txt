@@ -1,6 +1,13 @@
 # Copies of the game's own cooked files in this project, made by scripts\Get-GameAsset.ps1. Do not edit.
 # They belong to the game: they are never cooked into a mod, packed or published.
 build 25621870
+asked /Game/ASS/CRE/Moa/SK_CRE_Moa_PhysicsAsset
+asked /Game/ASS/CRE/Moa/SK_CRE_Moa_Skeleton
 asked /Game/BP/Utilities/WT/WT_CaveLight
+ASS/CRE/Moa/SK_CRE_Moa_PhysicsAsset.uasset
+ASS/CRE/Moa/SK_CRE_Moa_PhysicsAsset.uexp
+ASS/CRE/Moa/SK_CRE_Moa_Skeleton.uasset
+ASS/CRE/Moa/SK_CRE_Moa_Skeleton.uexp
 BP/Utilities/WT/WT_CaveLight.uasset
 BP/Utilities/WT/WT_CaveLight.uexp
+ASS/CRE/M_Creature_mm.uasset

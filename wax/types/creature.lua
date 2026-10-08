@@ -25,7 +25,35 @@
 ---@field IsTamed boolean True for an animal that has been tamed: a mount, a pet or livestock. The game makes these from classes built on IcarusMountCharacter, and that is what is looked at. A speeder bike counts as one, because the game builds it the same way.
 ---@field CanBeTamed boolean? True when a taming rule of the game names its variant, as the young animal or as the grown one, and it is not tamed already. It says what the game's data has, not whether a taming would work right now. nil when the game's tables cannot be read.
 ---@field IsFrozen boolean? True while the creature is held frozen, by Freeze or by the game itself. nil on a creature whose class has no such flag.
+---@field HasModel boolean True while the creature wears a model that SetModel gave it.
 local Creature = {}
+
+---What creature:SetModel takes: the body the creature is to wear in place of its own.
+---@class WaxCreatureModelSwap
+---@field mesh SkeletalMesh|string The skeletal mesh to wear: one from game.Assets:Load or mod.Content:Load, or its path. It has to be built on the same skeleton as the creature's own mesh, or the creature's animations would stop.
+---@field materials? table<integer, MaterialInterface|string> Materials by slot, 1 first: from game.Assets, mod.Content or game.Assets:Material, or their paths. A slot that is left out shows what the mesh itself names.
+---@field fur? boolean False hides the creature's coat of fur or feathers, which the game grows on a body of its own and would draw over the new one. Left as it is when omitted.
+---@field saddle? boolean False hides the saddle the game shows on a mount, for a model that has one of its own. The rider still sits on it. Left as it is when omitted.
+
+---Gives the creature another body: a skeletal mesh of the game or of your mod's own content, with its materials. It
+---goes on moving as before, because the new body is on the same skeleton: a mesh on another skeleton raises an error
+---that names both. The game writes a mount's own skin again now and then, so Wax looks once a second and puts the
+---model back. When your mod unloads, or on ResetModel, the creature has its own body again. It works for the host and
+---for a client alike, and each player only sees it in their own game.
+---@param model WaxCreatureModelSwap
+---@return boolean worn Always true.
+function Creature:SetModel(model) end
+
+---Gives the creature the body it had before SetModel.
+---@return boolean changed False when it wore no model.
+function Creature:ResetModel() end
+
+---Makes a mount attack, for the host only, as the game does when its rider attacks: it plays the mount's own attack,
+---takes the stamina that costs, and hits what stands in front of it at the strike. The game keeps this for mounts with
+---the talent for it. Strike asks for no talent.
+---@return boolean started False when the mount is in the middle of another move, or the game gives its kind no attack.
+---@return string? why The reason, when it did not start.
+function Creature:Strike() end
 
 ---Sets the creature's level through the game, for the host only. Its experience, the most health it can have and its
 ---level stats follow in the same call, and its health is full afterwards. So set the level first and Health after it.
@@ -57,6 +85,13 @@ function Creature:Attack(target) end
 ---by then. A dead creature that was removed before that left no corpse.
 ---@return boolean asked Always true.
 function Creature:Remove() end
+
+---What game.Creatures:SpawnMount takes besides the kind and the place.
+---@class WaxMountOptions
+---@field name? string The mount's name, as the player sees it.
+---@field saddle? string|false The saddle item it wears, such as "Saddle_Standard". The game only lets a mount with a saddle be ridden. "Saddle_Standard" when omitted, false for none.
+---@field owner? boolean False leaves it with no owner, to be claimed in the game. Yours when omitted.
+---@field facing? { Yaw: number } Which way it looks. Toward you when omitted.
 
 ---What game.Creatures:Spawn takes besides the kind and the place.
 ---@class WaxSpawnOptions

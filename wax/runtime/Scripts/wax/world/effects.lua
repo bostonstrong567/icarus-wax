@@ -12,6 +12,11 @@ local M = {}
 M.SECONDS = 3               -- how long particles and a light stay when nothing is said
 M.MOST = 64                 -- effects alive at once, for all mods
 M.TRAIL_POINTS = 14
+M.TRAIL_SMOOTH = 3          -- pieces the ribbon is cut into between two frames, on a curve
+M.EMBERS = 60               -- bits one trail has at a time, at most
+M.EMBER_RATE = 240
+M.TRAIL_TAPER = 2.2          -- higher keeps the ribbon thin for longer before it widens to the edge
+M.TRAIL_NEAR = 70           -- a streak nearer the eye than this looks no wider than it would from here
 M.TRAIL_JUMP = 150          -- further than this in one frame is a jump, not a movement
 M.SHAKE = "/Game/BP/CameraShake/Creatures/CS_Mammoth_Footstep.CS_Mammoth_Footstep_C"
 M.GLOW = "/Engine/EngineMaterials/EmissiveMeshMaterial"
@@ -25,7 +30,7 @@ local NAMED = {
 local COLORS = { "Red", "Orange", "Yellow", "Green", "Cyan", "Blue", "Purple", "Magenta", "Pink", "White", "Grey" }
 local PARTICLE_OPTIONS = { "on", "socket", "at", "turn", "seconds", "set" }
 local LIGHT_OPTIONS = { "on", "socket", "at", "color", "intensity", "radius", "seconds", "fade" }
-local TRAIL_OPTIONS = { "from", "to", "color", "seconds", "life" }
+local TRAIL_OPTIONS = { "from", "to", "color", "seconds", "life", "material", "width", "with_view", "embers", "delay" }
 local SOUND_OPTIONS = { "on", "socket", "at" }
 
 local Effects, Sounds = {}, {}
@@ -288,7 +293,14 @@ end
 
 -- ---------------------------------------------------------------- trail
 
--- Trail(on, { from = , to = , color = , seconds = , life = }): a glowing ribbon left behind by an edge that moves.
+-- A curve through four values that passes through the middle two: where it is `t` of the way from b to c.
+local function curve(a, b, c, d, t)
+    local t2, t3 = t * t, t * t * t
+    return 0.5 * (2 * b + (c - a) * t + (2 * a - 5 * b + 4 * c - d) * t2 + (3 * b - a - 3 * c + d) * t3)
+end
+
+-- Trail(on, { from = , to = , color = , seconds = , life = , width = , with_view = , material = , embers = }): a glowing
+-- ribbon left behind by an edge that moves, and small glowing bits that come off it.
 function members:Trail(on, options)
     if self ~= Effects then error("call Trail with a colon: game.Effects:Trail(on, options)", 2) end
     options = options_of(options, TRAIL_OPTIONS, "game.Effects:Trail", 2)
@@ -298,7 +310,38 @@ function members:Trail(on, options)
     local seconds = options.seconds or 0.25
     if not finite(seconds) or seconds <= 0 then error("game.Effects:Trail: seconds is how long the ribbon is, in time", 2) end
     if options.life ~= nil and (not finite(options.life) or options.life <= 0) then error("game.Effects:Trail: life is how long it runs", 2) end
-    local material = assets_now(2):Material(M.GLOW, { colors = { Color = options.color or "Red" } })
+    -- material: one of your own in place of the plain glowing one, for a ribbon that has to look like what it follows
+    local material = options.material
+    if material ~= nil then
+        if not instance.is_instance(material) or not material:IsA("MaterialInterface") then
+            error("game.Effects:Trail: material is a material from game.Assets:Material or game.Assets:Load", 2)
+        end
+    else
+        material = assets_now(2):Material(M.GLOW, { colors = { Color = options.color or "Red" } })
+    end
+    -- width: a streak this wide along the middle of the edge, always turned to face the view, in place of the flat
+    -- ribbon between the edge's two ends (which is seen from its side, as a line, when a cut comes straight down).
+    local width = options.width
+    if width ~= nil and (not finite(width) or width <= 0) then error("game.Effects:Trail: width is how wide the streak is", 2) end
+    -- with_view: the trail stays with the view, as the arms of first person do, instead of staying behind in the world
+    local with_view = options.with_view == true
+    if options.with_view ~= nil and type(options.with_view) ~= "boolean" then error("game.Effects:Trail: with_view is true or false", 2) end
+    -- embers: how many small bits come off the edge a second, or { rate = , size = , life = , speed = , rise = }
+    local embers = options.embers
+    if type(embers) == "number" then embers = { rate = embers } end
+    if embers ~= nil then
+        if type(embers) ~= "table" then error("game.Effects:Trail: embers is how many a second, or a table with rate, size, life, speed and rise", 2) end
+        embers = { rate = embers.rate or 60, size = embers.size or 2.5, life = embers.life or 0.45, speed = embers.speed or 40, rise = embers.rise or 25 }
+        for name, value in pairs(embers) do
+            if not finite(value) or value < 0 then error("game.Effects:Trail: embers." .. name .. " is a number", 2) end
+        end
+        if embers.rate > M.EMBER_RATE then embers.rate = M.EMBER_RATE end
+    end
+    -- delay: it starts this long from now: a swing winds up first, and the trail belongs to the cut
+    local delay = options.delay or 0
+    if not finite(delay) or delay < 0 then error("game.Effects:Trail: delay is how long from now it starts, in seconds", 2) end
+    local starts = perf.now() + delay
+    local needs_view = width ~= nil or with_view or embers ~= nil
     local e = engine_now()
     local owner = part:GetOwner()
     local made = owner:AddComponentByClass(e.mesh, true, IDENTITY, true)
@@ -308,22 +351,65 @@ function members:Trail(on, options)
     made:SetCollisionEnabled(0)
     made:SetCastShadow(false)
     local ribbon, edge = instance.wrap(made), instance.wrap(part)
-    local points, feeding, drawn = {}, true, false
+    local points, bits, feeding, drawn, owed, last = {}, {}, true, false, 0, nil
     local from, to = { X = ax, Y = ay, Z = az }, { X = bx, Y = by, Z = bz }
-    local entry = { ends = options.life }
+    local entry = { ends = options.life and options.life + delay or nil }
     entry.step = function(age)
         local raw = ribbon.Raw
         local now = perf.now()
+        if now < starts then return end
+        local passed = last and math.min(now - last, 0.1) or 0
+        last = now
+        -- where the view is and which way it looks: forward, right and up
+        local cx, cy, cz, fx, fy, fz, rx, ry, rz, ux, uy, uz
+        if needs_view then
+            local manager = e.statics:GetPlayerCameraManager(owner, 0)
+            local at, turn = manager:GetCameraLocation(), manager:GetCameraRotation()
+            local f, r, u = e.math:GetForwardVector(turn), e.math:GetRightVector(turn), e.math:GetUpVector(turn)
+            cx, cy, cz = at.X, at.Y, at.Z
+            fx, fy, fz, rx, ry, rz, ux, uy, uz = f.X, f.Y, f.Z, r.X, r.Y, r.Z, u.X, u.Y, u.Z
+        end
         if feeding then
             local world = edge.Raw:K2_GetComponentToWorld()
             local a, b = e.math:TransformLocation(world, from), e.math:TransformLocation(world, to)
+            if with_view then
+                -- kept as the view sees it: forward, right and up of the eye
+                local dx, dy, dz = a.X - cx, a.Y - cy, a.Z - cz
+                a = { X = dx * fx + dy * fy + dz * fz, Y = dx * rx + dy * ry + dz * rz, Z = dx * ux + dy * uy + dz * uz }
+                dx, dy, dz = b.X - cx, b.Y - cy, b.Z - cz
+                b = { X = dx * fx + dy * fy + dz * fz, Y = dx * rx + dy * ry + dz * rz, Z = dx * ux + dy * uy + dz * uz }
+            end
             -- what it follows was moved somewhere else at once: the ribbon starts over, or it would stretch across the jump
             local before = points[#points]
-            if before and (a.X - before.a.X) ^ 2 + (a.Y - before.a.Y) ^ 2 + (a.Z - before.a.Z) ^ 2 > M.TRAIL_JUMP ^ 2 then points = {} end
+            local jumped = before and (a.X - before.a.X) ^ 2 + (a.Y - before.a.Y) ^ 2 + (a.Z - before.a.Z) ^ 2 > M.TRAIL_JUMP ^ 2
+            if jumped then points, before = {}, nil end
             points[#points + 1] = { at = now, a = { X = a.X, Y = a.Y, Z = a.Z }, b = { X = b.X, Y = b.Y, Z = b.Z } }
+            if embers and before and passed > 0 then
+                -- bits come off anywhere along the edge, the more the faster it moves, and keep a little of its speed
+                local mx, my, mz = (b.X - before.b.X) / passed, (b.Y - before.b.Y) / passed, (b.Z - before.b.Z) / passed
+                local fast = math.sqrt(mx * mx + my * my + mz * mz)
+                owed = owed + embers.rate * passed * math.min(1, fast / 300)
+                while owed >= 1 and #bits < M.EMBERS do
+                    owed = owed - 1
+                    local along, back = math.random(), math.random()
+                    local spread = embers.speed
+                    bits[#bits + 1] = {
+                        born = now, life = embers.life * (0.6 + 0.8 * math.random()),
+                        x = a.X + (b.X - a.X) * along - mx * passed * back,
+                        y = a.Y + (b.Y - a.Y) * along - my * passed * back,
+                        z = a.Z + (b.Z - a.Z) * along - mz * passed * back,
+                        vx = mx * 0.12 + (math.random() - 0.5) * spread, vy = my * 0.12 + (math.random() - 0.5) * spread,
+                        vz = mz * 0.12 + (math.random() - 0.5) * spread,
+                    }
+                end
+                if owed > 1 then owed = 1 end
+            end
         end
         while points[1] and (now - points[1].at > seconds or #points > M.TRAIL_POINTS) do table.remove(points, 1) end
-        if #points < 2 then
+        for index = #bits, 1, -1 do
+            if now - bits[index].born >= bits[index].life then table.remove(bits, index) end
+        end
+        if #points < 2 and #bits == 0 then
             if drawn then raw:ClearMeshSection(0) end
             drawn = false
             if not feeding then entry.stop(true) end
@@ -331,19 +417,95 @@ function members:Trail(on, options)
         end
         local vertices, normals, triangles = {}, {}, {}
         local count = #points
-        for index = 1, count do
-            local point = points[index]
-            -- the ribbon narrows toward its old end
-            local keep = index / count
-            local mx, my, mz = (point.a.X + point.b.X) / 2, (point.a.Y + point.b.Y) / 2, (point.a.Z + point.b.Z) / 2
-            vertices[#vertices + 1] = { X = mx + (point.a.X - mx) * keep, Y = my + (point.a.Y - my) * keep, Z = mz + (point.a.Z - mz) * keep }
-            vertices[#vertices + 1] = { X = mx + (point.b.X - mx) * keep, Y = my + (point.b.Y - my) * keep, Z = mz + (point.b.Z - mz) * keep }
-            normals[#normals + 1], normals[#normals + 2] = { X = 0, Y = 0, Z = 1 }, { X = 0, Y = 0, Z = 1 }
-            if index > 1 then
-                local base = (index - 2) * 2
-                local list = { base, base + 1, base + 2, base + 1, base + 3, base + 2, base, base + 2, base + 1, base + 1, base + 2, base + 3 }
-                for t = 1, #list do triangles[#triangles + 1] = list[t] end
+        if count >= 2 then
+            -- the ends of the edge at each moment, in the world
+            local known = {}
+            for index = 1, count do
+                local a, b = points[index].a, points[index].b
+                if with_view then
+                    known[index] = { cx + a.X * fx + a.Y * rx + a.Z * ux, cy + a.X * fy + a.Y * ry + a.Z * uy, cz + a.X * fz + a.Y * rz + a.Z * uz,
+                                     cx + b.X * fx + b.Y * rx + b.Z * ux, cy + b.X * fy + b.Y * ry + b.Z * uy, cz + b.X * fz + b.Y * rz + b.Z * uz }
+                else
+                    known[index] = { a.X, a.Y, a.Z, b.X, b.Y, b.Z }
+                end
             end
+            -- A frame gives one place, and straight lines between frames show as corners. So a curve is laid through
+            -- the places and the ribbon follows that.
+            local ends = {}
+            for index = 1, count - 1 do
+                local p0, p1, p2, p3 = known[index - 1] or known[index], known[index], known[index + 1], known[index + 2] or known[index + 1]
+                for step = 0, M.TRAIL_SMOOTH - 1 do
+                    local t = step / M.TRAIL_SMOOTH
+                    local one = {}
+                    for n = 1, 6 do one[n] = curve(p0[n], p1[n], p2[n], p3[n], t) end
+                    ends[#ends + 1] = one
+                end
+            end
+            ends[#ends + 1] = known[count]
+            local total = #ends
+            local sx, sy, sz = 0, 0, 1
+            for index = 1, total do
+                local here = ends[index]
+                -- the ribbon narrows toward its old end, slowly at first and to a point at the last
+                local along = (index - 1) / (total - 1)
+                local keep = math.sin(along * math.pi / 2) ^ M.TRAIL_TAPER
+                local mx, my, mz = (here[1] + here[4]) / 2, (here[2] + here[5]) / 2, (here[3] + here[6]) / 2
+                if width then
+                    -- across the path and across the line of sight, so its flat side is what the eye gets
+                    local before, after = ends[index - 1] or here, ends[index + 1] or here
+                    local tx = (after[1] + after[4] - before[1] - before[4]) / 2
+                    local ty = (after[2] + after[5] - before[2] - before[5]) / 2
+                    local tz = (after[3] + after[6] - before[3] - before[6]) / 2
+                    local vx, vy, vz = mx - cx, my - cy, mz - cz
+                    local nx, ny, nz = ty * vz - tz * vy, tz * vx - tx * vz, tx * vy - ty * vx
+                    local long = math.sqrt(nx * nx + ny * ny + nz * nz)
+                    if long > 1e-4 then
+                        nx, ny, nz = nx / long, ny / long, nz / long
+                        if index > 1 and nx * sx + ny * sy + nz * sz < 0 then nx, ny, nz = -nx, -ny, -nz end
+                        sx, sy, sz = nx, ny, nz
+                    end
+                    local far = math.sqrt(vx * vx + vy * vy + vz * vz)
+                    local half = width / 2 * keep * math.min(1, far / M.TRAIL_NEAR)
+                    vertices[#vertices + 1] = { X = mx + sx * half, Y = my + sy * half, Z = mz + sz * half }
+                    vertices[#vertices + 1] = { X = mx - sx * half, Y = my - sy * half, Z = mz - sz * half }
+                else
+                    -- the outer end of the edge keeps its place and the inner end closes in on it: a crescent
+                    vertices[#vertices + 1] = { X = here[4] + (here[1] - here[4]) * keep, Y = here[5] + (here[2] - here[5]) * keep, Z = here[6] + (here[3] - here[6]) * keep }
+                    vertices[#vertices + 1] = { X = here[4], Y = here[5], Z = here[6] }
+                end
+                normals[#normals + 1], normals[#normals + 2] = { X = 0, Y = 0, Z = 1 }, { X = 0, Y = 0, Z = 1 }
+                if index > 1 then
+                    local base = (index - 2) * 2
+                    local list = { base, base + 1, base + 2, base + 1, base + 3, base + 2, base, base + 2, base + 1, base + 1, base + 2, base + 3 }
+                    for t = 1, #list do triangles[#triangles + 1] = list[t] end
+                end
+            end
+        end
+        -- each bit is a small square turned to the view, which drifts, rises and shrinks to nothing
+        for index = 1, #bits do
+            local bit = bits[index]
+            bit.x, bit.y, bit.z = bit.x + bit.vx * passed, bit.y + bit.vy * passed, bit.z + bit.vz * passed
+            local slow = 1 - math.min(1, 3 * passed)
+            bit.vx, bit.vy, bit.vz = bit.vx * slow, bit.vy * slow, bit.vz * slow
+            local old = (now - bit.born) / bit.life
+            local wx, wy, wz = bit.x, bit.y, bit.z
+            if with_view then
+                bit.z = bit.z + embers.rise * passed
+                wx, wy, wz = cx + bit.x * fx + bit.y * rx + bit.z * ux, cy + bit.x * fy + bit.y * ry + bit.z * uy, cz + bit.x * fz + bit.y * rz + bit.z * uz
+            else
+                bit.z = bit.z + embers.rise * passed
+                wx, wy, wz = bit.x, bit.y, bit.z
+            end
+            local half = embers.size / 2 * (1 - old) ^ 0.7
+            local base = #vertices
+            -- a diamond, so no edge of it lines up with the screen
+            vertices[base + 1] = { X = wx + rx * half, Y = wy + ry * half, Z = wz + rz * half }
+            vertices[base + 2] = { X = wx + ux * half, Y = wy + uy * half, Z = wz + uz * half }
+            vertices[base + 3] = { X = wx - rx * half, Y = wy - ry * half, Z = wz - rz * half }
+            vertices[base + 4] = { X = wx - ux * half, Y = wy - uy * half, Z = wz - uz * half }
+            for n = 1, 4 do normals[#normals + 1] = { X = 0, Y = 0, Z = 1 } end
+            local list = { base, base + 1, base + 2, base, base + 2, base + 3, base, base + 2, base + 1, base, base + 3, base + 2 }
+            for t = 1, #list do triangles[#triangles + 1] = list[t] end
         end
         raw:CreateMeshSection_LinearColor(0, vertices, triangles, normals, {}, {}, {}, {}, {}, {}, false)
         if not drawn then raw:SetMaterial(0, material.Raw) end

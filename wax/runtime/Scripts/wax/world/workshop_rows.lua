@@ -1101,6 +1101,83 @@ function kick()
     scope.leave(previous)
 end
 
+-- The store's model is made when the player arrives and keeps the nodes it found then: one added later shows on the
+-- screen with no popup and cannot be bought, and one taken out stays. So when a node joins or leaves a tree while a
+-- store is there, the controller is left without its model and set up again, which is what the game does on arrival:
+-- a new model from the tables as they are (it reads what the account has bought itself) and a new view of it, which
+-- takes the old view's place on the screen. Nothing is bought, refunded or written by this.
+M.REBUILD = true
+M.SETTLE = 1.0              -- seconds of quiet first: a mod that reloads leaves and joins within a second
+local rebuild = { rows = {}, at = nil, task = nil }
+
+local function build_again()
+    local component, view = screen()
+    local rows = rebuild.rows
+    rebuild.rows = {}
+    if not component then return false end
+    local model = component.Model
+    if not valid(model) then return false end
+    local differs = false
+    for _, row in pairs(rows) do
+        local holds = model:DoesModelContainTalent({ RowName = FName(row), DataTableName = FName("D_Talents") }) == true
+        if holds ~= (store.node(row) ~= nil) then
+            differs = true
+            break
+        end
+    end
+    if not differs then return false end
+    local parent = view and view:GetParent() or nil
+    local shown = nil
+    if view then
+        pcall(function() shown = view.GraphWidgetSwitcher:GetActiveWidget().TalentArchetype.RowName:ToString() end)
+    end
+    component.Model = nil
+    local ok, why = pcall(function() component:Setup() end)
+    if not ok or not valid(component.Model) then
+        component.Model = model
+        log:warn("the store could not be built again, so a new node waits for the next visit: %s", clean(why or "no model was made"))
+        return false
+    end
+    local fresh = component.View
+    if valid(parent) and valid(fresh) and fresh:GetAddress() ~= view:GetAddress()
+        and parent:GetClass():GetFName():ToString() == "NamedSlot" then
+        parent:SetContent(fresh)
+        if shown then
+            -- the new view opens on its first category: it goes back to the one that was open
+            local mine = generation
+            task.delay(0.25, function()
+                if mine ~= generation then return end
+                local _, now = screen()
+                if now then pcall(function() now:OnClick({ RowName = FName(shown), DataTableName = FName("D_TalentArchetypes") }) end) end
+            end)
+        end
+    end
+    graph_of, read_at = {}, {}
+    stats.rebuilt = (stats.rebuilt or 0) + 1
+    log:info("the store was built again: a node joined it or left it")
+    return true
+end
+
+local function settle()
+    local mine = generation
+    while mine == generation and rebuild.at and perf.now() < rebuild.at do task.wait() end
+    if mine == generation then
+        rebuild.at = nil
+        local ok, why = pcall(build_again)
+        if not ok then failed(why) end
+        rebuild.task = nil
+    end
+end
+
+local function membership_changed(row)
+    if not M.REBUILD then return end
+    rebuild.rows[fold(row)] = row
+    rebuild.at = perf.now() + M.SETTLE
+    local previous = scope.enter(nil)
+    if not alive(rebuild.task) then rebuild.task = task.defer(settle) end
+    scope.leave(previous)
+end
+
 local folded = { nodes = fold(T.nodes), items = fold(T.items), categories = fold(T.categories), trees = fold(T.trees) }
 local told = {}             -- folded table -> true once a change of it was told field by field, until Changed names the table
 
@@ -1110,7 +1187,10 @@ local function on_patched(name, row, field)
     if key == folded.nodes then
         told[key] = true
         if field == nil or field == F.sells then sells, sells_all = {}, false end
-        if field == nil or field == F.tree then member_names = {} end
+        if field == nil or field == F.tree then
+            member_names = {}
+            membership_changed(row)
+        end
         wanted.nodes[fold(row)] = row
     elseif key == folded.items then
         wanted.items[fold(row)] = tick()
@@ -1142,6 +1222,7 @@ local function on_map()
     wanted = { nodes = {}, items = {}, force = false }
     graph_of, read_at = {}, {}
     runner, reader = nil, nil
+    rebuild = { rows = {}, at = nil, task = nil }
 end
 
 function M.start()

@@ -109,8 +109,11 @@
 ---@field arrange? "line"|"grid"|"ring"|"arc"|"spiral"|"tree"|"path"|WaxStoreArrange|fun(index: integer, id: string, count: integer): number, number How nodes without an `at` are placed: a shape's name, a shape with options, or a function that returns a place for each. "tree" when omitted.
 ---@field nodes WaxStoreNodeSpec[] Its nodes. At least one.
 
----A store as a mod describes it. This version of Wax checks such a description with game.Workshop:Check and does not put it into the game:
----Define takes the same table and, in this version, ends in an error that says adding rows is not switched on.
+---A store as a mod describes it. game.Workshop:Check says what is wrong with it, and game.Workshop:Define puts it into the game.
+---A node added to one of the game's categories (`into`) shows there with its picture, price and line. When that happens while the
+---player stands in the store, Wax has the game build its store again, so the node can be bought at once, and it goes again when the mod is switched off.
+---What the account has researched is kept by the game under the node's row name, so it is still there after the mod was off for a while.
+---A new category of a mod's own is not switched on in this version.
 ---@class WaxStoreSpec
 ---@field mod? string The id of the mod it belongs to. Not needed when the mod itself calls Check.
 ---@field categories WaxStoreCategorySpec[] Its categories. At least one.

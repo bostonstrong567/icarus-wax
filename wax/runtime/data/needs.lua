@@ -867,4 +867,19 @@ return {
             { class = "/Script/Sentry.SentryLibrary", functions = { "SaveStringToFile" } },
         },
     },
+    {
+        id = "mounts",
+        name = "Mounts and models",
+        without = "game.Creatures:SpawnMount makes no mount, and a creature's SetModel, ResetModel and Strike do nothing.",
+        files = { "world/mounts.lua" },
+        classes = {
+            { class = "/Script/Icarus.IcarusAIBlueprintFunctionLibrary", functions = { "SpawnNewAI" } },
+            { class = "/Script/Icarus.IcarusMountCharacter", functions = { "SetMountOwner", "SetMountName" }, properties = { "MountData" } },
+            { class = "/Script/Icarus.InventoryComponent", functions = { "GetInventory" } },
+            { class = "/Script/Engine.SkinnedMeshComponent", functions = { "SetSkeletalMesh" }, properties = { "SkeletalMesh" } },
+            { class = "/Script/Engine.SkeletalMesh", properties = { "Skeleton" } },
+            { class = "/Script/Engine.ChildActorComponent", properties = { "ChildActor" } },
+            { class = "/Script/NavigationSystem.NavigationSystemV1", functions = { "K2_ProjectPointToNavigation" } },
+        },
+    },
 }

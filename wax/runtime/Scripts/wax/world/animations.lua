@@ -46,6 +46,11 @@ local ARMS = {
     rightfoot = { { "thigh_r", "calf_r", "foot_r" } },
     leftfoot = { { "thigh_l", "calf_l", "foot_l" } },
 }
+-- Names for a run of bones that turn together, on the player's body.
+local CHAINS = {
+    look = { "neck_01", "neck_02", "Head" },
+    torso = { "spine_01", "spine_02", "spine_03", "spine_04", "spine_05" },
+}
 local IDENTITY = { Rotation = { X = 0, Y = 0, Z = 0, W = 1 }, Translation = { X = 0, Y = 0, Z = 0 }, Scale3D = { X = 1, Y = 1, Z = 1 } }
 
 local Animations = {}
@@ -400,7 +405,8 @@ end
 -- A camera or a sound source stays on the real mesh: on the copy it would run a frame behind, and the view would jerk.
 local function follows(child)
     local class = child:GetClass():GetFName():ToString()
-    return not (class:find("Camera", 1, true) or class:find("Audio", 1, true) or class:find("SpringArm", 1, true))
+    return not (class:find("Camera", 1, true) or class:find("Audio", 1, true) or class:find("SpringArm", 1, true)
+        or class == "GFurComponent")
 end
 
 -- Everything that hangs on `from` (a held tool, an effect) is moved over to `to`, at the same socket.
@@ -414,8 +420,6 @@ local function move_children(from, to, skip)
         local child = moved[index]
         local socket = child:GetAttachSocketName()
         child:K2_AttachToComponent(to, socket, KEEP_RELATIVE, KEEP_RELATIVE, KEEP_RELATIVE, false)
-        -- a piece of clothing has no socket: it takes its whole pose from what it hangs on
-        if socket:ToString() == "None" and child:IsA(skinned_class()) then child:SetMasterPoseComponent(to, true) end
     end
     return #moved
 end
@@ -458,6 +462,40 @@ local function make_rig(mesh, gate)
     return rig
 end
 
+-- The meshes of the same actor that take their whole pose from `mesh`: a helmet, a head, antlers, clothing.
+local function followers_of(mesh, copy)
+    local found = {}
+    local owner = mesh:GetOwner()
+    local list = owner:K2_GetComponentsByClass(skinned_class())
+    local function look(entry)
+        local part = entry
+        if not pcall(function() return part:GetFName() end) then part = entry:get() end
+        local address = part:GetAddress()
+        if address == mesh:GetAddress() or address == copy:GetAddress() then return end
+        local leader = part.MasterPoseComponent:Get()
+        if leader:GetAddress() == mesh:GetAddress() then found[#found + 1] = instance.wrap(part) end
+    end
+    if type(list) == "table" then
+        for index = 1, #list do pcall(look, list[index]) end
+    else
+        list:ForEach(function(_, element) pcall(look, element:get()) end)
+    end
+    -- A head, a helmet or straps hang on the mesh with no socket and copy its pose through an animation of their own,
+    -- which only reads an animated mesh. On a posable copy they would stand still, so they follow it bone for bone too.
+    local seen = {}
+    for index = 1, #found do seen[found[index].Raw:GetAddress()] = true end
+    for index = 0, mesh:GetNumChildrenComponents() - 1 do
+        pcall(function()
+            local child = mesh:GetChildComponent(index)
+            if child:IsValid() and child:GetAddress() ~= copy:GetAddress() and not seen[child:GetAddress()]
+                and child:IsA(skinned_class()) and child:GetAttachSocketName():ToString() == "None" then
+                found[#found + 1] = instance.wrap(child)
+            end
+        end)
+    end
+    return found
+end
+
 local function show_rig(rig, on)
     if rig.shown == on then return end
     local real, copy = rig.real.Raw, rig.copy.Raw
@@ -465,11 +503,49 @@ local function show_rig(rig, on)
         rig.tick = real.VisibilityBasedAnimTickOption
         real.VisibilityBasedAnimTickOption = 0
         copy:CopyPoseFromSkeletalComponent(real)
+        local ok, followers = pcall(followers_of, real, copy)
         copy:SetVisibility(true, false)
         real:SetVisibility(false, false)
         move_children(real, copy, copy)
+        -- A coat of fur cannot take its pose from a copy: it would stand there in the old pose like a second animal.
+        -- It is put away for as long as the copy shows.
+        rig.coats = {}
+        for index = 0, real:GetNumChildrenComponents() - 1 do
+            local child = real:GetChildComponent(index)
+            if child:IsValid() and child:GetClass():GetFName():ToString() == "GFurComponent" and child:IsVisible() then
+                child:SetVisibility(false, false)
+                rig.coats[#rig.coats + 1] = instance.wrap(child)
+            end
+        end
+        -- what took its pose from the real mesh takes it from the copy now, or it would stay behind in the old pose
+        rig.followers = ok and followers or {}
+        for index = 1, #rig.followers do
+            pcall(function()
+                local part = rig.followers[index].Raw
+                part:SetMasterPoseComponent(copy, true)
+                -- A posable mesh does not tell what follows it to draw again (the engine only does that for an animated
+                -- one). A follower that refreshes itself every frame keeps up; left as it was, a head lags behind its body.
+                rig.kept = rig.kept or {}
+                rig.kept[index] = { part.VisibilityBasedAnimTickOption, part.bEnableUpdateRateOptimizations }
+                part.VisibilityBasedAnimTickOption = 0
+                part.bEnableUpdateRateOptimizations = false
+            end)
+        end
     else
         move_children(copy, real, copy)
+        for index = 1, #(rig.followers or {}) do
+            pcall(function()
+                local part = rig.followers[index].Raw
+                part:SetMasterPoseComponent(real, true)
+                local kept = rig.kept and rig.kept[index]
+                if kept then part.VisibilityBasedAnimTickOption, part.bEnableUpdateRateOptimizations = kept[1], kept[2] end
+            end)
+        end
+        rig.followers = {}
+        for index = 1, #(rig.coats or {}) do
+            pcall(function() rig.coats[index].Raw:SetVisibility(true, false) end)
+        end
+        rig.coats = {}
         real:SetVisibility(true, false)
         copy:SetVisibility(false, false)
         if rig.tick ~= nil then real.VisibilityBasedAnimTickOption = rig.tick end
@@ -487,6 +563,22 @@ local function drop_rig(rig, touch)
         show_rig(rig, false)
         rig.copy.Raw:K2_DestroyComponent(rig.copy.Raw)
     end)
+end
+
+-- A mesh can be given another model while its copy exists (a mount dressed as something else). The copy of the model
+-- it had is no use then: it would show the old one, and it keeps that asset in memory.
+local function fits(rig)
+    local ok, same = pcall(function() return rig.real.Raw.SkeletalMesh:GetAddress() == rig.copy.Raw.SkeletalMesh:GetAddress() end)
+    return not ok or same
+end
+
+local function rig_of(mesh, gate)
+    local rig = rigs[mesh:GetAddress()]
+    if rig and rig.users == 0 and not fits(rig) then
+        drop_rig(rig, true)
+        rig = nil
+    end
+    return rig or make_rig(mesh, gate)
 end
 
 local function bone_of(rig, name, what, level, soft)
@@ -511,6 +603,56 @@ end
 
 -- ---------------------------------------------------------------- reaching
 
+-- The keys before and after a moment, how far between them (eased), and the number of the first.
+local function between(keys, at)
+    local count = #keys
+    if at >= keys[count].at then return keys[count], keys[count], 0, count end
+    if at <= keys[1].at then return keys[1], keys[1], 0, 1 end
+    for index = 2, count do
+        if at < keys[index].at then
+            local a, b = keys[index - 1], keys[index]
+            return a, b, b.ease((at - a.at) / (b.at - a.at)), index - 1
+        end
+    end
+    return keys[count], keys[count], 0, count
+end
+
+-- Where a path through the keys is at a moment: a curve that passes through every key, so a hand moves in arcs.
+local function path_at(keys, at, into)
+    local a, b, t, first = between(keys, at)
+    if a == b then
+        into.X, into.Y, into.Z = a.X or 0, a.Y or 0, a.Z or 0
+        return into
+    end
+    local before, after = keys[first - 1] or a, keys[first + 2] or b
+    local t2, t3 = t * t, t * t * t
+    for index = 1, 3 do
+        local name = index == 1 and "X" or index == 2 and "Y" or "Z"
+        local p0, p1, p2, p3 = before[name] or 0, a[name] or 0, b[name] or 0, after[name] or 0
+        into[name] = 0.5 * (2 * p1 + (p2 - p0) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (3 * p1 - p0 - 3 * p2 + p3) * t3)
+    end
+    return into
+end
+
+-- The turn at a moment, blended the short way round between the keys' turns.
+local function turn_at(keys, at, into)
+    local a, b, t = between(keys, at)
+    local ax, ay, az, aw = a.q[1], a.q[2], a.q[3], a.q[4]
+    local bx, by, bz, bw = b.q[1], b.q[2], b.q[3], b.q[4]
+    local dot = ax * bx + ay * by + az * bz + aw * bw
+    if dot < 0 then bx, by, bz, bw, dot = -bx, -by, -bz, -bw, -dot end
+    local wa, wb = 1 - t, t
+    if dot < 0.9995 then
+        local angle = math.acos(dot)
+        local sine = math.sin(angle)
+        wa, wb = math.sin((1 - t) * angle) / sine, math.sin(t * angle) / sine
+    end
+    local x, y, z, w = ax * wa + bx * wb, ay * wa + by * wb, az * wa + bz * wb, aw * wa + bw * wb
+    local n = math.sqrt(x * x + y * y + z * z + w * w)
+    into[1], into[2], into[3], into[4] = x / n, y / n, z / n, w / n
+    return into
+end
+
 local function quat_blend(x, y, z, w, amount)
     if w < 0 then x, y, z, w = -x, -y, -z, -w end
     x, y, z, w = x * amount, y * amount, z * amount, 1 + (w - 1) * amount
@@ -528,7 +670,7 @@ end
 -- Bends a limb of the copy so that its end is moved by (fx, fy, fz): forward, right and up as the character stands.
 -- With `blend`, the three numbers are the end's place measured from the limb's root, and blend says how much of the way it goes.
 -- With `turn`, the end is turned as well: to that pitch, yaw and roll as the character stands when there is a blend, by them otherwise.
-local function reach(rig, arm, fx, fy, fz, blend, turn)
+local function reach(rig, arm, fx, fy, fz, blend, turn, bend, to)
     local copy = rig.copy.Raw
     local q = rig.facing
     local ox, oy, oz = turned(q[1], q[2], q[3], q[4], fx, fy, fz)
@@ -543,13 +685,16 @@ local function reach(rig, arm, fx, fy, fz, blend, turn)
         local hx, hy, hz = h.X - s.X, h.Y - s.Y, h.Z - s.Z
         tx, ty, tz = hx + (ox - hx) * blend, hy + (oy - hy) * blend, hz + (oz - hz) * blend
     end
+    if to then tx, ty, tz = to.X + ox - s.X, to.Y + oy - s.Y, to.Z + oz - s.Z end
     local far = math.sqrt(tx * tx + ty * ty + tz * tz)
-    if far > 1e-3 and (blend or fx ~= 0 or fy ~= 0 or fz ~= 0) then
+    if far > 1e-3 and (blend or to or fx ~= 0 or fy ~= 0 or fz ~= 0) then
         local nx, ny, nz = tx / far, ty / far, tz / far
         local d = math.max(math.abs(upper - lower) + 0.5, math.min(far, upper + lower - 0.5))
-        -- the joint in the middle stays on the side it is on now
-        local along = ux * nx + uy * ny + uz * nz
-        local px, py, pz = ux - nx * along, uy - ny * along, uz - nz * along
+        -- the joint in the middle bends the way it was told to, or stays on the side it is on now
+        local kx, ky, kz = ux, uy, uz
+        if bend then kx, ky, kz = turned(q[1], q[2], q[3], q[4], bend[1], bend[2], bend[3]) end
+        local along = kx * nx + ky * ny + kz * nz
+        local px, py, pz = kx - nx * along, ky - ny * along, kz - nz * along
         local pl = math.sqrt(px * px + py * py + pz * pz)
         if pl < 1e-3 then px, py, pz, pl = 0, 0, -1, 1 end
         px, py, pz = px / pl, py / pl, pz / pl
@@ -557,6 +702,25 @@ local function reach(rig, arm, fx, fy, fz, blend, turn)
         local up = math.sqrt(math.max(0, upper * upper - a * a))
         local ex, ey, ez = nx * a + px * up, ny * a + py * up, nz * a + pz * up
         local q1x, q1y, q1z, q1w = from_to(ux, uy, uz, ex, ey, ez)
+        -- An elbow or a knee is a hinge that sits one way round in its upper bone. The shortest turn to the new place
+        -- can leave that bone rolled about itself, and the joint then bends backwards. So the upper bone is rolled
+        -- until its hinge lies where the new bend needs it.
+        local wx, wy, wz = nx * d - ex, ny * d - ey, nz * d - ez
+        local h0x, h0y, h0z = uy * lz - uz * ly, uz * lx - ux * lz, ux * ly - uy * lx
+        local h1x, h1y, h1z = ey * wz - ez * wy, ez * wx - ex * wz, ex * wy - ey * wx
+        local h0, h1 = math.sqrt(h0x * h0x + h0y * h0y + h0z * h0z), math.sqrt(h1x * h1x + h1y * h1y + h1z * h1z)
+        if h0 > 0.12 * upper * lower and h1 > 1e-3 then
+            local gx, gy, gz = turned(q1x, q1y, q1z, q1w, h0x, h0y, h0z)
+            local roll_x, roll_y, roll_z, roll_w
+            if (gx * h1x + gy * h1y + gz * h1z) < -0.999 * h0 * h1 then
+                -- exactly the wrong way round: half a turn about the bone itself
+                local el = math.sqrt(ex * ex + ey * ey + ez * ez)
+                roll_x, roll_y, roll_z, roll_w = ex / el, ey / el, ez / el, 0
+            else
+                roll_x, roll_y, roll_z, roll_w = from_to(gx, gy, gz, h1x, h1y, h1z)
+            end
+            q1x, q1y, q1z, q1w = quat_mul(roll_x, roll_y, roll_z, roll_w, q1x, q1y, q1z, q1w)
+        end
         local rx, ry, rz, rw = to_quat(copy:GetBoneRotationByName(arm[1].name, COMPONENT_SPACE))
         local lqx, lqy, lqz, lqw = to_quat(copy:GetBoneRotationByName(arm[2].name, COMPONENT_SPACE))
         copy:SetBoneRotationByName(arm[1].name, to_rotator(quat_mul(q1x, q1y, q1z, q1w, rx, ry, rz, rw)), COMPONENT_SPACE)
@@ -573,7 +737,12 @@ local function reach(rig, arm, fx, fy, fz, blend, turn)
         -- what a held thing hangs on is brought to the turn asked for, and the hand is turned by as much
         local tip = arm[4] or arm[3]
         local px, py, pz, pw = to_quat(copy:GetBoneRotationByName(tip.name, COMPONENT_SPACE))
-        local wx, wy, wz, ww = quat_mul(q[1], q[2], q[3], q[4], to_quat(turn))
+        local wx, wy, wz, ww
+        if turn[4] then
+            wx, wy, wz, ww = quat_mul(q[1], q[2], q[3], q[4], turn[1], turn[2], turn[3], turn[4])
+        else
+            wx, wy, wz, ww = quat_mul(q[1], q[2], q[3], q[4], to_quat(turn))
+        end
         dx, dy, dz, dw = quat_mul(wx, wy, wz, ww, -px, -py, -pz, pw)
         dx, dy, dz, dw = quat_blend(dx, dy, dz, dw, blend)
     else
@@ -624,9 +793,26 @@ function members:Define(name, spec)
         if type(spec.reach) ~= "table" then error("game.Animations:Define: reach says where a hand goes: { RightHand = keys }", 2) end
         reaches = {}
         for hand, keys in pairs(spec.reach) do
-            if type(hand) ~= "string" or not ARMS[hand:lower()] then
-                error(("game.Animations:Define: reach moves RightHand, LeftHand, RightFoot or LeftFoot, not %s"):format(tostring(hand)), 2)
+            -- a limb of any skeleton is named by its own bones: { bones = { root, middle, end }, keys = ... }
+            local own = type(keys) == "table" and keys.bones or nil
+            if own ~= nil and (type(own) ~= "table" or type(own[1]) ~= "string" or type(own[2]) ~= "string" or type(own[3]) ~= "string") then
+                error(("game.Animations:Define: reach %s: bones are the three bones of the limb, from its root to its end"):format(tostring(hand)), 2)
             end
+            if type(hand) ~= "string" or not (own or ARMS[hand:lower()]) then
+                error(("game.Animations:Define: reach moves RightHand, LeftHand, RightFoot or LeftFoot, or a limb given by its bones, not %s")
+                    :format(tostring(hand)), 2)
+            end
+            local bend = type(keys) == "table" and keys.bend or nil
+            if bend ~= nil then
+                local bx, by, bz = bend.X or bend[1], bend.Y or bend[2], bend.Z or bend[3]
+                if not (finite(bx) and finite(by) and finite(bz)) then
+                    error(("game.Animations:Define: reach %s: bend is the way the elbow or the knee points: forward, right and up"):format(hand), 2)
+                end
+                bend = { bx, by, bz }
+            end
+            -- pin = true holds the limb's end where the game has it, in place and in turn, whatever moves above it
+            local pin = type(keys) == "table" and keys.pin == true
+            if pin and keys.keys == nil then keys = { pin = true, bend = keys.bend, bones = keys.bones, keys = { { 0, {} } } } end
             local turns, from = false, spec.reach_from
             if type(keys) == "table" and keys.keys ~= nil then
                 if keys.from ~= nil and keys.from ~= "hand" and keys.from ~= "shoulder" then
@@ -635,7 +821,12 @@ function members:Define(name, spec)
                 keys, turns, from = keys.keys, keys.turn == true, keys.from or from
             end
             local read = read_keys(keys, "game.Animations:Define: reach " .. hand, ease, 2)
-            reaches[#reaches + 1] = { arm = ARMS[hand:lower()], name = hand, keys = read, turn = turns, absolute = from == "shoulder" }
+            for index = 1, #read do
+                local key = read[index]
+                key.q = { to_quat({ Pitch = key.Pitch or 0, Yaw = key.Yaw or 0, Roll = key.Roll or 0 }) }
+            end
+            reaches[#reaches + 1] = { arm = own and { own } or ARMS[hand:lower()], name = hand, keys = read, turn = turns,
+                absolute = from == "shoulder" and not pin, pin = pin, bend = bend, straight = type(spec.reach[hand]) == "table" and spec.reach[hand].straight == true }
             longest = math.max(longest, read[#read].at)
         end
     end
@@ -686,6 +877,7 @@ local function finish(play, ended)
             scene:SetRelativeScale3D(base.size)
         end)
     end
+    if play.cleanup then pcall(play.cleanup) end
     if ended and play.on_done then
         local ok, why = pcall(scope.run, play.owner, play.on_done, play.handle)
         if not ok then log:warn("the done function of %s failed: %s", play.animation.Name, first_line(why)) end
@@ -711,7 +903,7 @@ function Animation:Play(target, options)
     -- one set of bones for each skeleton the target shows: the arms and the body for the player, one for anything else
     local function bones_on(skeleton, gate, tracks, soft)
         if not skeleton then return end
-        local ok, rig = pcall(function() return rigs[skeleton:GetAddress()] or make_rig(skeleton, gate) end)
+        local ok, rig = pcall(rig_of, skeleton, gate)
         if not ok then error("animation:Play: " .. first_line(rig), 3) end
         local set = { rig = rig, bones = {}, reaches = {} }
         for index = 1, #(self.reaches or {}) do
@@ -720,7 +912,8 @@ function Animation:Play(target, options)
                 local arm = {}
                 for b = 1, #wanted.arm[chain] do arm[b] = bone_of(rig, wanted.arm[chain][b], "animation:Play", 0, true) end
                 if arm[1] and arm[2] and arm[3] then
-                    set.reaches[#set.reaches + 1] = { arm = arm, keys = wanted.keys, turn = wanted.turn, absolute = wanted.absolute }
+                    set.reaches[#set.reaches + 1] = { arm = arm, keys = wanted.keys, turn = wanted.turn, absolute = wanted.absolute,
+                        bend = wanted.bend, straight = wanted.straight, pin = wanted.pin }
                     break
                 end
             end
@@ -728,9 +921,21 @@ function Animation:Play(target, options)
         for index = 1, #tracks do
             local track = tracks[index]
             if not track.self then
-                local fine, bone = pcall(bone_of, rig, track.name, "animation:Play", 0, soft)
-                if not fine then error(first_line(bone), 3) end
-                if bone then set.bones[#set.bones + 1] = { bone = bone, keys = track.keys } end
+                -- "Look" and "Torso", or bones joined with +, share a turn out evenly: a neck that turns as a whole
+                local names = CHAINS[track.name:lower()]
+                if not names then
+                    names = {}
+                    for name in track.name:gmatch("[^+]+") do names[#names + 1] = name end
+                end
+                local found = {}
+                for n = 1, #names do
+                    local fine, bone = pcall(bone_of, rig, names[n], "animation:Play", 0, soft)
+                    if not fine then error(first_line(bone), 3) end
+                    if bone then found[#found + 1] = bone end
+                end
+                for n = 1, #found do
+                    set.bones[#set.bones + 1] = { bone = found[n], keys = track.keys, share = 1 / #found }
+                end
             end
         end
         if #set.bones == 0 and #set.reaches == 0 then return end
@@ -781,7 +986,7 @@ function Animation:Play(target, options)
     return handle
 end
 
-local values, turn_values = {}, {}
+local values, turn_values, turn_quat = {}, {}, {}
 
 local function step_scene(play)
     local scene, base, w = play.scene.Raw, play.base, play.weight
@@ -793,12 +998,120 @@ local function step_scene(play)
     scene:SetRelativeScale3D({ X = base.size.X * size, Y = base.size.Y * size, Z = base.size.Z * size })
 end
 
+-- The arms seen in first person and the body's arms, bone for bone: the top of the arm, the elbow, the wrist, and the
+-- bone a held thing hangs on.
+local MATCH = {
+    { from = { "bn_Arm_r_shoulder_1", "bn_Arm_r_elbow_1", "bn_Arm_r_wrist_1", "bn_Prop_R_1" }, to = { "upperarm_r", "lowerarm_r", "hand_r", "R_prop_00" } },
+    { from = { "bn_Arm_l_shoulder_1", "bn_Arm_l_elbow_1", "bn_Arm_l_wrist_1", "bn_Prop_L_1" }, to = { "upperarm_l", "lowerarm_l", "hand_l", "L_prop_00" } },
+}
+local TORSO, LOOK = { "spine_01", "spine_02", "spine_03", "spine_04", "spine_05" }, { "neck_01", "neck_02", "Head" }
+
+-- Points the two bones of a limb the way d1 and d2 point (in the copy's own space), keeping the joint's hinge true.
+local function pose_limb(copy, arm, d1x, d1y, d1z, d2x, d2y, d2z, blend)
+    local s, e, h = copy:GetBoneLocationByName(arm[1], COMPONENT_SPACE), copy:GetBoneLocationByName(arm[2], COMPONENT_SPACE),
+        copy:GetBoneLocationByName(arm[3], COMPONENT_SPACE)
+    local ux, uy, uz = e.X - s.X, e.Y - s.Y, e.Z - s.Z
+    local lx, ly, lz = h.X - e.X, h.Y - e.Y, h.Z - e.Z
+    local upper, lower = math.sqrt(ux * ux + uy * uy + uz * uz), math.sqrt(lx * lx + ly * ly + lz * lz)
+    local n1, n2 = math.sqrt(d1x * d1x + d1y * d1y + d1z * d1z), math.sqrt(d2x * d2x + d2y * d2y + d2z * d2z)
+    if upper < 1e-3 or lower < 1e-3 or n1 < 1e-3 or n2 < 1e-3 then return end
+    local ex, ey, ez = d1x / n1 * upper, d1y / n1 * upper, d1z / n1 * upper
+    local wx, wy, wz = d2x / n2 * lower, d2y / n2 * lower, d2z / n2 * lower
+    local q1x, q1y, q1z, q1w = from_to(ux, uy, uz, ex, ey, ez)
+    local h0x, h0y, h0z = uy * lz - uz * ly, uz * lx - ux * lz, ux * ly - uy * lx
+    local h1x, h1y, h1z = ey * wz - ez * wy, ez * wx - ex * wz, ex * wy - ey * wx
+    local h0, h1 = math.sqrt(h0x * h0x + h0y * h0y + h0z * h0z), math.sqrt(h1x * h1x + h1y * h1y + h1z * h1z)
+    if h0 > 0.12 * upper * lower and h1 > 0.12 * upper * lower then
+        local gx, gy, gz = turned(q1x, q1y, q1z, q1w, h0x, h0y, h0z)
+        local rx, ry, rz, rw
+        if (gx * h1x + gy * h1y + gz * h1z) < -0.999 * h0 * h1 then
+            rx, ry, rz, rw = ex / upper, ey / upper, ez / upper, 0
+        else
+            rx, ry, rz, rw = from_to(gx, gy, gz, h1x, h1y, h1z)
+        end
+        q1x, q1y, q1z, q1w = quat_mul(rx, ry, rz, rw, q1x, q1y, q1z, q1w)
+    end
+    if blend < 1 then q1x, q1y, q1z, q1w = quat_blend(q1x, q1y, q1z, q1w, blend) end
+    local ax, ay, az, aw = to_quat(copy:GetBoneRotationByName(arm[1], COMPONENT_SPACE))
+    local bx, by, bz, bw = to_quat(copy:GetBoneRotationByName(arm[2], COMPONENT_SPACE))
+    copy:SetBoneRotationByName(arm[1], to_rotator(quat_mul(q1x, q1y, q1z, q1w, ax, ay, az, aw)), COMPONENT_SPACE)
+    local cx, cy, cz = turned(q1x, q1y, q1z, q1w, lx, ly, lz)
+    local q2x, q2y, q2z, q2w = from_to(cx, cy, cz, wx, wy, wz)
+    if blend < 1 then q2x, q2y, q2z, q2w = quat_blend(q2x, q2y, q2z, q2w, blend) end
+    local tx, ty, tz, tw = quat_mul(q2x, q2y, q2z, q2w, q1x, q1y, q1z, q1w)
+    copy:SetBoneRotationByName(arm[2], to_rotator(quat_mul(tx, ty, tz, tw, bx, by, bz, bw)), COMPONENT_SPACE)
+end
+
+-- The body's arms take the pose of the arms seen in first person, live: the same way each bone points, the same turn of
+-- what the hand holds. The chest turns a little after the right hand, and the head turns back to look ahead.
+local function match_arms(play, set)
+    local match = set.match
+    local copy, source = set.rig.copy.Raw, match.source.Raw
+    local left = play.animation.Length - play.at
+    local blend = math.max(0, math.min(1, play.at / match.blend, left / match.blend))
+    blend = blend * blend * (3 - 2 * blend) * play.weight
+    if blend <= 0 then return end
+    -- From the world to the copy's own space: first into the directions of the character the arms belong to, then into
+    -- the copy's, so a body that stands another way round (in a model view) still holds its arms the same.
+    local ax, ay, az, aw = to_quat(source:GetOwner():K2_GetActorRotation())
+    local q = set.rig.facing
+    local cx, cy, cz, cw = quat_mul(q[1], q[2], q[3], q[4], -ax, -ay, -az, aw)
+    local places = match.places
+    for index = 1, #MATCH do
+        local from = match.from[index]
+        places[index] = places[index] or {}
+        local at = places[index]
+        at[1], at[2], at[3] = source:GetSocketLocation(from[1]), source:GetSocketLocation(from[2]), source:GetSocketLocation(from[3])
+    end
+    if match.torso then
+        -- how far round the right hand is from straight ahead, against where it was when this began
+        local s, w = places[1][1], places[1][3]
+        local fx, fy = turned(-ax, -ay, -az, aw, w.X - s.X, w.Y - s.Y, w.Z - s.Z)
+        local angle = math.deg(math.atan(fy, math.max(math.abs(fx), 15)))
+        match.rest = match.rest or angle
+        local yaw = math.max(-40, math.min(40, (angle - match.rest) * match.torso)) * blend
+        if math.abs(yaw) > 0.5 then
+            local function share(bones, total)
+                local dx, dy, dz, dw = in_copy(set.rig, 0, total / #bones, 0)
+                for index = 1, #bones do
+                    local bx, by, bz, bw = to_quat(copy:GetBoneRotationByName(bones[index], COMPONENT_SPACE))
+                    copy:SetBoneRotationByName(bones[index], to_rotator(quat_mul(dx, dy, dz, dw, bx, by, bz, bw)), COMPONENT_SPACE)
+                end
+            end
+            share(match.spine, yaw)
+            share(match.neck, -yaw * 0.8)
+        end
+    end
+    for index = 1, #MATCH do
+        local at, to, from = places[index], match.to[index], match.from[index]
+        local d1x, d1y, d1z = turned(cx, cy, cz, cw, at[2].X - at[1].X, at[2].Y - at[1].Y, at[2].Z - at[1].Z)
+        local d2x, d2y, d2z = turned(cx, cy, cz, cw, at[3].X - at[2].X, at[3].Y - at[2].Y, at[3].Z - at[2].Z)
+        pose_limb(copy, to, d1x, d1y, d1z, d2x, d2y, d2z, blend)
+        -- what the hand holds is turned as it is in first person
+        local wx, wy, wz, ww = quat_mul(cx, cy, cz, cw, to_quat(source:GetSocketRotation(from[4])))
+        local px, py, pz, pw = to_quat(copy:GetBoneRotationByName(to[4], COMPONENT_SPACE))
+        local dx, dy, dz, dw = quat_mul(wx, wy, wz, ww, -px, -py, -pz, pw)
+        if blend < 1 then dx, dy, dz, dw = quat_blend(dx, dy, dz, dw, blend) end
+        local hx, hy, hz, hw = to_quat(copy:GetBoneRotationByName(to[3], COMPONENT_SPACE))
+        copy:SetBoneRotationByName(to[3], to_rotator(quat_mul(dx, dy, dz, dw, hx, hy, hz, hw)), COMPONENT_SPACE)
+    end
+end
+
 local function step_bones(play, set)
     local copy, w = set.rig.copy.Raw, play.weight
+    for index = 1, #set.reaches do
+        local entry = set.reaches[index]
+        if entry.pin then
+            local last = entry.arm[3].name
+            entry.at, entry.turned = copy:GetBoneLocationByName(last, COMPONENT_SPACE), copy:GetBoneRotationByName(last, COMPONENT_SPACE)
+        end
+    end
+    local whole = w
     for index = 1, #set.bones do
         local entry = set.bones[index]
         local v = sample(entry.keys, play.at, values)
         local name = entry.bone.name
+        w = whole * (entry.share or 1)
         if v.Pitch ~= 0 or v.Yaw ~= 0 or v.Roll ~= 0 then
             -- a turn is about the character's own directions, whichever way the bone itself points
             local dx, dy, dz, dw = in_copy(set.rig, v.Pitch * w, v.Yaw * w, v.Roll * w)
@@ -815,21 +1128,30 @@ local function step_bones(play, set)
         end
         stats.bones = stats.bones + 1
     end
+    if set.match then match_arms(play, set) end
+    w = whole
     for index = 1, #set.reaches do
         local entry = set.reaches[index]
         local v = sample(entry.keys, play.at, values)
-        if entry.absolute then
+        if entry.pin then
+            reach(set.rig, entry.arm, v.X * w, v.Y * w, v.Z * w, nil, nil, entry.bend, entry.at)
+            copy:SetBoneRotationByName(entry.arm[3].name, entry.turned, COMPONENT_SPACE)
+        elseif entry.absolute then
             local animation = play.animation
             local out = play.loop and 1 or (animation.Length - play.at) / animation.blend_out
             local blend = math.max(0, math.min(1, play.at / animation.blend_in, out))
             -- eased, so the limb leaves the game's pose and comes back to it without a jolt
             blend = blend * blend * (3 - 2 * blend) * w
-            if blend > 0 then reach(set.rig, entry.arm, v.X, v.Y, v.Z, blend, entry.turn and v or nil) end
+            if blend > 0 then
+                if not entry.straight then path_at(entry.keys, play.at, v) end
+                reach(set.rig, entry.arm, v.X, v.Y, v.Z, blend, entry.turn and turn_at(entry.keys, play.at, turn_quat) or nil, entry.bend)
+            end
         else
             local turns = entry.turn and (v.Pitch ~= 0 or v.Yaw ~= 0 or v.Roll ~= 0)
             if turns then turn_values.Pitch, turn_values.Yaw, turn_values.Roll = v.Pitch * w, v.Yaw * w, v.Roll * w end
             if turns or v.X ~= 0 or v.Y ~= 0 or v.Z ~= 0 then
-                reach(set.rig, entry.arm, v.X * w, v.Y * w, v.Z * w, nil, turns and turn_values or nil)
+                if not entry.straight then path_at(entry.keys, play.at, v) end
+                reach(set.rig, entry.arm, v.X * w, v.Y * w, v.Z * w, nil, turns and turn_values or nil, entry.bend)
             end
         end
     end
@@ -875,7 +1197,7 @@ function M.step()
                     rig.copy.Raw:CopyPoseFromSkeletalComponent(rig.real.Raw)
                 else
                     show_rig(rig, false)
-                    if rig.idle > M.RIG_IDLE then drop_rig(rig, true) end
+                    if rig.idle > M.RIG_IDLE or not fits(rig) then drop_rig(rig, true) end
                 end
             end
         end)
@@ -920,6 +1242,57 @@ function M.step()
         end
     end
     for index = #plays, kept + 1, -1 do plays[index] = nil end
+end
+
+-- MatchArms(seconds, options): for that long, the body of the player's own character holds its arms as the arms seen in
+-- first person hold theirs, so a swing looks the same from outside as it does through the eyes.
+-- options: blend (seconds in and out, 0.12), weight, torso (how much the chest follows the hand: 0.4, or false).
+function members:MatchArms(seconds, options)
+    if self ~= Animations then error("call MatchArms with a colon: game.Animations:MatchArms(seconds)", 2) end
+    if not finite(seconds) or seconds <= 0 then error("game.Animations:MatchArms expects how long it lasts, in seconds", 2) end
+    options = options or {}
+    if type(options) ~= "table" then error("game.Animations:MatchArms: the options are a table such as { torso = 0.4 }", 2) end
+    known_keys(options, { "blend", "weight", "torso", "on" }, "game.Animations:MatchArms", 2)
+    local mine = me_raw()
+    if not mine then error("game.Animations:MatchArms: there is no character of your own in the world", 2) end
+    local arms, body = mine:GetFirstPersonMesh(), mine:GetThirdPersonMesh()
+    if not (arms:IsValid() and body:IsValid()) then error("game.Animations:MatchArms: the character has no arms or no body to match", 2) end
+    -- on: another body with the same bones to hold its arms so, such as the one in a model view
+    local gate = "third"
+    if options.on ~= nil then
+        if not instance.is_instance(options.on) or not options.on:IsA("SkinnedMeshComponent") then
+            error("game.Animations:MatchArms: on is a mesh with a body's bones", 2)
+        end
+        body, gate = options.on.Raw, nil
+    end
+    local ok, rig = pcall(rig_of, body, gate)
+    if not ok then error("game.Animations:MatchArms: " .. first_line(rig), 2) end
+    local match = { source = instance.wrap(arms), blend = options.blend or 0.12, places = {}, from = {}, to = {}, spine = {}, neck = {},
+        torso = options.torso ~= false and (options.torso or 0.4) or false }
+    for index = 1, #MATCH do
+        match.from[index], match.to[index] = {}, {}
+        for b = 1, 4 do
+            match.from[index][b], match.to[index][b] = FName(MATCH[index].from[b]), FName(MATCH[index].to[b])
+        end
+    end
+    for index = 1, #TORSO do match.spine[index] = FName(TORSO[index]) end
+    for index = 1, #LOOK do match.neck[index] = FName(LOOK[index]) end
+    -- the arms are not drawn in third person, and bones that are not drawn are not kept up: they are, for this long
+    local kept = arms.VisibilityBasedAnimTickOption
+    arms.VisibilityBasedAnimTickOption = 0
+    local play = { animation = { Name = "MatchArms", Length = seconds, events = {} }, rate = 1, weight = options.weight or 1, at = 0, loop = false,
+        keep = true, sets = { { rig = rig, bones = {}, reaches = {}, match = match } }, next_event = 1,
+        cleanup = function() match.source.Raw.VisibilityBasedAnimTickOption = kept end }
+    rig.users, rig.idle = rig.users + 1, 0
+    local handle = {}
+    function handle:Stop() finish(play, false) end
+    function handle:IsPlaying() return not play.done end
+    play.handle = handle
+    play.owner = scope.current()
+    if play.owner then play.slot = play.owner:add(function() finish(play, false) end) end
+    plays[#plays + 1] = play
+    stats.plays = stats.plays + 1
+    return handle
 end
 
 -- The bones of a target's skeleton, by name, for writing tracks.

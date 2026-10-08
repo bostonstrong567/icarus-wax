@@ -265,6 +265,7 @@
 ---@field TargetCropPlot Deployable
 ---@field Tile FLODTile
 ---@field ValidFoodQuery TagQueriesRowHandle
+---@field CheckContextualPreconditions fun(self: BP_IcarusGOAPAction_EatPlantFood_C, Controller: IcarusNPCGOAPController?): boolean
 ---@field ExecutionComplete fun(self: BP_IcarusGOAPAction_EatPlantFood_C, Controller: IcarusNPCGOAPController?): boolean
 ---@field GetInteractLocation fun(self: BP_IcarusGOAPAction_EatPlantFood_C, ForController: IcarusNPCGOAPController?, OutLocation: Vector|{}, Success: boolean) Wax refuses this call from Lua.
 ---@field LookForCropPlot fun(self: BP_IcarusGOAPAction_EatPlantFood_C, Controller: Controller?, SearchRadius: number, CropPlots: Deployable[])

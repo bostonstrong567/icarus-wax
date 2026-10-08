@@ -744,7 +744,7 @@
 ---@field DoNothing_Confirmation fun(self: BP_IcarusPlayerControllerSpace_C)
 ---@field EndInputCapture fun(self: BP_IcarusPlayerControllerSpace_C)
 ---@field ExecuteClaimLaunchProspect fun(self: BP_IcarusPlayerControllerSpace_C, Prospect_Info: ProspectInfo|{}, OnlineProfileCharacter: OnlineProfileCharacter|{})
----@field ExecuteJoinProspect fun(self: BP_IcarusPlayerControllerSpace_C, IcarusSession: IcarusSession|{}, OnlineProfileCharacter: OnlineProfileCharacter|{}, ExtraSettings: string) Do not call from Lua: it needs 672 bytes and the call buffer holds 512.
+---@field ExecuteJoinProspect fun(self: BP_IcarusPlayerControllerSpace_C, IcarusSession: IcarusSession|{}, OnlineProfileCharacter: OnlineProfileCharacter|{}, ExtraSettings: string) Do not call from Lua: it needs 704 bytes and the call buffer holds 512.
 ---@field ExecuteResumeProspect fun(self: BP_IcarusPlayerControllerSpace_C, AssociatedProspectInfo: AssociatedProspectInfo|{}, OnlineProfileCharacter: OnlineProfileCharacter|{})
 ---@field ["Get End Of Drop Screen Info"] fun(self: BP_IcarusPlayerControllerSpace_C)
 ---@field GetCheatOverlay fun(self: BP_IcarusPlayerControllerSpace_C, WorldContextObject: Object?): CheatOverlayBase

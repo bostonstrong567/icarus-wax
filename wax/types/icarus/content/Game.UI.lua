@@ -16,6 +16,16 @@
 ---| 2 # NewEnumerator2
 ---| integer
 
+---@alias EFaceShapes
+---| 0 # NewEnumerator8
+---| 1 # NewEnumerator0
+---| 2 # NewEnumerator4
+---| 3 # NewEnumerator3
+---| 4 # NewEnumerator5
+---| 5 # NewEnumerator6
+---| 6 # NewEnumerator7
+---| integer
+
 ---@alias EModifierKeys
 ---| 0 # NewEnumerator0
 ---| 1 # NewEnumerator1
@@ -54,6 +64,13 @@
 ---@field PreConstruct fun(self: UMG_ArrowSelectionWidget_Text_C, IsDesignTime: boolean)
 ---@field UpdateVisuals fun(self: UMG_ArrowSelectionWidget_Text_C)
 
+---@class UMG_CharacterBlending_DropBox_C : UserWidget
+---@field ComboBox CustomComboBox
+---@field DefaultFaceShape EFaceShapes
+---@field Construct fun(self: UMG_CharacterBlending_DropBox_C)
+---@field PreConstruct fun(self: UMG_CharacterBlending_DropBox_C, IsDesignTime: boolean)
+---@field SetSelectedOption fun(self: UMG_CharacterBlending_DropBox_C, FaceShape: EFaceShapes)
+
 ---@class UMG_CharacterCreation_C : UserWidget
 ---@field AgeSelection_V2 UMG_CharacterSetting_Visual_C
 ---@field Angle Image
@@ -71,10 +88,13 @@
 ---@field BlackFadeBorder Border
 ---@field BlackFadeIn WidgetAnimation
 ---@field BlackGradient Image
+---@field BlendShape WB_ChaCustom_Shape_C
 ---@field BodySelection UMG_CharacterSetting_Visual_C
 ---@field BodySelection_V2 UMG_CharacterSetting_Visual_C
 ---@field Border_1 Border
+---@field Border_17 Border
 ---@field Border_9 Border
+---@field BottomDropBox UMG_CharacterBlending_DropBox_C
 ---@field CapColorSelectionGrid UMG_CharacterSetting_GridBase_C
 ---@field CharacterCreationRequest GameDelegate
 ---@field CharacterCustomizationUpdated GameDelegate
@@ -88,8 +108,11 @@
 ---@field CustomisationContext ECharacterCustomisationContext
 ---@field CustomizationOptions WidgetSwitcher
 ---@field CustomizationOptions_1 WidgetSwitcher
+---@field CustomizationOptions_2 WidgetSwitcher
 ---@field DecalSelection UMG_CharacterSetting_Visual_C
 ---@field EditIcon Image
+---@field EnabledFaceShapes integer
+---@field ExaggerateBlending CheckBox
 ---@field EyeColourSelectionGrid UMG_CharacterSetting_GridBase_C
 ---@field EyeColourSelectionGrid_V2 UMG_CharacterSetting_GridBase_C
 ---@field EyebrowsSelection_V2 UMG_CharacterSetting_Visual_C
@@ -105,14 +128,27 @@
 ---@field HoodSelection UMG_CharacterSetting_ToggleBase_C
 ---@field InitialCosmetics CharacterCosmetics
 ---@field IsGeneratingCustomisationOptions boolean
+---@field IsSwappingOption boolean
+---@field LeftDropBox UMG_CharacterBlending_DropBox_C
 ---@field NameLengthLimit integer
 ---@field NewFace boolean
 ---@field NewFaceButton UMG_BasicButton_2_C
+---@field OldBottomFaceShape EFaceShapes
+---@field OldLeftFaceShape EFaceShapes
+---@field OldRightFaceShape EFaceShapes
+---@field OldTopFaceShape EFaceShapes
 ---@field Overlay_V2 Overlay
+---@field Overlay_V2_Head Overlay
 ---@field PiercingSelection_V2 UMG_CharacterSetting_Visual_C
 ---@field PlayerPreviewManager BP_PlayerPreviewManager_C
+---@field Preset_1 UMG_BasicButton_2_C
+---@field Preset_2 UMG_BasicButton_2_C
+---@field Preset_3 UMG_BasicButton_2_C
+---@field Preset_4 UMG_BasicButton_2_C
+---@field Preset_5 UMG_BasicButton_2_C
 ---@field RebreatherSelection UMG_CharacterSetting_ToggleBase_C
 ---@field RequestCosmeticsUpdate GameDelegate
+---@field RightDropBox UMG_CharacterBlending_DropBox_C
 ---@field ScarSelection UMG_CharacterSetting_Visual_C
 ---@field ScarSelection_V2 UMG_CharacterSetting_Visual_C
 ---@field SkinSaturationSelection UMG_CharacterCustomization_Slider_C
@@ -125,6 +161,7 @@
 ---@field SuitImage Image
 ---@field TattooSelection UMG_CharacterSetting_Visual_C
 ---@field TattooSelection_V2 UMG_CharacterSetting_Visual_C
+---@field TopDropBox UMG_CharacterBlending_DropBox_C
 ---@field TypedText string
 ---@field VoiceSelection UMG_CharacterSetting_Voice_C
 ---@field VoiceSelection_V2 UMG_CharacterSetting_Voice_C
@@ -132,6 +169,10 @@
 ---@field divider_1 Image
 ---@field divider_2 Image
 ---@field divider_3 Image
+---@field divider_4 Image
+---@field divider_5 Image
+---@field BotItemChanged fun(self: UMG_CharacterCreation_C, Object: UserWidget?)
+---@field BottomSwapCheck fun(self: UMG_CharacterCreation_C, ChosenFaceShape: EFaceShapes)
 ---@field Construct fun(self: UMG_CharacterCreation_C)
 ---@field CreateCharacterResult fun(self: UMG_CharacterCreation_C, Success: boolean)
 ---@field GenerateCustomisationOptions fun(self: UMG_CharacterCreation_C) Wax refuses this call from Lua.
@@ -144,15 +185,27 @@
 ---@field GridSelectionUpdated fun(self: UMG_CharacterCreation_C, ToggleButton: UMG_ToggleButtonBase_C?)
 ---@field HelmetSelected fun(self: UMG_CharacterCreation_C, Index: integer, NewFocus: PreviewCameraSettingsEnum|{})
 ---@field HoodSelected fun(self: UMG_CharacterCreation_C, Index: integer, NewFocus: PreviewCameraSettingsEnum|{})
+---@field LeftItemChanged fun(self: UMG_CharacterCreation_C, Object: UserWidget?)
+---@field LeftSwapCheck fun(self: UMG_CharacterCreation_C, ChosenFaceShape: EFaceShapes)
 ---@field LevelLoaded fun(self: UMG_CharacterCreation_C)
 ---@field NameChanged fun(self: UMG_CharacterCreation_C, Text: string)
+---@field OnBotItemChanged fun(self: UMG_CharacterCreation_C, NameString: string, Widget: UserWidget?)
 ---@field OnCharacterCosmeticsUpdated fun(self: UMG_CharacterCreation_C, Success: boolean, UpdatedCharacter: OnlineProfileCharacter|{})
+---@field OnLeftItemChanged fun(self: UMG_CharacterCreation_C, NameString: string, Widget: UserWidget?)
+---@field OnMouseMoved fun(self: UMG_CharacterCreation_C)
+---@field OnRightItemChanged fun(self: UMG_CharacterCreation_C, NameString: string, Widget: UserWidget?)
+---@field OnTopItemChanged fun(self: UMG_CharacterCreation_C, NameString: string, Widget: UserWidget?)
 ---@field PreConstruct fun(self: UMG_CharacterCreation_C, IsDesignTime: boolean)
+---@field RightItemChanged fun(self: UMG_CharacterCreation_C, Object: UserWidget?)
+---@field RightSwapCheck fun(self: UMG_CharacterCreation_C, ChosenFaceShape: EFaceShapes)
 ---@field SelectionUpdated fun(self: UMG_CharacterCreation_C, Index: integer, NewFocus: PreviewCameraSettingsEnum|{})
 ---@field SendCharacterCreationRequest fun(self: UMG_CharacterCreation_C)
 ---@field SendCosmeticUpdateRequest fun(self: UMG_CharacterCreation_C)
+---@field SetControlSelect fun(self: UMG_CharacterCreation_C)
 ---@field SetInitialCosmetics fun(self: UMG_CharacterCreation_C, InitialCosmetics: CharacterCosmetics|{})
 ---@field SliderUpdate fun(self: UMG_CharacterCreation_C)
+---@field TopItemChanged fun(self: UMG_CharacterCreation_C, Object: UserWidget?)
+---@field TopSwapCheck fun(self: UMG_CharacterCreation_C, ChosenFaceShape: EFaceShapes)
 ---@field UpdateBodyType fun(self: UMG_CharacterCreation_C)
 ---@field UpdateDefaultSelections fun(self: UMG_CharacterCreation_C) Wax refuses this call from Lua.
 ---@field VerifyCustomisationOptionContexts fun(self: UMG_CharacterCreation_C)

@@ -205,7 +205,7 @@
 
 ---@class BP_Modifier_Aura_Radioactive_C : BP_Modifier_Aura_Base_C
 ---@field EffectSize integer
----@field RadiationEffect BP_Radiation_Sphere_01_C
+---@field RadiationEffectActor Actor
 ---@field ModifierApplied fun(self: BP_Modifier_Aura_Radioactive_C): boolean
 ---@field ModifierRemoved fun(self: BP_Modifier_Aura_Radioactive_C): boolean
 ---@field OnRep_EffectSize fun(self: BP_Modifier_Aura_Radioactive_C)
