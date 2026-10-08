@@ -101,6 +101,10 @@ that starts with ".removed-". A mod you wrote or copied in yourself is never
 changed. To decide for yourself when a mod is updated, open the Wax menu (F8),
 go to Mods and switch off "Auto Update".
 
+The Browse page of the Wax menu lists the mods of the catalogue. It asks the
+catalogue only when you open it. A mod you add there is checked like an
+update and stays switched off until you switch it on.
+
 Wax keeps its settings, and the settings of your mods, in this folder:
 
   ...\Binaries\Win64\ue4ss\Mods\Wax\saved

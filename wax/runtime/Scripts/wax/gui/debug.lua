@@ -8,6 +8,7 @@ local perf = Wax.import("core.perf")
 local scope = Wax.import("core.scope")
 local task = Wax.import("core.sched").task
 local explorer = Wax.import("gui.explorer")
+local browse_found, browse_view = pcall(Wax.import, "gui.browse")
 local root = Wax.import("gui.root")
 local kit = Wax.import("gui.kit")
 local events = Wax.import("gui.events")
@@ -425,10 +426,14 @@ local function rebuild_mods(list, updates, keyed)
             -- cards start closed, so the list stays short. One with a problem or an update to put in starts open, and a closed one says its state
             local open = mods_open[mod.id]
             if open == nil then open = mod.error ~= nil or mod.waiting ~= nil or mod.fresh == true or (newer ~= nil and not updating) end
-            local state = off and (mod.fresh and " (new, switched off)" or " (switched off)") or (not healthy and (" (%s)"):format(mod.status) or "")
-            if newer then state = state .. (" (%s available)"):format(newer) end
-            local title = ("%s  %s%s"):format(mod.name, mod.version or "", state)
-            local section = mods_page:Section(title, { open = open, fit = true })
+            -- how the mod stands is a small pill at the end of its title
+            local badge, tone = nil, nil
+            if newer then badge, tone = newer .. " available", style.theme.accent
+            elseif off then badge, tone = mod.fresh and "New" or "Off", mod.fresh and style.theme.warn or style.theme.dim
+            elseif not healthy then badge, tone = mod.status, style.theme.bad
+            else badge, tone = "On", style.theme.good end
+            local title = ("%s  %s"):format(mod.name, mod.version or "")
+            local section = mods_page:Section(title, { open = open, fit = true, badge = badge, badge_color = tone })
             section:Field("Status", healthy and "loaded" or (off and (mod.fresh and "new, switched off" or "switched off") or mod.status))
                 :SetColor(healthy and style.theme.good or (off and (mod.fresh and style.theme.warn or style.theme.dim) or style.theme.bad))
             if off and mod.fresh then
@@ -821,6 +826,9 @@ function panel.start()
             panel.updates = shown
         end
 
+        -- the mod catalogue, asked when the page is opened
+        if browse_found then browse_view.build(window:Page("Browse", { icon = "store" }), window) end
+
         log_page = window:Page("Log", { icon = "scroll-text", scroll = false })
         log_page:Title("Log", "What Wax and the mods printed, newest at the bottom. Drag to select, Ctrl+C to copy.")
         local levels = log_page:Flow()
@@ -953,6 +961,7 @@ function panel.step()
     end
     if (held or sorting) and not guard.call("mods drag", step_grips) then pcall(stop_sort) end
     explorer.step()
+    if browse_found then guard.call("browse", browse_view.step) end
     local now = os.clock()
     if now - last_refresh < REFRESH_SECONDS then return end
     last_refresh = now
@@ -960,6 +969,7 @@ function panel.step()
 end
 
 function panel.stop()
+    if browse_found then browse_view.stop() end
     if command_scope then command_scope:destroy() end
     if tab_key then tab_key.Disconnect() end
     command_scope, command_env, command_box, tab_key = nil, nil, nil, nil

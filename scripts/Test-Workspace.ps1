@@ -182,6 +182,7 @@ else {
         'assets' = @('wax\tests\offline\assets_test.lua', ("$scratch\assets" -replace '\\', '/'))
         'blueprints' = @('wax\tests\offline\blueprints_test.lua')
         'content' = @('wax\tests\offline\content_test.lua', ($scratch -replace '\\', '/'))
+        'browse' = @('wax\tests\offline\browse_test.lua')
         'research' = @('wax\tests\offline\research_test.lua')
         'needs' = @('wax\tests\offline\needs_test.lua', ("$scratch\needs" -replace '\\', '/'))
         'explorer' = @('wax\tests\offline\explorer_test.lua')

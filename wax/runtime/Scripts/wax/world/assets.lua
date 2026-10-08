@@ -857,6 +857,53 @@ end
 -- Something made paths loadable that were not (a pack of files was added): they are tried again at once.
 function M.forget_missing() missing, missing_count = {}, 0 end
 
+-- Pictures read from files are kept by hidden images under the interface's root, the oldest let go first.
+local FILE_PICTURES = 64
+local picture_slots, picture_of, picture_at, picture_bank, picture_canvas = {}, {}, 0, nil, nil
+
+-- A .png or .jpg file as a texture and its shape (width over height). Read once: asked again, the kept one comes back.
+-- Returns nil and why. Without an interface nothing keeps it, so the widget it is put on has to.
+function M.import_picture(full)
+    local canvas, gui = canvas_now()
+    if picture_bank and (canvas == nil or not rawequal(canvas, picture_canvas)) then
+        picture_slots, picture_of, picture_at, picture_bank, picture_canvas = {}, {}, 0, nil, nil
+    end
+    local known = picture_of[full]
+    if known then
+        local kept = known.image.Brush.ResourceObject
+        if usable(kept) then return kept, known.shape end
+        picture_of[full] = nil
+    end
+    local problem = picture_problem(full)
+    if problem then return nil, problem end
+    local ok, object = pcall(function() return engine_now(2).rendering:ImportFileAsTexture2D(world_now(2), full) end)
+    if not ok or not usable(object) then return nil, "the game could not read the picture" end
+    local shape = 16 / 9
+    local sized, wide, tall = pcall(function() return object:Blueprint_GetSizeX(), object:Blueprint_GetSizeY() end)
+    if sized and type(wide) == "number" and type(tall) == "number" and wide > 0 and tall > 0 then shape = wide / tall end
+    if canvas then
+        if not picture_bank then
+            picture_bank = gui.new("VerticalBox")
+            picture_bank:SetVisibility(COLLAPSED)
+            canvas:AddChild(picture_bank)
+            picture_canvas = canvas
+        end
+        picture_at = picture_at % FILE_PICTURES + 1
+        local slot = picture_slots[picture_at]
+        if not slot then
+            slot = { image = gui.new("Image") }
+            picture_bank:AddChild(slot.image)
+            picture_slots[picture_at] = slot
+        elseif slot.path then
+            picture_of[slot.path] = nil
+        end
+        slot.image:SetBrushResourceObject(object)
+        slot.path, slot.shape = full, shape
+        picture_of[full] = slot
+    end
+    return object, shape
+end
+
 function M.stats()
     local kinds, pinned = { asset = 0, texture = 0, material = 0 }, 0
     for _, entry in pairs(entries) do

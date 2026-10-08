@@ -528,7 +528,12 @@ local function build_page(self, page, name, options)
         end
     end
     local unwatch = scroller and watch_scroll(self, scroller, page) or function() end
-    local unclick = events.connect(button, "OnClicked", self.parking, function() select_page(self, page) end)
+    -- fired when the page's own name is pressed while the page is already showing
+    page.PressedAgain = sched.Signal.new("PressedAgain")
+    local unclick = events.connect(button, "OnClicked", self.parking, function()
+        if self.page == page then page.PressedAgain:Fire() end
+        select_page(self, page)
+    end)
     -- a page disconnects its own events when it is removed, while its widgets still exist
     page.disconnect = function()
         unwatch()

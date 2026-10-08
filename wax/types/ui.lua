@@ -126,6 +126,7 @@
 
 ---A page of a window that has navigation. It is a container for controls.
 ---@class WaxPage: WaxContainer
+---@field PressedAgain WaxSignal<fun()> Fires when the page's own name is pressed while the page is already showing. Use it to go back to the start of a page that has several views.
 ---@field NearEnd WaxSignal<fun()> Fires while the end of the page is in view: when the user scrolls close to the bottom, and a few times a second while the page is not full. Add more content in the handler, or do nothing when there is no more.
 
 ---A window in the menu. Controls added to it go into its body, or into a first page called "Main" when it has pages.

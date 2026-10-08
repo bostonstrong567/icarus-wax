@@ -473,11 +473,13 @@ function Container:Button(caption, on_click, options)
     local theme = style.theme
     local look = options.primary and { color = style.WHITE, hover = { R = 0.8, G = 0.8, B = 0.8, A = 1 },
         press = { R = 0.62, G = 0.62, B = 0.62, A = 1 } } or {}
+    -- options.bare: no box behind it, only the icon and the caption, with a faint one under the mouse
+    if options.bare then look.color, look.hover, look.press = style.theme.clear, style.theme.hover, style.theme.raised end
     local button, picture, words, mark
     local side = options.icon and caption == nil and tonumber(options.size) or nil
     local glyph = side and math.max(8, math.floor(side * 0.6)) or 16
     if options.icon then
-        look.padding = caption and style.margin(10, 5, 12, 5) or (side and style.margin(0) or style.margin(7, 6))
+        look.padding = options.bare and style.margin(5, 3) or (caption and style.margin(10, 5, 12, 5) or (side and style.margin(0) or style.margin(7, 6)))
         button = kit.button(nil, look)
         local content = root.new("HorizontalBox")
         local ink = options.primary and theme.on_accent or theme.text
@@ -509,7 +511,7 @@ function Container:Button(caption, on_click, options)
     local natural = options.stretch == false or (options.stretch == nil and options.icon ~= nil and caption == nil)
     local widget = side and kit.sized(button, side, side) or button
     -- what the button is wide beside its caption: its padding, and its icon with the gap after it
-    local spare = SLOT + (options.icon and (caption and 45 or 30) or (options.tab and 8 or 24))
+    local spare = SLOT + (options.icon and (options.bare and 33 or (caption and 45 or 30)) or (options.tab and 8 or 24))
     local index = self.count + 1
     place(self, widget, { h = natural and H.Left or H.Fill, snug = natural, gap = theme.spacing,
         own = side or (words and kit.text_width(caption) + spare) or nil })
@@ -546,10 +548,17 @@ function Container:Button(caption, on_click, options)
         kit.set_text(words, text)
         fit()
     end
+    -- A tab shows its line. A button with an icon is drawn in options.active_color (the accent when none is given).
     function control:SetActive(on)
-        if not mark then error("this button was not made as a tab", 2) end
-        mark:SetVisibility(on and V.HitTestInvisible or V.Collapsed)
-        style.tint(words, "text", on and style.theme.text or style.theme.dim)
+        if mark then
+            mark:SetVisibility(on and V.HitTestInvisible or V.Collapsed)
+            style.tint(words, "text", on and style.theme.text or style.theme.dim)
+            return
+        end
+        if not picture then error("this button was made as neither a tab nor with an icon, so it has nothing to show it by", 2) end
+        local ink = on and (options.active_color or style.theme.accent) or (options.primary and style.theme.on_accent or style.theme.text)
+        style.tint(picture, "image", ink)
+        if words then style.tint(words, "text", ink) end
     end
     local turning = nil
     -- Turns the icon round once, to show that something has started.
@@ -576,6 +585,230 @@ function Container:Icon(name, options)
     place(self, holder, { h = H.Left, snug = true, own = size })
     local control = new_control(self, holder)
     function control:Set(new_name) kit.set_icon(picture, new_name, size) end
+    return control
+end
+
+-- A picture from a .png or .jpg file, drawn options.height tall and as wide as its shape asks. control:Set(file) shows another.
+-- options.on_click makes it something to press, and options.selected draws a line around it.
+function Container:Picture(file, options)
+    options = options or {}
+    local theme = style.theme
+    local height = options.height or 160
+    local image = kit.image(style.WHITE, nil, 1, 1)
+    local holder = kit.sized(image, math.floor(height * 16 / 9), height)
+    local placed, button, frame = holder, nil, nil
+    if options.on_click then
+        button = kit.button(nil, { flat = true, color = theme.clear, hover = theme.clear, press = theme.clear, padding = style.margin(0) })
+        button:SetContent(holder)
+        placed = root.new("Overlay")
+        kit.slot(placed:AddChild(button), { h = H.Fill, v = VA.Fill })
+        frame = kit.image(theme.accent, "frame8", 1, 1)
+        frame:SetVisibility(options.selected and V.HitTestInvisible or V.Hidden)
+        kit.slot(placed:AddChild(frame), { h = H.Fill, v = VA.Fill })
+    end
+    place(self, placed, { h = H.Left, snug = true, own = math.floor(height * 16 / 9) })
+    local control = new_control(self, placed)
+    if button then listen(control, button, "OnClicked", function() call(options.on_click) end) end
+    local container, shape = self, 16 / 9
+    -- as tall as asked for, and less when that would make it wider than the room it has
+    local function size()
+        local wide = math.min(height * shape, math.max(40, controls.wrap_width(container)))
+        holder:SetWidthOverride(math.floor(wide))
+        holder:SetHeightOverride(math.floor(wide / shape))
+    end
+    fit_later(self, size)
+    function control:Set(path)
+        if type(path) ~= "string" then error("Picture:Set expects the whole path of a .png or .jpg file", 2) end
+        local texture, found = Wax.import("world.assets").import_picture(path)
+        if not texture then
+            placed:SetVisibility(V.Collapsed)
+            return false, found
+        end
+        shape = found or shape
+        size()
+        image:SetBrushResourceObject(texture)
+        placed:SetVisibility(V.Visible)
+        return true
+    end
+    function control:SetSelected(on)
+        if frame then frame:SetVisibility(on and V.HitTestInvisible or V.Hidden) end
+    end
+    if file then control:Set(file) else placed:SetVisibility(V.Collapsed) end
+    return control
+end
+
+-- A card to press. options: title, note (a few muted words after the title), text (a line or two under it), badge and
+-- badge_color, marks ({ icon, text } each, and with on_click a small button of its own, drawn in color while active),
+-- picture (a .png or .jpg file, drawn faded behind it all), on_click.
+function Container:Tile(options)
+    options = options or {}
+    local theme = style.theme
+    local container = self
+    local card = root.new("Overlay")
+    card:SetClipping(style.Clip.ClipToBounds)
+    kit.slot(card:AddChild(kit.box(theme.card, "round8")), { h = H.Fill, v = VA.Fill })
+    local backdrop = kit.image(style.with_alpha(theme.text, 0.2), nil, 1, 1)
+    backdrop:SetVisibility(V.Hidden)
+    kit.slot(card:AddChild(backdrop), { h = H.Fill, v = VA.Fill, pad = style.margin(1) })
+    local glow = kit.box(style.with_alpha(theme.hover, 0.45), "round8")
+    glow:SetVisibility(V.Hidden)
+    kit.slot(card:AddChild(glow), { h = H.Fill, v = VA.Fill })
+    -- the press on the card lies under what the card shows, so a button among its counts is pressed first
+    local button = kit.button(nil, { flat = true, color = theme.clear, hover = theme.clear, press = theme.clear, padding = style.margin(0) })
+    kit.slot(card:AddChild(button), { h = H.Fill, v = VA.Fill })
+
+    local function shown(widget)
+        widget:SetVisibility(V.HitTestInvisible)
+        return widget
+    end
+    local column = root.new("VerticalBox")
+    column:SetVisibility(V.SelfHitTestInvisible)
+    local head = root.new("HorizontalBox")
+    head:SetVisibility(V.SelfHitTestInvisible)
+    local title = shown(kit.label("", { face = "Bold" }))
+    kit.slot(head:AddChild(title), { v = VA.Center })
+    local taken = 0
+    if options.note and options.note ~= "" then
+        kit.slot(head:AddChild(shown(kit.label(options.note, { color = theme.dim, free = true }))), { v = VA.Center, pad = style.margin(8, 0, 0, 0) })
+        taken = taken + 8 + math.ceil(kit.text_width(options.note, theme.font_size) / kit.FIT)
+    end
+    kit.slot(head:AddChild(shown(root.new("Spacer"))), { fill = 1 })
+    local presses, made = {}, {}
+    for index, mark in ipairs(options.marks or {}) do
+        local text = tostring(mark.text or "")
+        local tone = mark.active and (mark.color or theme.accent) or theme.dim
+        local icon = kit.icon(mark.icon, 13, tone)
+        local count = kit.label(text, { size = theme.small_size, color = tone, free = true })
+        made[index] = { icon = icon, count = count, color = mark.color }
+        local wide = math.ceil(kit.text_width(text, theme.small_size) / kit.FIT)
+        if mark.on_click then
+            local inner = root.new("HorizontalBox")
+            kit.slot(inner:AddChild(icon), { v = VA.Center, pad = style.margin(0, 0, 4, 0) })
+            kit.slot(inner:AddChild(count), { v = VA.Center })
+            -- the button is no larger than its icon and number, so the counts keep the spacing they have without one
+            local press = kit.button(nil, { color = theme.clear, hover = theme.hover, press = theme.raised, padding = style.margin(4, 2) })
+            press:SetContent(inner)
+            kit.slot(head:AddChild(press), { v = VA.Center, pad = style.margin(6, 0, 0, 0) })
+            presses[#presses + 1] = { press, mark.on_click }
+            taken = taken + 31 + wide
+        else
+            kit.slot(head:AddChild(shown(icon)), { v = VA.Center, pad = style.margin(10, 0, 4, 0) })
+            kit.slot(head:AddChild(shown(count)), { v = VA.Center })
+            taken = taken + 27 + wide
+        end
+    end
+    if options.badge and options.badge ~= "" then
+        local tone = options.badge_color or theme.dim
+        local pill = shown(root.new("Overlay"))
+        kit.slot(pill:AddChild(kit.box(style.with_alpha(tone, 0.2), style.capsule(20))), { h = H.Fill, v = VA.Fill })
+        local word = kit.label(options.badge, { size = theme.small_size, color = tone, free = true })
+        kit.slot(pill:AddChild(word), { h = H.Center, v = VA.Center, pad = style.margin(9, 2) })
+        kit.slot(head:AddChild(pill), { v = VA.Center, pad = style.margin(8, 0, 0, 0) })
+        taken = taken + math.ceil(kit.text_width(options.badge, theme.small_size) / kit.FIT) + 26
+    end
+    kit.slot(column:AddChild(head), { h = H.Fill })
+    local body = nil
+    if options.text and options.text ~= "" then
+        body = shown(kit.label("", { color = theme.dim, size = theme.small_size, wrap = true }))
+        kit.slot(column:AddChild(body), { h = H.Fill, pad = style.margin(0, 5, 0, 0) })
+    end
+    local padded = kit.box(theme.clear, nil, style.margin(14, 11))
+    padded:SetContent(column)
+    padded:SetVisibility(V.SelfHitTestInvisible)
+    kit.slot(card:AddChild(padded), { h = H.Fill, v = VA.Fill })
+    local outline = kit.image(theme.card_line, "frame8", 1, 1)
+    outline:SetVisibility(V.HitTestInvisible)
+    kit.slot(card:AddChild(outline), { h = H.Fill, v = VA.Fill })
+    place(self, card)
+
+    local control = new_control(self, card)
+    local shape = nil
+    local whole_title, whole_text = tostring(options.title or ""), tostring(options.text or "")
+    -- the title keeps to one line, the text to about two, and the picture is cut to the card's own shape, not squeezed
+    local function fit()
+        local wide = math.max(80, controls.wrap_width(container))
+        local room = wide - 28
+        kit.set_text(title, whole_title)
+        kit.fit(title, math.max(40, room - taken))
+        if body then kit.set_text(body, (kit.shorten(whole_text, room * 1.9 * kit.FIT, theme.small_size))) end
+        if shape then
+            local tall = body and 76 or 44
+            local part = math.min(1, (tall / wide) * shape)
+            backdrop.Brush.UVRegion = { Min = { X = 0, Y = 0.5 - part / 2 }, Max = { X = 1, Y = 0.5 + part / 2 }, bIsValid = 1 }
+        end
+    end
+    fit_later(self, fit)
+    fit()
+    listen(control, button, "OnHovered", function() glow:SetVisibility(V.HitTestInvisible) end)
+    listen(control, button, "OnUnhovered", function() glow:SetVisibility(V.Hidden) end)
+    listen(control, button, "OnClicked", function() call(options.on_click) end)
+    for _, entry in ipairs(presses) do
+        listen(control, entry[1], "OnClicked", function() call(entry[2]) end)
+    end
+    -- Changes one of the counts where it stands: its number or word, and whether it is drawn as active.
+    function control:SetMark(index, text, active)
+        local mark = made[index]
+        if not mark then return end
+        local tone = active and (mark.color or theme.accent) or theme.dim
+        kit.set_text(mark.count, tostring(text))
+        style.tint(mark.count, "text", tone)
+        style.tint(mark.icon, "image", tone)
+    end
+    function control:SetPicture(path)
+        local texture, found = Wax.import("world.assets").import_picture(path)
+        if not texture then return false, found end
+        shape = found
+        backdrop:SetBrushResourceObject(texture)
+        fit()
+        backdrop:SetVisibility(V.HitTestInvisible)
+        return true
+    end
+    if options.picture then control:SetPicture(options.picture) end
+    return control
+end
+
+-- A word or two in a small pill. options.color: a theme colour.
+function Container:Badge(text, options)
+    options = options or {}
+    local theme = style.theme
+    local tone = options.color or theme.dim
+    local pill = root.new("Overlay")
+    kit.slot(pill:AddChild(kit.box(style.with_alpha(tone, 0.16), style.capsule(20))), { h = H.Fill, v = VA.Fill })
+    local word = kit.label(text, { size = theme.small_size, color = tone, free = true })
+    kit.slot(pill:AddChild(word), { h = H.Center, v = VA.Center, pad = style.margin(9, 2) })
+    place(self, pill, { h = H.Left, snug = true, own = math.ceil(kit.text_width(text, theme.small_size) / kit.FIT) + 18 })
+    return new_control(self, pill)
+end
+
+-- A caption with its value under it, for a line of facts. control:Set(value) changes the value.
+function Container:Stat(caption, value)
+    local theme = style.theme
+    local box = root.new("VerticalBox")
+    kit.slot(box:AddChild(kit.label(caption, { size = theme.small_size, color = theme.dim, free = true })), { h = H.Left })
+    local shown = kit.label(tostring(value), { free = true })
+    kit.slot(box:AddChild(shown), { h = H.Left, pad = style.margin(0, 2, 0, 0) })
+    local wide = math.max(kit.text_width(caption, theme.small_size), kit.text_width(tostring(value), theme.font_size))
+    -- room after it, so facts in a line do not touch
+    local spaced = kit.box(theme.clear, nil, style.margin(0, 0, 14, 0))
+    spaced:SetContent(box)
+    place(self, spaced, { h = H.Left, snug = true, own = math.ceil(wide / kit.FIT) + 18 })
+    local control = new_control(self, spaced)
+    function control:Set(new_value) kit.set_text(shown, tostring(new_value)) end
+    return control
+end
+
+-- An icon with a number or a word beside it, such as a count of downloads. control:Set(value) changes it.
+function Container:Count(icon, value, options)
+    options = options or {}
+    local theme = style.theme
+    local tone = options.color or theme.dim
+    local row = root.new("HorizontalBox")
+    kit.slot(row:AddChild(kit.icon(icon, 15, tone)), { v = VA.Center, pad = style.margin(0, 0, 5, 0) })
+    local shown = kit.label(tostring(value), { color = options.color, free = true })
+    kit.slot(row:AddChild(shown), { v = VA.Center, pad = style.margin(0, 0, 12, 0) })
+    place(self, row, { h = H.Left, snug = true, own = math.ceil(kit.text_width(tostring(value), theme.font_size) / kit.FIT) + 32 })
+    local control = new_control(self, row)
+    function control:Set(new_value) kit.set_text(shown, tostring(new_value)) end
     return control
 end
 
@@ -1113,6 +1346,24 @@ function Container:Section(title, options)
     local fits = options.fit == true
     local title_label = kit.label(fits and "" or title, { face = "Bold", wrap = not fits })
     kit.slot(header_row:AddChild(title_label), { v = VA.Center, fill = 1 })
+    -- options.marks: small counts at the right end of the title, each { icon = "download", text = "12" }
+    local badge_room = 0
+    for _, mark in ipairs(options.marks or {}) do
+        local text = tostring(mark.text or "")
+        kit.slot(header_row:AddChild(kit.icon(mark.icon, 13, theme.dim)), { v = VA.Center, pad = style.margin(10, 0, 4, 0) })
+        kit.slot(header_row:AddChild(kit.label(text, { size = theme.small_size, color = theme.dim, free = true })), { v = VA.Center })
+        badge_room = badge_room + 27 + math.ceil(kit.text_width(text, theme.small_size) / kit.FIT)
+    end
+    -- options.badge: a word in a small pill at the right end of the title, in options.badge_color
+    if options.badge and options.badge ~= "" then
+        local tone = options.badge_color or theme.dim
+        local pill = root.new("Overlay")
+        kit.slot(pill:AddChild(kit.box(style.with_alpha(tone, 0.16), style.capsule(20))), { h = H.Fill, v = VA.Fill })
+        local word = kit.label(options.badge, { size = theme.small_size, color = tone, free = true })
+        kit.slot(pill:AddChild(word), { h = H.Center, v = VA.Center, pad = style.margin(9, 2) })
+        kit.slot(header_row:AddChild(pill), { v = VA.Center, pad = style.margin(8, 0, 0, 0) })
+        badge_room = badge_room + math.ceil(kit.text_width(options.badge, theme.small_size) / kit.FIT) + 26
+    end
     kit.fill_content(header, header_row)
     local header_stack = root.new("Overlay")
     kit.slot(header_stack:AddChild(glow_open), { h = H.Fill, v = VA.Fill })
@@ -1165,7 +1416,7 @@ function Container:Section(title, options)
         parts.title, parts.before = title == nil and "" or tostring(title), 0
         -- the room: the card less the header's padding, the arrow, and what its maker put before the title (parts.before)
         function parts.fit()
-            local room = controls.wrap_width(container) - 20 - SLOT - (fixed and 0 or 22) - parts.before
+            local room = controls.wrap_width(container) - 20 - SLOT - (fixed and 0 or 22) - parts.before - badge_room
             kit.set_text(title_label, parts.title)
             local cut = kit.fit(title_label, room)
             parts.shown = cut and kit.shorten(parts.title, room * kit.FIT, theme.font_size, nil, nil, "Bold") or parts.title

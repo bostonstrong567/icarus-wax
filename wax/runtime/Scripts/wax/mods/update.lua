@@ -683,6 +683,7 @@ end
 update.shared = { net = NET, fail = fail, pause = pause, read = read, write = write, size_of = size_of, shown = shown, parse = parse,
     good_path = good_path, encode = encode, fetch = fetch, status_of = status_of, answer = answer, check_file = check_file,
     check_signed = check_signed, files_under = files_under, attempt = attempt, stopped = function() return dead end,
-    looking = function() return settings.look end, auto = function() return settings.auto end }
+    looking = function() return settings.look end, auto = function() return settings.auto end,
+    read_plan = read_plan, origin = ORIGIN, mark = MARK }
 
 return update

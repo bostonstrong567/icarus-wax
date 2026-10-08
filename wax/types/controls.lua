@@ -47,6 +47,8 @@ local Heading = {}
 function Heading:Set(value) end
 
 ---@class WaxButtonOptions: WaxOptions
+---@field active_color? table A theme colour the icon and the caption are drawn in while SetActive(true) holds.
+---@field bare? boolean Draws no box behind the button, only its icon and caption, with a faint box while the mouse is on it.
 ---@field primary? boolean Draws the button in the accent colour.
 ---@field stretch? boolean A button with a caption is as wide as its container. False keeps it as wide as its caption. An icon-only button is small unless this is true.
 ---@field icon? string Icon name shown before the caption. The menu's Icons page lists the names.
@@ -72,7 +74,8 @@ function Button:Spin() end
 ---@param text any
 function Button:SetCaption(text) end
 
----Marks a button made with `tab = true` as the chosen tab, or as one of the others.
+---Shows the button as the chosen one, or not. A tab shows its line. A button with an icon is drawn in its
+---active_color, or in the accent colour when it has none. A button with neither raises an error.
 ---@param on boolean
 function Button:SetActive(on) end
 
@@ -213,6 +216,9 @@ function Dropdown:Set(choice) end
 ---@class WaxSectionOptions: WaxOptions
 ---@field open? boolean False starts the section collapsed.
 ---@field collapsible? boolean False makes a plain titled group that is always open.
+---@field badge? string A word or two shown in a small pill at the right end of the title, such as "New" or "Off".
+---@field badge_color? table The colour of the badge: a theme colour. The muted text colour when omitted.
+---@field marks? { icon: string, text: any }[] Small counts at the right end of the title, each an icon with a number or a word.
 ---@field fit? boolean Keeps the title on one line. A title too long for the card is cut short with "..." and shown whole as a tip while the mouse rests on it, and it is cut again when the card gets another width. Without it a long title wraps.
 
 ---A collapsible card. It is a container for controls.
@@ -336,6 +342,101 @@ function Container:Spacer(height) end
 ---@param options? WaxButtonOptions
 ---@return WaxButton
 function Container:Button(caption, on_click, options) end
+
+---What Container:Picture takes besides the file.
+---@class WaxPictureOptions
+---@field height? number How tall the picture is drawn. 160 when omitted. It is drawn less tall when that would make it wider than the room it has.
+---@field on_click? fun() Makes the picture something to press, and runs this when it is pressed.
+---@field selected? boolean Draws a line around the picture, for the chosen one of several. Only with on_click.
+
+---A picture from a file.
+---@class WaxPicture: WaxControl
+local Picture = {}
+
+---Shows another picture file. Returns false and the reason when the file is not a PNG or JPG picture the game can read.
+---@param file string The whole path of a .png or .jpg file.
+---@return boolean shown
+---@return string? why
+function Picture:Set(file) end
+
+---Draws or removes the line around a picture that was made with on_click.
+---@param on boolean
+function Picture:SetSelected(on) end
+
+---Adds a picture from a .png or .jpg file, in the shape the picture has. With nil for the file it shows nothing until Set is called.
+---@param file string? The whole path of the file, such as mod.dir .. "/logo.png".
+---@param options? WaxPictureOptions
+---@return WaxPicture
+function Container:Picture(file, options) end
+
+---What a Tile shows.
+---@class WaxTileOptions
+---@field title string The name, in bold, kept to one line.
+---@field note? string A few muted words after the title, such as a version.
+---@field text? string A line or two under the title. Longer text is cut short.
+---@field badge? string A word or two in a small pill at the right end.
+---@field badge_color? table The colour of the badge: a theme colour.
+---@field marks? { icon: string, text: any, on_click?: fun(), active?: boolean, color?: table }[] Small counts before the badge, each an icon with a number or a word. One with on_click is a small button of its own, pressed without pressing the card, and is drawn in its color while active is true.
+---@field picture? string The whole path of a .png or .jpg file, drawn faded behind the card.
+---@field on_click? fun() Runs when the card is pressed.
+
+---A card to press.
+---@class WaxTile: WaxControl
+local Tile = {}
+
+---Puts a picture behind the card, faded and cut to the card's shape. Returns false and the reason when the file cannot be read.
+---@param file string The whole path of a .png or .jpg file.
+---@return boolean shown
+---@return string? why
+function Tile:SetPicture(file) end
+
+---Adds a card to press: a title, a line of text, small counts and a badge, over a faded picture when it has one.
+---@param options WaxTileOptions
+---@return WaxTile
+function Container:Tile(options) end
+
+---What Container:Badge takes besides the text.
+---@class WaxBadgeOptions
+---@field color? table A theme colour. The muted text colour when omitted.
+
+---Adds a word or two in a small pill, such as "New" or a tag.
+---@param text string
+---@param options? WaxBadgeOptions
+---@return WaxControl
+function Container:Badge(text, options) end
+
+---A caption with its value under it.
+---@class WaxStat: WaxControl
+local Stat = {}
+
+---Changes the value.
+---@param value any
+function Stat:Set(value) end
+
+---Adds a caption with its value under it. Several in a Flow make a line of facts.
+---@param caption string
+---@param value any
+---@return WaxStat
+function Container:Stat(caption, value) end
+
+---What Container:Count takes besides the icon and the value.
+---@class WaxCountOptions
+---@field color? table A theme colour for the icon and the value. The usual colours when omitted.
+
+---An icon with a number or a word beside it.
+---@class WaxCount: WaxControl
+local Count = {}
+
+---Changes the value.
+---@param value any
+function Count:Set(value) end
+
+---Adds an icon with a number or a word beside it, such as a count of downloads.
+---@param icon string The icon's name. The menu's Icons page lists the names.
+---@param value any
+---@param options? WaxCountOptions
+---@return WaxCount
+function Container:Count(icon, value, options) end
 
 ---Adds an icon on its own, by name. The menu's Icons page lists the names.
 ---@param name string
