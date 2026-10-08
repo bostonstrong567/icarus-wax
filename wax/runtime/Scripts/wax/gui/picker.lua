@@ -76,7 +76,7 @@ end
 -- Shows the control's colour on everything that displays it.
 local function show(parts)
     parts.swatch:SetBrushColor(engine_color(hsv_to_rgb(parts.h, parts.s, parts.v)))
-    parts.hex:SetText(kit.text(parts.value))
+    kit.set_text(parts.hex, parts.value)
     if not parts.holder then return end
     parts.shade:SetColorAndOpacity(engine_color(hsv_to_rgb(parts.h, 1, 1)))
     if parts.hue:GetValue() ~= parts.h then parts.hue:SetValue(parts.h) end
@@ -319,7 +319,7 @@ function picker.install(Container, tools)
         local edge = kit.box(theme.line, "round5", style.margin(1))
         edge:SetContent(swatch)
         kit.slot(header_row:AddChild(kit.sized(edge, 18, 18)), { v = VA.Center, pad = style.margin(0, 0, 8, 0) })
-        local hex = kit.label("", { family = "mono", size = theme.small_size })
+        local hex = kit.label("", { family = "mono", size = theme.small_size, free = true })
         kit.slot(header_row:AddChild(hex), { v = VA.Center, fill = 1 })
         local chevron = kit.icon("chevron-down", 14, theme.dim)
         kit.slot(header_row:AddChild(chevron), { v = VA.Center, pad = style.margin(0, 1, 0, 0) })

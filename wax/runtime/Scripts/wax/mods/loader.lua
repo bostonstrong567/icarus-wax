@@ -578,8 +578,14 @@ function loader.move(id, by)
     preferences.order = wanted
     storage.save("wax", "mods", preferences)
     order = sort_by_dependencies()
+    -- changes to game tables stack in load order, so they are settled again
+    local patch = Wax.modules["data.patch"]
+    if type(patch) == "table" and patch.reordered then patch.reordered() end
     return true
 end
+
+-- The ids of the mods in load order.
+function loader.ids() return table.move(order, 1, #order, 1, {}) end
 
 -- Takes a mod out: it unloads, its folder is renamed with a leading dot (nothing is erased), and it is forgotten unless the updater is replacing it. Returns the new folder name.
 function loader.remove(id, replacing)

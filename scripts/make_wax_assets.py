@@ -46,9 +46,11 @@ def rounded_bottom(name, radius, size=64):
     save(image, name, size)
 
 
-def glow(name, radius, stroke, blur, size=64, margin=20):
-    """The bottom and right edges of a window outline, fading in over the last third towards the corner (9-slice)."""
-    from PIL import ImageFilter
+def glow(name, radius, stroke, blur, size=64, margin=20, part="se"):
+    """A piece of a window outline that glows by a resize handle (9-slice). part is the handle: for a corner ("se",
+    "sw", "ne", "nw") the two edges that meet there, fading in over the last third towards it; for an edge ("n", "s",
+    "e", "w") that whole edge, fading out inside the corner at each end."""
+    from PIL import ImageFilter, ImageOps
     big = size * SCALE
     ring = Image.new("L", (big, big), 0)
     draw = ImageDraw.Draw(ring)
@@ -61,14 +63,35 @@ def glow(name, radius, stroke, blur, size=64, margin=20):
     alpha = ring.resize((size, size), Image.LANCZOS)
     start = margin + 0.72 * (size - 2 * margin)
 
-    def weight(at):
-        t = max(0.0, min(1.0, (at - start) / (size - margin - start)))
+    def smooth(t):
+        t = max(0.0, min(1.0, t))
         return t * t * (3 - 2 * t)
 
+    def weight(at):
+        return smooth((at - start) / (size - margin - start))
+
+    def along(at):
+        return smooth((at - 4) / (margin - 4)) * smooth((size - 1 - at - 4) / (margin - 4))
+
+    def across(at):
+        return smooth((at - (size - margin)) / (margin - 8))
+
+    # each piece is drawn for the bottom right, the bottom or the right, and turned over for the other sides
+    corner = len(part) == 2
     pixels = alpha.load()
     for y in range(size):
         for x in range(size):
-            pixels[x, y] = int(pixels[x, y] * weight(x) * weight(y))
+            if corner:
+                share = weight(x) * weight(y)
+            elif part in "ns":
+                share = along(x) * across(y)
+            else:
+                share = across(x) * along(y)
+            pixels[x, y] = int(pixels[x, y] * share)
+    if "w" in part:
+        alpha = ImageOps.mirror(alpha)
+    if "n" in part:
+        alpha = ImageOps.flip(alpha)
     out = Image.new("RGBA", (size, size), WHITE)
     out.putalpha(alpha)
     out.save(OUT / f"{name}.png")
@@ -104,6 +127,14 @@ def grip(draw, n):
     w = int(n * 0.085)
     for offset in (0.28, 0.54, 0.80):
         line(draw, [(n * 0.92, n * offset), (n * offset, n * 0.92)], w)
+
+
+def dots(draw, n):
+    """Six round dots, two across and three down: the grip something is dragged by."""
+    r = n * 0.078
+    for x in (0.34, 0.66):
+        for y in (0.20, 0.50, 0.80):
+            draw.ellipse([n * x - r, n * y - r, n * x + r, n * y + r], fill=WHITE)
 
 
 def fade(name, across):
@@ -174,10 +205,14 @@ def main():
     rounded_bottom("bottom6", 6)
     glow("glow12", 12, 1.5, 0)
     glow("glow12_soft", 12, 2, 2)
+    for part in ("sw", "ne", "nw", "n", "s", "e", "w"):
+        glow(f"glow12_{part}", 12, 1.5, 0, part=part)
+        glow(f"glow12_{part}_soft", 12, 2, 2, part=part)
     frame("frame6", 6, 1)
     frame("frame8", 8, 1)
     frame("frame12", 12, 1.5)
     icon("icon_grip", grip)
+    icon("icon_dots", dots)
     print(f"wrote {len(list(OUT.glob('*.png')))} images to {OUT}")
 
 

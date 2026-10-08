@@ -116,6 +116,7 @@ local function build(overlay, options)
         or style.margin(12, 10, 12, 10 - theme.spacing + 4))
     padded:SetContent(overlay.box)
     local sized = kit.sized(padded, overlay.width, options.height)
+    overlay.sizers = { sized }
     if options.interactive then
         -- A panel takes the mouse wheel, so the game under it does not act on it (it would turn the hotbar). The panel
         -- sits in a scroll box that scrolls sideways between two empty ends: the wheel moves it, watch() sees which way
@@ -138,6 +139,7 @@ local function build(overlay, options)
         catcher:SetScrollOffset(M.WHEEL_ROOM)
         overlay.catcher = catcher
         sized = kit.sized(catcher, overlay.width, options.height)
+        overlay.sizers[2] = sized
     end
     kit.slot(frame:AddChild(sized), { h = H.Fill, v = VA.Fill })
     overlay.parking = root.new("VerticalBox")
@@ -171,7 +173,11 @@ local function build(overlay, options)
     end
 
     overlay.outer = kit.scaled(holder)
-    if overlay.zoom ~= 1 then overlay.outer:SetUserSpecifiedScale(style.scale * overlay.zoom) end
+    if overlay.place then
+        overlay.outer:SetUserSpecifiedScale(overlay.zoom)
+    elseif overlay.zoom ~= 1 then
+        overlay.outer:SetUserSpecifiedScale(style.scale * overlay.zoom)
+    end
     overlay.slot = root.layer("hud"):AddChild(overlay.outer)
     pin(overlay)
     local owner = scope.current()
@@ -184,11 +190,30 @@ local function build(overlay, options)
     if options.title then overlay:Heading(options.title) end
 end
 
--- options: { anchor = "top-right", x = 16, y = 16, width = 240, title, background = true, movable = true (drag it while the menu is open) }
+-- The screen as a place function is given it: in the units the game lays its own menus out in, whatever the interface size.
+local function screen_size()
+    local width, height = root.viewport_size()
+    return width, height
+end
+
+-- options: { anchor = "top-right", x = 16, y = 16, width = 240, title, background = true, movable = true (drag it while the menu is open),
+-- place = function(screen_width, screen_height) giving { x, y, width, height, zoom }: asked now and whenever the screen's size changes }
 function M.create(options)
     if not root.exists() then error("the GUI is not running", 2) end
     if type(options) == "table" and type(options.Overlay) == "function" then error("write ui.Overlay({ ... }) with a dot, not a colon", 2) end
     options = options or {}
+    local place = options.place
+    if place ~= nil then
+        if type(place) ~= "function" then error("place is a function of the screen's width and height that returns { x, y, width, height, zoom }", 2) end
+        local at = place(screen_size())
+        if type(at) ~= "table" then error("place has to return a table such as { x = 4, y = 0, width = 224 }", 2) end
+        local given = {}
+        for key, value in pairs(options) do given[key] = value end
+        for _, key in ipairs({ "x", "y", "width", "height", "zoom" }) do
+            if at[key] ~= nil then given[key] = at[key] end
+        end
+        options = given
+    end
     local anchor = options.anchor or "top-right"
     if not ANCHORS[anchor] then error("unknown anchor '" .. tostring(anchor) .. "'", 2) end
     local when = options.when or "always"
@@ -198,11 +223,13 @@ function M.create(options)
     local inset = options.padding and options.padding * 2 or 24
     local overlay = setmetatable({ controls = {}, width = options.width or 240, nav_width = 0, anchor = anchor,
         x = options.x or 16, y = options.y or 16, shown = options.visible ~= false, horizontal = false, count = 0, inset = inset,
-        when = when, interactive = options.interactive and true or false, height = options.height,
+        when = when, interactive = options.interactive and true or false, height = options.height, place = place,
         zoom = tonumber(options.zoom) or 1 }, Overlay)
     overlay.window = overlay
     -- on a panel: fires with 1 when the wheel is turned down over it and -1 when it is turned up
     overlay.Scrolled = sched.Signal.new("Scrolled")
+    -- fires with the new width and height, in the panel's own units, when its place function gave it another size
+    overlay.Resized = sched.Signal.new("Resized")
     overlay.maker = scope.current()
     style.build(overlay, build, overlay, options)
     overlay.visible_now = true
@@ -236,17 +263,25 @@ function M.wants_cursor()
     return false
 end
 
--- Every frame: overlays that wait for the menu or the mouse are shown and hidden. True when a panel is on screen now.
+-- Every frame: overlays that wait for the menu or the mouse are shown and hidden. True when a panel is on screen now,
+-- then whether the mouse is over one.
 function M.watch(menu, cursor)
     state.menu, state.cursor = menu and true or false, cursor and true or false
-    local interactive = false
+    local interactive, any_over = false, nil
     for i = 1, #overlays do
         local overlay = overlays[i]
         if overlay.when ~= "always" then apply(overlay) end
+        local was_over = overlay.hovered
+        overlay.hovered = false
         if overlay.interactive and overlay.visible_now then
             interactive = true
+            -- one question for all panels says whether the mouse is over any of them: only then is each one asked
+            if any_over == nil then any_over = root.layer("hud"):IsHovered() == true end
+            local over = any_over and overlay.holder:IsHovered() == true
+            overlay.hovered = over
+            -- the wheel only turns a panel the mouse is over, so the others are not read
             local catcher = overlay.catcher
-            local offset = catcher and catcher:GetScrollOffset()
+            local offset = catcher and (over or was_over or not overlay.wheel_ready) and catcher:GetScrollOffset()
             if offset == M.WHEEL_ROOM then
                 overlay.wheel_ready = true
             elseif offset then
@@ -261,7 +296,7 @@ function M.watch(menu, cursor)
             end
         end
     end
-    return interactive
+    return interactive, any_over == true
 end
 
 -- While the menu is open, overlays can be dragged.
@@ -292,8 +327,51 @@ function M.step()
     end
 end
 
+-- After the interface scale changed. A panel with a place function is not touched: it is sized as the game's own menus are.
 function M.rescale()
-    for i = 1, #overlays do overlays[i].outer:SetUserSpecifiedScale(style.scale * overlays[i].zoom) end
+    for i = 1, #overlays do
+        if not overlays[i].place then overlays[i].outer:SetUserSpecifiedScale(style.scale * overlays[i].zoom) end
+    end
+end
+
+-- Moves, sizes and zooms a panel that exists to what its place function answered. Only what changed reaches the engine.
+local function put(overlay, at)
+    local zoom = tonumber(at.zoom) or overlay.zoom
+    if zoom ~= overlay.zoom then
+        overlay.zoom = zoom
+        overlay.outer:SetUserSpecifiedScale(zoom)
+    end
+    local x, y = tonumber(at.x) or overlay.x, tonumber(at.y) or overlay.y
+    if x ~= overlay.x or y ~= overlay.y then
+        overlay.x, overlay.y = x, y
+        pin(overlay)
+    end
+    local width, height = tonumber(at.width) or overlay.width, tonumber(at.height) or overlay.height
+    if width == overlay.width and height == overlay.height then return end
+    overlay.width, overlay.height = width, height
+    for _, box in ipairs(overlay.sizers) do
+        box:SetWidthOverride(width)
+        if height then box:SetHeightOverride(height) end
+    end
+    controls.rewrap(overlay)
+    local previous = scope.enter(overlay.maker)
+    guard.call("panel resized", function() overlay.Resized:Fire(width, height) end)
+    scope.leave(previous)
+end
+
+-- The screen's size changed: every panel made with a place function is asked again, in the same frame, and put where it says.
+function M.place_all()
+    local width, height = nil, nil
+    for i = 1, #overlays do
+        local overlay = overlays[i]
+        if overlay.place and not overlay.destroyed then
+            if not width then width, height = screen_size() end
+            local previous = scope.enter(overlay.maker)
+            local ok, at = guard.call("panel place", overlay.place, width, height)
+            scope.leave(previous)
+            if ok and type(at) == "table" then put(overlay, at) end
+        end
+    end
 end
 
 function M.forget_all()

@@ -54,10 +54,10 @@ end
 
 function Tag:Set(text)
     if self.destroyed then return end
-    text = tostring(text)
+    text = text == nil and "" or tostring(text)
     if text == self.text then return end
     self.text = text
-    self.label:SetText(kit.text(text))
+    kit.set_text(self.label, text)
 end
 
 -- How near, in metres, the thing has to be for the tag to show.
@@ -134,7 +134,7 @@ end
 
 local function build(tag, options)
     local theme = style.theme
-    local label = kit.label(tag.text, { size = options.size or theme.font_size, color = options.color or style.WHITE, face = "Bold" })
+    local label = kit.label(tag.text, { size = options.size or theme.font_size, color = options.color or style.WHITE, face = "Bold", free = true })
     label:SetShadowOffset({ X = 1, Y = 1 })
     label:SetShadowColorAndOpacity({ R = 0, G = 0, B = 0, A = 0.85 })
     label:SetJustification(style.Justify.Center)
@@ -201,10 +201,8 @@ function M.step()
     count = #tags
     local player = input.controller()
     if not player or count == 0 then return end
-    if frames % 60 == 1 then
-        local _, _, scale = root.viewport_size()
-        screen_scale = scale
-    end
+    local _, _, pixels = root.viewport_size()
+    screen_scale = pixels
     local camera = player.PlayerCameraManager
     if not camera:IsValid() then return end
     local eye = camera:GetCameraLocation()

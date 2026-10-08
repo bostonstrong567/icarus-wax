@@ -5,7 +5,10 @@ local fake = { hooks = {}, objects = 0, calls = {}, pressed = false, mouse = { X
     dead_touches = 0, dead_last = nil,
     touches = 0,        -- every member read or written on any object, whatever answers it
     react = {},         -- react[name] = function(self, ...) stands in for the engine function of that name
+    props = {},         -- props[name] = value: what reading the member of that name gives, on any object
+    screen_size = { X = 1920, Y = 1080 },
     keys = {},          -- keys.R = true: WasInputKeyJustPressed answers true for R (fake.key_pressed still works)
+    released = {},      -- released.R = true: WasInputKeyJustReleased answers true for R
     focused = nil }     -- the widget that has the keyboard, for HasKeyboardFocus and HasFocusedDescendants
 
 local OBJECT = {}
@@ -30,8 +33,22 @@ local ANSWERS = {
     IsPressed = function() return fake.pressed end,
     WasInputKeyJustPressed = function(_, key)
         local name = key.KeyName
+        -- "AnyKey" is the engine's name for "some key or button", whichever it is
+        if name == "AnyKey" then
+            if fake.key_pressed ~= nil then return true end
+            for _, down in pairs(fake.keys or {}) do
+                if down == true then return true end
+            end
+            return false
+        end
         if fake.key_pressed ~= nil and name == fake.key_pressed then return true end
         return fake.keys ~= nil and fake.keys[name] == true
+    end,
+    -- fake.released.RightMouseButton = true: that button came up in this frame
+    WasInputKeyJustReleased = function(_, key)
+        local name = key.KeyName
+        if name == "AnyKey" then return next(fake.released) ~= nil end
+        return fake.released[name] == true
     end,
     HasKeyboardFocus = function(self) return fake.focused ~= nil and rawequal(self, fake.focused) end,
     HasFocusedDescendants = function(self) return fake.focused ~= nil and not rawequal(self, fake.focused) end,
@@ -51,7 +68,7 @@ local ANSWERS = {
     end,
     K2_GetWorldSettings = function() return fake.world_settings end,
     GetScrollOffsetOfEnd = function() return fake.scroll_end or 1000 end,
-    GetViewportSize = function() return { X = 1920, Y = 1080 } end,
+    GetViewportSize = function() return { X = fake.screen_size.X, Y = fake.screen_size.Y } end,
     GetViewportScale = function() return fake.screen_scale end,
     GetMousePositionOnViewport = function() return { X = fake.mouse.X, Y = fake.mouse.Y } end,
     ToString = function(self) return rawget(self, "__text") or "" end,
@@ -90,6 +107,12 @@ function fake.last(object, member)
 end
 function fake.writes(object) return rawget(object, "__writes") or 0 end
 
+-- The game's screen: its size in pixels and the pixels to one unit. The game's own note of the size follows, as it does in the game.
+function fake.set_screen(x, y, scale)
+    fake.screen_size, fake.screen_scale = { X = x, Y = y }, scale or fake.screen_scale
+    fake.props.ResolutionSizeX, fake.props.ResolutionSizeY = x, y
+end
+
 -- IsValid() answers false for this object from now on.
 function fake.invalidate(object) rawset(object, "__gone", true) end
 
@@ -116,6 +139,8 @@ OBJECT.__index = function(self, key)
     fake.touches = fake.touches + 1
     local react = fake.react[key]
     if react then return react end
+    local prop = fake.props[key]
+    if prop ~= nil then return prop end
     if key == "type" then
         local kind = rawget(self, "__kind") or "UObject"
         return function() return kind end

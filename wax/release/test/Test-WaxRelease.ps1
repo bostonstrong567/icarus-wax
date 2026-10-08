@@ -214,11 +214,11 @@ function Test-Cycle([string]$Label, [string[]]$Locate, [string]$Win64, [hashtabl
     Check "${Label}: install says what to do next" ($run.Text -match 'Press F8' -and $run.Text.Contains('https://wax-icarus.duckdns.org/'))
     Test-Installed "$Label install" $Win64 $Expected
     $diff = Compare-Tree $Expected (Get-Tree $Win64 -Skip 'Icarus-Win64-Shipping.exe', 'tbb12.dll', "$waxPath\run\links.txt")
-    Check "${Label}: a first install is the zip's game folder exactly, UE4SS settings and Recipe Browser included" ($diff.Count -eq 0) (($diff | Select-Object -First 5) -join '; ')
-    Check "${Label}: Recipe Browser is there" (Test-Path -LiteralPath (Join-Path $wax 'mods\RecipeBrowser\init.lua'))
+    Check "${Label}: a first install is the zip's game folder exactly, UE4SS settings and Prospector's Codex included" ($diff.Count -eq 0) (($diff | Select-Object -First 5) -join '; ')
+    Check "${Label}: Prospector's Codex is there" (Test-Path -LiteralPath (Join-Path $wax 'mods\RecipeBrowser\init.lua'))
     Check "${Label}: the installed copy is free to update itself: it has a VERSION file and no dev.txt" ((Test-Path -LiteralPath (Join-Path $wax 'VERSION')) -and
         -not (Test-Path -LiteralPath (Join-Path $wax 'dev.txt')))
-    Check "${Label}: Recipe Browser is marked as a mod from the catalogue, and the helper that updates it is installed" ((Test-Path -LiteralPath (Join-Path $wax 'mods\RecipeBrowser\wax.origin')) -and
+    Check "${Label}: Prospector's Codex is marked as a mod from the catalogue, and the helper that updates it is installed" ((Test-Path -LiteralPath (Join-Path $wax 'mods\RecipeBrowser\wax.origin')) -and
         (Test-Path -LiteralPath (Join-Path $wax 'bin\waxnet.dll')))
     Check "${Label}: the version file says $version" ((Get-Content -LiteralPath (Join-Path $wax 'VERSION') -Raw).Trim() -eq $version)
     Check "${Label}: nothing was backed up on a clean game" (-not (Test-Path (Join-Path $Win64 'ue4ss-backup-*')))

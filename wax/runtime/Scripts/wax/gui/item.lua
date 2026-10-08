@@ -88,11 +88,11 @@ function item.install(Container, tools)
         local picture = kit.icon("circle", ICON, theme.dim)
         picture:SetVisibility(V.Collapsed)
         kit.slot(content:AddChild(picture), { v = VA.Center, pad = style.margin(0, 0, 6, 0) })
-        local name = kit.label("")
+        local name = kit.label("", { free = true })
         local name_box = options.columns and kit.sized(name) or nil
         kit.slot(content:AddChild(name_box or name), { v = VA.Center })
-        local note = kit.label("", { color = theme.dim, size = theme.small_size })
-        local value = kit.label("", { family = "mono", size = theme.small_size })
+        local note = kit.label("", { color = theme.dim, size = theme.small_size, free = true })
+        local value = kit.label("", { family = "mono", size = theme.small_size, free = true })
         if options.columns then
             kit.slot(content:AddChild(value), { v = VA.Center, pad = style.margin(10, 0, 0, 0), fill = 1 })
             kit.slot(content:AddChild(note), { v = VA.Center, pad = style.margin(8, 1, 0, 0) })
@@ -143,15 +143,15 @@ function item.install(Container, tools)
             end
             if text ~= drawn.text then
                 drawn.text = text
-                name:SetText(kit.text(text))
+                kit.set_text(name, text)
             end
             if remark ~= drawn.note then
                 drawn.note = remark
-                note:SetText(kit.text(remark))
+                kit.set_text(note, remark)
             end
             if shown ~= drawn.value then
                 drawn.value = shown
-                value:SetText(kit.text(shown))
+                kit.set_text(value, shown)
             end
             local icon = fields.icon or false
             if icon ~= now.icon then

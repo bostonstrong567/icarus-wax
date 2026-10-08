@@ -226,9 +226,8 @@ function stats.new(src, text, format)
         return { text = whole, label = whole, value = "" }
     end
 
-    -- The stats of a map in the order D_Stats lists them.
-    local function add_stats(lines, map)
-        local found = pairs_of(map)
+    -- { name, value } stat pairs as lines, in the order D_Stats lists them.
+    local function add_pairs(lines, found)
         for _, entry in ipairs(found) do
             local stat = stat_of(entry.name)
             entry.order = stat and stat.order or 0
@@ -241,6 +240,21 @@ function stats.new(src, text, format)
             local made = sentence(entry.name, entry.value)
             if made then lines[#lines + 1] = made end
         end
+    end
+
+    local function add_stats(lines, map)
+        add_pairs(lines, pairs_of(map))
+    end
+
+    -- The lines of a list of { name = stat, value = number } pairs, worded as `of` words a stat. The list is not changed.
+    function self.sentences(found)
+        local copy, lines = {}, {}
+        for _, entry in ipairs(found or {}) do
+            local value = amount(entry.value)
+            if type(entry.name) == "string" and value then copy[#copy + 1] = { name = entry.name, value = value } end
+        end
+        add_pairs(lines, copy)
+        return lines
     end
 
     local function durability(out, row)

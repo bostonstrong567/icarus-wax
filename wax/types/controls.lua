@@ -25,6 +25,8 @@ function Control:SetEnabled(enabled) end
 ---@field align? "center"|"right" Where the text sits in its line. Left when omitted.
 ---@field weight? number In a row: its share of the width beside the other controls. 1 when omitted.
 
+---A piece of text. It wraps to the width of its container. In a row it is one line: text too long for its share is cut
+---short with "..." and shown whole as a tip while the mouse rests on it.
 ---@class WaxLabel: WaxControl
 local Label = {}
 
@@ -36,6 +38,7 @@ function Label:Set(value) end
 ---@param color WaxColor
 function Label:SetColor(color) end
 
+---A bold line of text above a group of controls. It is smaller than a Title and has no rule under it.
 ---@class WaxHeading: WaxControl
 local Heading = {}
 
@@ -50,7 +53,9 @@ function Heading:Set(value) end
 ---@field spin? boolean The icon turns round once on every click, to show that something has started.
 ---@field tab? boolean Makes it one of a row of tabs: SetActive marks the chosen one.
 ---@field tip? string|table A line of help shown beside the mouse once it has rested on the button. Give one to every button that is only an icon. A table is `{ title = "...", lines = { "more" } }`.
+---@field size? number For a button that is an icon only: the side of the square it is drawn as. Left out, it is as tall as the other buttons.
 
+---A button with a caption, an icon, or both. Made with `tab = true` it is one of a row of tabs.
 ---@class WaxButton: WaxControl
 ---@field Activated WaxSignal<fun()> Fires on each click, after on_click.
 ---@field Changed WaxSignal<fun()> The same signal as Activated.
@@ -79,6 +84,7 @@ function Button:SetTip(tip) end
 ---@field size? number Default 20.
 ---@field color? WaxColor The theme's text colour when omitted.
 
+---One icon on its own, shown by its name.
 ---@class WaxIcon: WaxControl
 local Icon = {}
 
@@ -86,6 +92,7 @@ local Icon = {}
 ---@param name string
 function Icon:Set(name) end
 
+---A switch that is on or off, with a caption beside it.
 ---@class WaxToggle: WaxControl
 ---@field Changed WaxSignal<fun(on: boolean)> Fires when the user flips the switch.
 local Toggle = {}
@@ -159,6 +166,7 @@ function Slider:Set(value) end
 ---@field mono? boolean A fixed-width font, for code.
 ---@field clear? boolean Puts a small cross at the right end of the box while it holds text. One press empties the box, fires Typed with "" and leaves the keyboard in the box. For a search box.
 
+---A box the user types text into, with or without a caption.
 ---@class WaxInput: WaxControl
 ---@field Changed WaxSignal<fun(text: string)> Fires when the text is committed (Enter, or the box losing focus).
 ---@field Entered WaxSignal<fun(text: string)> Fires only when Enter is pressed, even when the text is the same as last time (for a command line).
@@ -205,6 +213,7 @@ function Dropdown:Set(choice) end
 ---@class WaxSectionOptions: WaxOptions
 ---@field open? boolean False starts the section collapsed.
 ---@field collapsible? boolean False makes a plain titled group that is always open.
+---@field fit? boolean Keeps the title on one line. A title too long for the card is cut short with "..." and shown whole as a tip while the mouse rests on it, and it is cut again when the card gets another width. Without it a long title wraps.
 
 ---A collapsible card. It is a container for controls.
 ---@class WaxSection: WaxContainer
@@ -229,6 +238,7 @@ function Section:IsOpen() end
 ---@class WaxProgressOptions: WaxOptions
 ---@field color? WaxColor|string|integer The accent colour when omitted. "#RRGGBB" works too.
 
+---A progress bar, with its caption and the value as a percentage on a line above it.
 ---@class WaxProgress: WaxControl
 local Progress = {}
 
@@ -247,6 +257,7 @@ function Progress:SetColor(color) end
 ---@class WaxFieldOptions: WaxOptions
 ---@field mono? boolean Shows the value in the small fixed-width font, for numbers that keep changing.
 
+---A name with a value at the right, for read-outs. The user cannot change it.
 ---@class WaxField: WaxControl
 local Field = {}
 
@@ -258,6 +269,7 @@ function Field:Set(value) end
 ---@param color WaxColor
 function Field:SetColor(color) end
 
+---A key the user can change: after a click on it, the next key pressed becomes the key. Escape leaves it as it was.
 ---@class WaxKeybind: WaxControl
 ---@field Changed WaxSignal<fun(key: string)> Fires with the engine's name of the key the user pressed.
 local Keybind = {}
@@ -297,7 +309,8 @@ function Console:SetFollow(on) end
 ---@class WaxContainer
 local Container = {}
 
----Adds text that wraps to the container's width.
+---Adds text. It wraps to the container's width. In a row it does not wrap: each line of the text is one line in the
+---label's share of the row, cut short with "..." when it is too long, and shown whole as a tip.
 ---@param content any
 ---@param options? WaxLabelOptions
 ---@return WaxLabel
@@ -457,6 +470,7 @@ local Item = {}
 ---@param look WaxItemLook
 function Item:Set(look) end
 
+---Marks the line as the picked one, or takes the mark off. Nothing else of the line changes.
 ---@param selected boolean
 function Item:SetSelected(selected) end
 
@@ -491,12 +505,15 @@ function Split:IsSingle() end
 ---@param which "left"|"right"
 function Split:Show(which) end
 
+---The area that shows while there is only room for one. It is "left" until Show picks the other.
 ---@return "left"|"right"
 function Split:Shown() end
 
+---Sets the left area's part of the width, from 0.05 to 0.95. Neither area is drawn narrower than `least`.
 ---@param share number
 function Split:SetShare(share) end
 
+---The left area's part of the width, as SetShare or the user's drag of the divider last left it.
 ---@return number
 function Split:GetShare() end
 
@@ -513,7 +530,7 @@ function Container:Split(options) end
 ---@field mark? string A small icon in the upper left corner.
 ---@field value? any What the signals and ui.Hovered give for this cell.
 ---@field tip? string|table|fun(): any The tooltip: a text, `{ title = "...", lines = { "text" or { "text", "warn" } } }`, or a function that returns one.
----@field dim? boolean Draws the picture faint.
+---@field dim? boolean Draws the picture faint, or the icon of a cell that has no picture.
 ---@field selected? boolean Marks the cell as the chosen one.
 ---@field tone? "good"|"warn"|"bad"|"accent" A short line of that colour under the picture.
 ---@field plain? boolean A picture only: no box, and the mouse passes over it.
@@ -528,7 +545,8 @@ function Container:Split(options) end
 ---@field below? number Space under the block. The theme's spacing when omitted.
 ---@field looks? WaxSlotLook[] What to show at the start.
 
----A block of square cells that each show a picture, a count and a mark.
+---A block of square cells that each show a picture, a count and a mark. Switched off with SetEnabled(false), its cells
+---take no click, are not under the mouse for ui.Hovered, and show the arrow in place of the hand.
 ---@class WaxSlots: WaxControl
 ---@field Activated WaxSignal<fun(value: any, index: integer, look: WaxSlotLook)> A cell was clicked.
 ---@field RightClicked WaxSignal<fun(value: any, index: integer, look: WaxSlotLook)>
@@ -545,6 +563,7 @@ function Slots:Set(looks) end
 ---@param look WaxSlotLook?
 function Slots:SetLook(index, look) end
 
+---The look a cell was last given, or nil for an empty cell.
 ---@param index integer
 ---@return WaxSlotLook?
 function Slots:GetLook(index) end
@@ -552,6 +571,12 @@ function Slots:GetLook(index) end
 ---How many cells it has.
 ---@return integer
 function Slots:Capacity() end
+
+---Changes how many cells stand in a row and how large a cell is. The cells that exist are kept and put in their new rows,
+---and missing ones are made over the next frames. What a cell shows stays; set the looks again if fewer fit.
+---@param columns integer
+---@param size? number The side of one cell. As it was when left out.
+function Slots:SetLayout(columns, size) end
 
 ---True once every cell exists. Cells are made a few a frame.
 ---@return boolean
@@ -561,6 +586,11 @@ function Slots:Ready() end
 ---@param options? WaxSlotsOptions
 ---@return WaxSlots
 function Container:Slots(options) end
+
+---Adds a box that shows a creature or any other skeletal mesh of the game in 3D. Give it what game.Creatures:GetModel gives, or a mesh by its path.
+---@param options? WaxModelOptions
+---@return WaxModel
+function Container:Model(options) end
 
 ---Adds a progress bar. value is 0..1.
 ---@param caption string

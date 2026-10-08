@@ -41,7 +41,7 @@ function Instance:IsA(class_name) end
 ---@return string[]
 function Instance:GetClassChain() end
 
----Every property and function name this object has, sorted.
+---Every property and function name this object has, with the names Wax gives its class, sorted.
 ---@return string[]
 function Instance:GetMembers() end
 
@@ -96,6 +96,18 @@ function Instance:SetAttribute(name, value) end
 ---@overload fun(self: WaxInstance): WaxSignal<fun(name: string, value: any, previous: any)>
 function Instance:GetAttributeChangedSignal(name) end
 
+---A signal for one value of the object: a property of the game's that holds a number, true or false, text or an object, or a field Wax gives the class.
+---It fires with (value, previous) when the value is found changed. The value is read ten times a second, and only while a handler is connected.
+---An object arrives as an Instance, or nil when the property holds none. A table a field returns is compared by what it holds.
+---`seconds` sets another time between reads, up to 3600. It is rounded to the nearest 0.05, and anything under 0.05 counts as 0.05. When one value is asked for at two paces, the faster is used.
+---It works on an actor in the world and on a component that a property of its actor holds. Anything else raises an error that says why.
+---When the object is gone, reading stops and every handler is disconnected. A task that waits on the signal is then not woken.
+---A wrong name raises an error that suggests the right one.
+---@param name string
+---@param seconds? number
+---@return WaxSignal<fun(value: any, previous: any)>
+function Instance:GetPropertyChangedSignal(name, seconds) end
+
 ---Marks the Instance with a tag. game:GetTagged(tag) finds it again.
 ---@param tag string
 function Instance:AddTag(tag) end
@@ -113,10 +125,13 @@ function Instance:HasTag(tag) end
 ---@return string[]
 function Instance:GetTags() end
 
+---The players in the session and the characters they control, with signals for when they come and go.
 ---@class WaxPlayers
 ---@field LocalPlayer IcarusPlayerController The local player's controller, the same as game.LocalPlayer.
 ---@field CharacterAdded WaxSignal<fun(character: IcarusPlayerCharacter)> Fires when a player's character appears.
 ---@field CharacterRemoved WaxSignal<fun(character: IcarusPlayerCharacter)> Fires when a player's character leaves the world.
+---@field Joined WaxSignal<fun(player: IcarusPlayerState)> Fires when a player is in the session who was not there at the last look. The players are looked at once a second, and only while a handler is connected to Joined or Left. It does not fire for the players who are there when you connect, nor for those who are there on another map when the map changes.
+---@field Left WaxSignal<fun(player: IcarusPlayerState, name: string?)> Fires when a player who was in the session is gone at the next look, with the name that was last seen. The Instance can no longer be used, only compared. It is looked at with Joined, and does not fire for the players a map change takes away.
 local Players = {}
 
 ---One Instance per player in the session (their player state). Works for the host and for clients.
@@ -143,12 +158,14 @@ function Players:GetName(character) end
 ---@return boolean
 function Players:IsLocal(character) end
 
+---The options GetAll, GetNearest and GetTamed take: which creatures to give, and in what order.
 ---@class WaxCreatureQuery
 ---@field within? number Only creatures this many metres away or nearer. The result is then sorted nearest first.
 ---@field from? WaxInstance|{ X: number, Y: number, Z: number } Where to measure from. Your character when omitted.
 ---@field dead? boolean True also returns bodies that have not been cleared away yet.
 ---@field sort? "nearest" Sorts nearest first without a distance limit.
 
+---One kind of creature, as GetKinds lists it. The table is a copy: it does not change when creatures come and go.
 ---@class WaxCreatureKind
 ---@field Name string The kind's name in the game's data, such as "Wolf".
 ---@field DisplayName string The name the game shows players.
@@ -156,6 +173,7 @@ function Players:IsLocal(character) end
 ---@field Variants string[] The versions of the kind, such as "Conifer_Wolf" and "Snow_Wolf".
 ---@field Count integer How many are in the world now.
 
+---What Describe gives: the common facts about one creature as plain values, as they were when it was asked.
 ---@class WaxCreatureFacts
 ---@field Kind string
 ---@field Variant string
@@ -168,13 +186,18 @@ function Players:IsLocal(character) end
 ---@field Level integer?
 ---@field Position { X: number, Y: number, Z: number } In the engine's units: 100 is one metre.
 
+---What Removed and Died give beside the creature: what it was, as plain values that can still be read when the creature cannot.
+---Reason and Position come with Removed only. Killer, Instigator and Damage come with Died only.
 ---@class WaxCreatureEnd
 ---@field Kind string
 ---@field Variant string
 ---@field ClassName string
 ---@field Name string
----@field Reason "Destroyed"|"Unloaded"
----@field Position? { X: number, Y: number, Z: number }
+---@field Reason? "Destroyed"|"Unloaded" Only with Removed: "Destroyed" when the game took the creature out of the world, "Unloaded" when its part of the map or the whole map went.
+---@field Position? { X: number, Y: number, Z: number } Only with Removed: where it was, when the game could still say.
+---@field Killer? WaxInstance Only with Died: the actor the game named as what did the hit that left the creature no health. nil for a death with no hit that Wax heard, such as one by Kill(). A death that is seen by looking waits up to 0.4 seconds for the game's word of the hit, so Died comes that much later.
+---@field Instigator? WaxInstance Only with Died: the controller the game named as who did that hit.
+---@field Damage? integer Only with Died: the damage of that hit.
 
 ---A creature. Nearly all are an IcarusNPCCharacter. A few bosses are an IcarusPawn.
 ---@alias WaxCreature IcarusNPCCharacter|IcarusPawn
@@ -186,6 +209,10 @@ function Players:IsLocal(character) end
 ---@field Removed WaxSignal<fun(creature: WaxCreature, info: WaxCreatureEnd)> Fires when a creature leaves the world. The Instance can no longer be used, only compared.
 ---@field Died WaxSignal<fun(creature: WaxCreature, info: WaxCreatureEnd)> Fires when a creature is killed, a few seconds before it is removed.
 ---@field Cleared WaxSignal<fun()> Fires once when the map changes, in place of one Removed per creature.
+---@field GetModel fun(self: WaxCreatures, name: string, options?: WaxCreatureModelOptions): WaxCreatureModel?, string? What a Model control needs to show a creature, by its set-up row ("Bear", "Conifer_Wolf") or its kind ("Wolf"). The creature does not have to be in the world. With options.saddle a mount wears that saddle in the picture, such as GetModel("Mount_Horse", { saddle = "Saddle_Standard" }). Gives nil and the reason when Wax has no model for it, or no such saddle for that mount; a name that is no creature raises an error.
+---@field GetSaddles fun(self: WaxCreatures, name: string): WaxSaddle[], string? What Wax can put on a creature's model through GetModel's saddle option, in the order of the game's saddle table: saddles, carts, a pack harness and the like, for the set-up row of a tamed mount such as "Mount_Horse". An empty list for a creature that wears nothing, and for one Wax has no model for, with the reason as a second value. A name that is no creature raises an error.
+---@field Damaged WaxSignal<fun(creature: WaxCreature, amount: integer, info: WaxDamageInfo)> Fires when the game says a creature took damage: the creature, the damage of the hit, and what the game knows of it, as Damaged of a character hands it over. The game's own damage call is listened to from the first handler on, and nothing is looked at meanwhile. It tells of the creatures that are an IcarusNPCCharacter, which nearly all are. Seen on the host of a session.
+---@field Spawn fun(self: WaxCreatures, kind: string, place?: WaxInstance|WaxMe|{ X: number, Y: number, Z: number }, options?: WaxSpawnOptions): WaxCreature?, string? Puts a new wild creature into the world with the game's own spawn, for the host only: in someone else's game it raises an error that says so. kind is a variant such as "Conifer_Wolf" or "Deer", or a kind that has one variant. A kind with several raises an error that lists them. place is a position, an actor or game.Me. When it is omitted the creature goes six metres in front of your character, and the options may stand in its place. Wax asks the game for ground a creature can walk on near the place, within 5 metres to the sides and at any height, and puts the creature a little above it. Where the game has none it raises an error and nothing is spawned. Inside a task Spawn waits until the game has given the creature its level, two seconds at most, and then answers the creature. Outside a task it answers at once, and Level and Health are right a few frames later. It answers nil and the reason when the creature left the world before it was finished. A tamed variant is refused in this version of Wax. The game's call took 3 to 4 ms when it was timed, and 18 ms once: a kind that is not in memory is loaded by the game inside the call. What is spawned stays when the mod unloads, unless the option keep is false.
 local Creatures = {}
 
 ---Every creature, or those of one kind. Dead ones are left out unless asked for.
@@ -225,6 +252,21 @@ function Creatures:GetKind(creature) end
 ---@return WaxCreatureFacts
 function Creatures:Describe(creature) end
 
+---What the game's tables say about one variant of a kind: its team, diet, carcass and loot, the taming rule that names it, and what it is like as a tamed animal.
+---Give a variant such as "Conifer_Wolf", or a creature, for that variant. Give a kind such as "Wolf" for the variant that is named like the kind, or else the kind's first variant. Variants lists them all.
+---The first call reads the game's tables of taming rules, tamed animals and saddles. What it read is kept until one of those tables changes or the map does.
+---A wrong name raises an error that suggests the right one.
+---@param kind string|WaxCreature
+---@return WaxCreatureInfo
+function Creatures:GetInfo(kind) end
+
+---The tamed animals among the creatures in the world: mounts, pets and livestock, whoever they belong to. Dead ones are left out unless asked for.
+---@param kind? string
+---@param options? WaxCreatureQuery
+---@return WaxCreature[]
+---@overload fun(self: WaxCreatures, options: WaxCreatureQuery): WaxCreature[]
+function Creatures:GetTamed(kind, options) end
+
 ---Calls fn(creature) for each matching creature that is here now and each that appears later.
 ---If fn returns a function, that runs when the creature is gone or the watch is stopped.
 ---@param kind? string
@@ -248,6 +290,7 @@ function Creatures:Highlight(kind, options) end
 ---@class WaxHighlightLook
 local Look = {}
 
+---Changes the colour or the fill of every outline that has this look. What is left out stays as it is.
 ---@param options WaxHighlightOptions
 function Look:Set(options) end
 
@@ -260,9 +303,12 @@ local Mark = {}
 ---Takes the outline off. Safe to call twice, and after the actor is gone.
 function Mark:Remove() end
 
+---Changes the colour or the fill of this one outline: `mark:Set({ Color = "#ff8800", Fill = false })`. What is left out
+---stays as it is. An outline that was made with a shared look no longer follows that look afterwards.
 ---@param options WaxHighlightOptions
 function Mark:Set(options) end
 
+---Changes the colour of this one outline, as Set does with `{ Color = color }`.
 ---@param color string|{ R: number, G: number, B: number }
 function Mark:SetColor(color) end
 
@@ -278,6 +324,7 @@ local Highlight = {}
 ---@return WaxHighlightMark
 function Highlight:Add(target, options) end
 
+---Takes the outline off an actor or a part that Add was given. It does nothing when that one has no outline.
 ---@param target WaxInstance
 function Highlight:Remove(target) end
 
@@ -314,6 +361,12 @@ function Highlight:Configure(options) end
 ---| "Highlight"
 ---| "Data"
 ---| "MapChanged"
+---| "IsHost"
+---| "Me"
+---| "Items"
+---| "Time"
+---| "Weather"
+---| "Prospect"
 
 ---The root every mod starts from. It is read-only, and reading a member it does not have raises an error.
 ---@class WaxGame
@@ -327,13 +380,24 @@ function Highlight:Configure(options) end
 ---@field Viewport IcarusGameViewportClient The game viewport.
 ---@field MapName string? The name of the current world.
 ---@field InProspect boolean True while you are in a prospect.
+---@field IsHost boolean True when this game runs the session's rules: you play alone or you are the host. False when you are a client in someone else's game, and while there is no world.
 ---@field Players WaxPlayers
 ---@field Creatures WaxCreatures
 ---@field Highlight WaxHighlight
 ---@field Data WaxData The game's data tables as plain Lua values.
 ---@field Crafting WaxCrafting The bench or crafting screen that is open.
 ---@field Research WaxResearch The tech tree: what a recipe still needs researched, and researching it.
+---@field Workshop WaxWorkshop The store on the station: its categories, nodes and prices, and where the player stands with them.
 ---@field MapChanged WaxSignal<fun(name: string)> Fires with the new map's name when the world changes.
+---@field Frame WaxFrameSignal Fires once every frame with the seconds since the frame before. For work that has to run every frame.
+---@field Me WaxMe The local player's character, whichever one that is: its fields and functions, and signals for its health, food, level and the like. It is there with no character too, and says so.
+---@field Items WaxItems The kinds of item the game has, and the facts of each: its shown name, weight, stack size, durability and picture.
+---@field Recipes WaxRecipes The game's crafting recipes: finding them, and changing what they take, what they give, how long they take and where they are made.
+---@field Assets WaxAssets The game's assets by path, pictures from a mod's own files, materials made from the game's, and shapes made of numbers, each kept in memory for the mod that asked.
+---@field Blueprints WaxBlueprints Things described in Lua and spawned by the host: an actor of a class the game has, with parts, assets and functions of your own. The game does not save them.
+---@field Time WaxTime The time of day in the prospect: the hour, the clock as text, the part of the day, and a signal for a new hour.
+---@field Weather WaxWeather The weather on your character, and for the host every weather event that is running on the map.
+---@field Prospect WaxProspect The prospect you are in: which one it is, its mission, and how long it has run.
 game = {}
 
 ---The Instance for a UE4SS object, or nil for a null or invalid one. The same object always gives the same Instance.
@@ -387,12 +451,20 @@ function Crafting:GetRecipes() end
 ---@return "bench"|"crafting"|"menu"? kind
 function Crafting:GetScreen() end
 
----What the mouse is over in the game's own screens: "item" and its row name in D_ItemsStatic for a slot of the
----inventory or of a bench, "recipe" and its row name in D_ProcessorRecipes for a recipe tile. Nothing otherwise.
----It walks the open screen's slots, so ask when a key is pressed, not every frame.
----@return "item"|"recipe"? kind
+---What the mouse is over in the game's own screens, whichever of them is open: "item" and its row name in
+---D_ItemsStatic for a slot that holds an item, "recipe" and its row name in D_ProcessorRecipes for a recipe tile,
+---"talent" and its row name in D_Talents for a node of the tech tree or of the talents. Nothing over anything else,
+---over an empty slot, or while the game does not show the mouse. It asks its way down the widgets under the mouse,
+---which took about a millisecond when it was measured, so ask when a key is pressed and not every frame. A list the
+---game builds as a list view is not looked into.
+---@return "item"|"recipe"|"talent"? kind
 ---@return string? row
 function Crafting:GetHovered() end
+
+---True while one of the game's own text boxes has the keyboard, such as the search box of the crafting screen or of
+---the tech tree. It asks its way down the widgets the keyboard is in, so ask when a key is pressed and not every frame.
+---@return boolean
+function Crafting:IsTyping() end
 
 ---Goes from another tab of the game's menu to its crafting tab, the way the game's own key for crafting does. True
 ---when the crafting tab was asked for or is showing already, false on any other screen.
@@ -409,6 +481,14 @@ function Crafting:Select(row) end
 ---@param on boolean
 ---@return boolean
 function Crafting:SetListHidden(on) end
+
+---Asks the crafting tab to show what the recipe table holds now. However often it is asked in a frame, one refresh is made
+---when the frame ends, and only when the crafting tab is the screen that shows. On another tab of the menu the game builds the
+---list itself when the crafting tab is opened, and a bench that is open is left as it is in this version. Without options the
+---tab's list is built again and the recipe that was chosen is chosen again, which took 33 to 41 ms for 25 recipes when it was measured.
+---game.Recipes asks for this itself whenever a recipe was written, so a mod that changes recipes through it has nothing to do.
+---@param options? WaxCraftingRefreshOptions
+function Crafting:Refresh(options) end
 
 ---One node of the tech tree that still has to be researched.
 ---@class WaxResearchStep

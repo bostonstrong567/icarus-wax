@@ -18,6 +18,13 @@ local bank = nil            -- hidden images that hold every loaded texture, so 
 local libraries = {}
 local layers = {}
 local HIT_TEST_INVISIBLE, SELF_HIT_TEST_INVISIBLE = 3, 4
+local LOOK_EVERY = 30       -- frames between full looks at the screen while nothing says it changed
+-- The screen as it was last seen with a real size, in the units canvas slots use, and the pixels to one unit.
+local screen = { width = 1920, height = 1080, scale = 1, known = false }
+local settings, noted_x, noted_y = nil, nil, nil
+local looks, look_at = 0, 0
+local LIST_EVERY = 30       -- checks between two reads of where the game instance keeps its list of objects
+local kept_list, kept_for = nil, 0
 
 local function class_of(kind)
     local class = classes[kind]
@@ -106,15 +113,28 @@ end
 function root.canvas() return canvas end
 -- "hud" (overlays, where only the move handles take clicks), "windows" (the menu) or "toasts", drawn in that order.
 function root.layer(name) return layers[name] end
+
 function root.widget() return user_widget end
 -- Whether the root still exists, found without touching it: it exists while the game instance lists it. exists() repeats the last answer.
+local function listed(list)
+    if list:GetArrayNum() < root_place then return false end
+    local entry = list[root_place]
+    return entry:IsValid() and entry:GetAddress() == root_address
+end
+
 function root.check()
     alive = false
     if not user_widget then return false end
-    local list = game_instance().ReferencedObjects
-    if list:GetArrayNum() < root_place then return false end
-    local entry = list[root_place]
-    alive = entry:IsValid() and entry:GetAddress() == root_address
+    -- The game instance is there for as long as the game runs, so its list is reached anew only now and then: three reads fewer a frame.
+    local fresh = not kept_list or kept_for <= 0
+    if fresh then kept_list, kept_for = game_instance().ReferencedObjects, LIST_EVERY end
+    kept_for = kept_for - 1
+    alive = listed(kept_list)
+    if not alive and not fresh then
+        -- a list reached earlier says the root is gone: the game is asked afresh before that is believed
+        kept_list, kept_for = game_instance().ReferencedObjects, LIST_EVERY
+        alive = listed(kept_list)
+    end
     return alive
 end
 function root.exists() return alive end
@@ -123,20 +143,47 @@ function root.lost() return user_widget ~= nil and not alive end
 function root.abandon()
     user_widget, widget_tree, canvas, bank, alive = nil, nil, nil, nil, false
     textures, layers = {}, {}
+    settings, look_at = nil, 0
+    kept_list, kept_for = nil, 0
 end
 
--- Mouse position and viewport size in the same units canvas slots use.
+-- Mouse position in the same units canvas slots use.
 function root.mouse()
     local position = library("WidgetLayoutLibrary"):GetMousePositionOnViewport(user_widget)
     return position.X, position.Y
 end
 
-function root.viewport_size()
+-- The screen's width and height in canvas units and the pixels to one unit, as root.watch() last saw them. No engine call.
+function root.viewport_size() return screen.width, screen.height, screen.scale end
+-- False while the game has shown no screen yet (it is starting). The size is then 1920 by 1080 and the scale 1.
+function root.screen_known() return screen.known end
+
+-- A full look at the screen. A screen with no real size (the game is starting, its window is a sliver) changes nothing.
+local function look()
+    look_at = looks + LOOK_EVERY
+    if not engine_object then engine_object = FindFirstOf("Engine") end
+    settings = engine_object.GameUserSettings
+    if settings:IsValid() then noted_x, noted_y = settings.ResolutionSizeX, settings.ResolutionSizeY else settings = nil end
     local layout = library("WidgetLayoutLibrary")
     local size = layout:GetViewportSize(user_widget)
     local scale = layout:GetViewportScale(user_widget)
-    if scale <= 0 then scale = 1 end
-    return size.X / scale, size.Y / scale, scale
+    if type(scale) ~= "number" or scale <= 0 then return false end
+    local width, height = size.X / scale, size.Y / scale
+    if width < 200 or height < 200 then return false end
+    if screen.known and width == screen.width and height == screen.height and scale == screen.scale then return false end
+    screen.width, screen.height, screen.scale, screen.known = width, height, scale, true
+    return true
+end
+
+-- Once a frame: true when the screen changed. A full look costs 30 us, so most frames read one number the game keeps of its window's size.
+function root.watch(closely)
+    if not alive then return false end
+    looks = looks + 1
+    local due = closely or looks >= look_at or (not screen.known and looks % 5 == 0)
+    if not due and settings then
+        if looks % 2 == 0 then due = settings.ResolutionSizeX ~= noted_x else due = settings.ResolutionSizeY ~= noted_y end
+    end
+    return due and look() or false
 end
 
 function root.start()
@@ -182,6 +229,8 @@ function root.stop()
     end
     user_widget, widget_tree, canvas, bank, alive = nil, nil, nil, nil, false
     textures, layers = {}, {}
+    settings, look_at = nil, 0
+    kept_list, kept_for = nil, 0
 end
 
 return root

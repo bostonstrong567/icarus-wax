@@ -4,12 +4,28 @@ local Wax = ...
 local reflect = Wax.import("engine.reflect")
 local suggest = Wax.import("core.suggest")
 local sched = Wax.import("core.sched")
+local log = Wax.import("core.log").channel("wax.instance")
 
 local M = {}
 
+-- engine.easy and engine.convert add to Instances. A fault in either must not take Instances down with it.
+local function optional(name, stand_in)
+    local ok, module = pcall(Wax.import, name)
+    if ok then return module end
+    log:warn("%s did not load, so Instances go without it: %s", name, (tostring(module):match("^[^\r\n]*")))
+    return stand_in
+end
+local easy = optional("engine.easy", { merged = {}, merge = function(_) return false end, bind = function(_) end,
+                                       every = function(info) return info.list end })
+local convert = optional("engine.convert", { shape = function(_) end, struct_path = function(_, _, _) end, flush = function() end })
+local easy_merged = easy.merged
+
 -- Private fields are stored under table keys, which mod code cannot name.
-local OBJ, INFO, NAME_INDEX, CLASS_ADDRESS, CHECKED, ADDRESS, WORLD, GONE = {}, {}, {}, {}, {}, {}, {}, {}
+local OBJ, INFO, NAME_INDEX, CLASS_ADDRESS, CHECKED, ADDRESS, WORLD, GONE, HANDLE, ASKED = {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
 local generation = 0        -- goes up on every map change
+local handles = nil         -- what M.use_handles plugged in: it can say an object is gone without asking the object
+local stamp = nil           -- its mark of the running frame, when it gives one
+local retire_one
 
 local Instance = {}                                     -- the methods every Instance has
 local meta = {}
@@ -35,6 +51,41 @@ local function describe_dead(self)
     return ("this %s no longer exists (it was destroyed, or the map changed)"):format(rawget(self, INFO).name)
 end
 
+-- What a kept answer is marked with. A stamp holds only while the frame loop runs, and nil means nothing is kept.
+local function mark()
+    if stamp then return stamp() end
+    return stats.frame
+end
+
+-- Answers kept under one kind of mark mean nothing under the other.
+local function forget_answers()
+    for _, self in pairs(cache) do
+        rawset(self, CHECKED, nil)
+        rawset(self, ASKED, nil)
+    end
+end
+
+-- A handle module that raises is not asked again.
+local function unplug(problem)
+    handles, stamp = nil, nil
+    forget_answers()
+    log:error("the handle module raised and is no longer asked: %s", (tostring(problem):match("^[^\r\n]*")))
+end
+
+-- False only when the handle taken for this Instance says its object is gone. The object itself is not asked.
+local function handle_alive(self, now)
+    local handle = rawget(self, HANDLE)
+    if handle == nil or (now ~= nil and rawget(self, ASKED) == now) then return true end
+    local ok, alive = pcall(handles.alive, handle)
+    if not ok then
+        unplug(alive)
+        return true
+    end
+    if alive == false then return false end
+    rawset(self, ASKED, now)
+    return true
+end
+
 -- Returns the engine object, raising if it is gone
 local function live(self, level)
     if rawget(self, GONE) then error(describe_dead(self), (level or 2) + 1) end
@@ -42,13 +93,18 @@ local function live(self, level)
     if rawget(self, WORLD) ~= generation then
         error("this object is from before the last map change. Get it again from `game`", (level or 2) + 1)
     end
-    if rawget(self, CHECKED) == stats.frame then return object end
+    local now = mark()
+    if now ~= nil and rawget(self, CHECKED) == now then return object end
+    if handles and not handle_alive(self, now) then
+        retire_one(self)
+        error(describe_dead(self), (level or 2) + 1)
+    end
     if not object:IsValid() or object:HasAnyInternalFlags(PENDING_KILL)
         or object:GetFName():GetComparisonIndex() ~= rawget(self, NAME_INDEX)
         or object:GetClass():GetAddress() ~= rawget(self, CLASS_ADDRESS) then
         error(describe_dead(self), (level or 2) + 1)
     end
-    rawset(self, CHECKED, stats.frame)
+    rawset(self, CHECKED, now)
     return object
 end
 
@@ -63,12 +119,17 @@ local function wrap(object)
     local class_address = class:GetAddress()
     local existing = cache[address]
     if existing and rawget(existing, NAME_INDEX) == name_index and rawget(existing, CLASS_ADDRESS) == class_address then
-        return existing
+        if not handles or handle_alive(existing, mark()) then return existing end
+        retire_one(existing)        -- another object of that name and class now lives at the address
     end
     local self = setmetatable({
         [OBJ] = object, [INFO] = reflect.class_info(class), [NAME_INDEX] = name_index,
-        [CLASS_ADDRESS] = class_address, [CHECKED] = stats.frame, [ADDRESS] = address, [WORLD] = generation,
+        [CLASS_ADDRESS] = class_address, [CHECKED] = mark(), [ADDRESS] = address, [WORLD] = generation,
     }, meta)
+    if handles then
+        local ok, handle = pcall(handles.take, object)
+        if ok then rawset(self, HANDLE, handle) else unplug(handle) end
+    end
     cache[address] = self
     if self[INFO].ancestors.ActorComponent then
         local owner = object:GetOuter()
@@ -93,7 +154,7 @@ M.is_instance = is_instance
 -- The engine address an Instance was made for. Asks the engine nothing, so it is safe for one that is gone.
 function M.address(self) return rawget(self, ADDRESS) end
 
-local function retire_one(self)
+function retire_one(self)
     rawset(self, GONE, true)
     local address = rawget(self, ADDRESS)
     if cache[address] == self then cache[address] = nil end
@@ -180,8 +241,19 @@ local function plain_numbers(value, depth)
     return true
 end
 
+-- The path of the struct a property or a parameter holds. Looked for once and kept on its record.
+local function struct_of(record, name, holder, of_object)
+    local path = record.struct
+    if path == nil then
+        path = convert.struct_path(of_object and holder:GetClass() or holder, name, of_object) or false
+        record.struct = path
+    end
+    return path or nil
+end
+
 -- Converts `value` for a slot of the given property type. `what` describes the slot for error messages.
-local function to_engine(value, property_type, what)
+-- `record`, `name` and `holder` say which property or parameter the slot is, so a struct can be checked field by field.
+local function to_engine(value, property_type, what, record, name, holder, of_object)
     local t = type(value)
     if is_instance(value) then
         if property_type ~= "ObjectProperty" and property_type ~= "ClassProperty" then
@@ -227,8 +299,16 @@ local function to_engine(value, property_type, what)
         error(("%s expects an Instance, got %s"):format(what, t), 0)
     elseif property_type == "StructProperty" then
         if t == "userdata" then return value end
-        if t == "table" and plain_numbers(value, 1) then return value end
-        error(("%s expects a struct: a table of numbers such as { X = 0, Y = 0, Z = 0 }, or an engine struct"):format(what), 0)
+        if t == "table" then
+            local plain = plain_numbers(value, 1)
+            if plain and not convert.CHECK_PLAIN then return value end
+            local shape = record and convert.shape(struct_of(record, name, holder, of_object))
+            if shape then return convert.struct(value, shape, what) end
+            if plain then return value end
+            error(("%s: the table holds more than numbers, and the game did not say what fields this struct has. "
+                .. "Give a table of numbers, or an engine struct"):format(what), 0)
+        end
+        error(("%s expects a struct: a table of its fields such as { X = 0, Y = 0, Z = 0 }, or an engine struct"):format(what), 0)
     elseif property_type == "ArrayProperty" then
         if t == "userdata" then return value end
         if t == "table" then
@@ -251,31 +331,58 @@ local function to_engine(value, property_type, what)
     return value
 end
 
--- members: read, write, call
-local function unknown_member(self, name, verb)
-    local info = rawget(self, INFO)
-    return ("%s is not %s of %s.%s"):format(tostring(name), verb, info.name, suggest.phrase(tostring(name), info.list))
+-- What engine.easy gives the objects of a class, or false. A fault in it is a line in the log, not an error on every read.
+local function work_out(info)
+    local ok, added = pcall(easy.merge, info)
+    if ok then return added end
+    easy_merged[info] = false
+    log:error("engine.easy could not say what %s is given: %s", info.name, (tostring(added):match("^[^\r\n]*")))
+    return false
 end
 
+local function added_to(info)
+    local added = easy_merged[info]
+    if added == nil then added = work_out(info) end
+    return added
+end
+
+-- members: read, write, call
+-- `every` is for a miss on the object itself, where Wax's own names and the added ones may be meant as well.
+local function unknown_member(self, name, verb, every)
+    local info = rawget(self, INFO)
+    local known, names = false, info.list
+    if every then known, names = pcall(easy.every, info) end
+    local text = ("%s is not %s of %s.%s"):format(tostring(name), verb, info.name,
+        suggest.phrase(tostring(name), known and names or info.list))
+    local added = not every and added_to(info)
+    if added and (added.fields[name] or added.setters[name]) then
+        text = ("%s %s is a member Wax gives this class. Use it as instance.%s"):format(text, name, name)
+    elseif added and added.methods[name] then
+        text = ("%s %s is a member Wax gives this class. Call it as instance:%s(...)"):format(text, name, name)
+    end
+    return text
+end
+
+-- read_property and call_function are reached by tail calls, so the mod's line is two levels up, not three.
 local function read_property(self, name)
-    return to_lua(live(self, 3)[name])
+    return to_lua(live(self, 2)[name])
 end
 
 local function write_property(self, name, member, value)
     local object = live(self, 3)
     local info = rawget(self, INFO)
-    local ok, converted = pcall(to_engine, value, member.type, info.name .. "." .. name)
+    local ok, converted = pcall(to_engine, value, member.type, info.name .. "." .. name, member, name, object, true)
     if not ok then error(converted, 3) end
     object[name] = converted
 end
 
 local function call_function(self, name, member, ...)
-    local object = live(self, 3)
+    local object = live(self, 2)
     local info = rawget(self, INFO)
     local size = reflect.oversized(member)
     if size then
         error(("%s:%s cannot be called from Lua: its parameters take %d bytes and UE4SS's call buffer holds 512, "
-            .. "so the call would crash the game"):format(info.name, name, size), 3)
+            .. "so the call would crash the game"):format(info.name, name, size), 2)
     end
     local params = reflect.parameters(member)
     local count = select("#", ...)
@@ -284,8 +391,9 @@ local function call_function(self, name, member, ...)
         local param = params[i]
         -- nil stays nil (optional object arguments). Tables for an out-parameter pass through unchanged.
         if param and args[i] ~= nil then
-            local ok, converted = pcall(to_engine, args[i], param.type, ("%s:%s argument %d (%s)"):format(info.name, name, i, param.name))
-            if not ok then error(converted, 3) end
+            local ok, converted = pcall(to_engine, args[i], param.type,
+                ("%s:%s argument %d (%s)"):format(info.name, name, i, param.name), param, param.name, member.fn, false)
+            if not ok then error(converted, 2) end
             args[i] = converted
         end
     end
@@ -323,10 +431,17 @@ function Instance:GetClassChain()
     return table.move(chain, 1, #chain, 1, {})
 end
 
--- Every property and function name this object has.
+-- Every property and function name this object has, with the names Wax gives its class.
 function Instance:GetMembers()
-    local list = rawget(self, INFO).list
+    local info = rawget(self, INFO)
+    local list = info.list
     local out = table.move(list, 1, #list, 1, {})
+    local added = added_to(info)
+    if added then
+        for _, name in ipairs(added.names) do
+            if not info.members[name] then out[#out + 1] = name end
+        end
+    end
     table.sort(out)
     return out
 end
@@ -532,21 +647,67 @@ function M.get_tagged(tag)
     return out
 end
 
+-- Each is reached by a tail call from __index, so the mod's line is two levels up.
 local computed = {
-    Name = function(self) return live(self, 3):GetFName():ToString() end,
+    Name = function(self) return live(self, 2):GetFName():ToString() end,
     ClassName = function(self) return rawget(self, INFO).name end,
-    FullName = function(self) return live(self, 3):GetFullName() end,
-    Parent = function(self) return wrap(parent_of(live(self, 3))) end,
-    Raw = function(self) return live(self, 3) end,
+    FullName = function(self) return live(self, 2):GetFullName() end,
+    Parent = function(self) return wrap(parent_of(live(self, 2))) end,
+    Raw = function(self) return (live(self, 2)) end,
 }
 
+-- What engine.watch may know of an Instance. `retired` and `handled` ask the engine nothing.
+local watch_tools = {
+    wrap = wrap, live = live, alive = is_live, address = M.address, added = added_to, unknown = unknown_member,
+    info = function(self) return rawget(self, INFO) end,
+    own = function(name) return Instance[name] ~= nil or computed[name] ~= nil end,
+    retired = function(self) return rawget(self, GONE) == true or rawget(self, WORLD) ~= generation end,
+    handled = function(self) return handles ~= nil and rawget(self, HANDLE) ~= nil end,
+}
+
+-- A signal fired with (value, previous) when a property, or a field Wax gives the class, changes. It is read only while connected.
+function Instance:GetPropertyChangedSignal(name, seconds)
+    if not is_instance(self) then
+        error("call GetPropertyChangedSignal with a colon: instance:GetPropertyChangedSignal(name)", 2)
+    end
+    live(self)
+    local loaded, watch = pcall(Wax.import, "engine.watch")
+    if not loaded then
+        error("values cannot be watched, because engine.watch did not load: " .. tostring(watch):gsub("%s*[\r\n]+%s*", " "):sub(1, 240), 2)
+    end
+    local ok, signal = pcall(watch.property, watch_tools, self, name, seconds)
+    if not ok then error(signal, 2) end
+    return signal
+end
+
+local own_names = {}
+for name in pairs(Instance) do own_names[#own_names + 1] = name end
+for name in pairs(computed) do own_names[#own_names + 1] = name end
+local bound, unbound = pcall(easy.bind, { is_instance = is_instance, live = live, own = own_names })
+if not bound then log:error("engine.easy could not be set up: %s", (tostring(unbound):match("^[^\r\n]*"))) end
+convert.is_instance = is_instance
+convert.unwrap = function(value)
+    if not is_live(value) then error(describe_dead(value), 0) end
+    return rawget(value, OBJ)
+end
+
+-- Wax's own names first, then what engine.easy gives the class, then the game's own members.
 meta.__index = function(self, key)
     local method = Instance[key]
     if method ~= nil then return method end
     local getter = computed[key]
     if getter then return getter(self) end
-    local member = rawget(self, INFO).members[key]
-    if not member then error(unknown_member(self, key, "a member"), 2) end
+    local info = rawget(self, INFO)
+    local added = easy_merged[info]
+    if added == nil then added = work_out(info) end
+    if added then
+        local get = added.fields[key]
+        if get then return get(self) end
+        local given = added.methods[key]
+        if given then return given end
+    end
+    local member = info.members[key]
+    if not member then error(unknown_member(self, key, "a member", true), 2) end
     if member.kind == "property" then return read_property(self, key) end
     -- instance:Function(...): return the function that makes the checked call
     local caller = member.caller
@@ -566,16 +727,26 @@ meta.__newindex = function(self, key, value)
     if Instance[key] ~= nil or computed[key] then
         error(("%s is read-only (to set a property the class itself calls '%s', use :Set(\"%s\", value))"):format(key, key, key), 2)
     end
-    local member = rawget(self, INFO).members[key]
-    if not member or member.kind ~= "property" then error(unknown_member(self, key, "a property"), 2) end
+    local info = rawget(self, INFO)
+    local added = easy_merged[info]
+    if added == nil then added = work_out(info) end
+    if added then
+        local set = added.setters[key]
+        if set then return set(self, value) end
+        if added.fields[key] or added.methods[key] then
+            error(("%s is read-only (to set a property the class itself calls '%s', use :Set(\"%s\", value))"):format(key, key, key), 2)
+        end
+    end
+    local member = info.members[key]
+    if not member or member.kind ~= "property" then error(unknown_member(self, key, "a property", true), 2) end
     write_property(self, key, member, value)
 end
 
 meta.__tostring = function(self)
     local info = rawget(self, INFO)
-    if rawget(self, GONE) then return info.name .. " (destroyed)" end
+    if rawget(self, GONE) or not is_live(self) then return info.name .. " (destroyed)" end
     local ok, name = pcall(function() return rawget(self, OBJ):GetFName():ToString() end)
-    if is_live(self) and ok then return info.name .. " " .. name end
+    if ok then return info.name .. " " .. name end
     return info.name .. " (destroyed)"
 end
 
@@ -601,6 +772,18 @@ function M.flush()
     tagged = {}
     parts = {}
     reflect.flush()
+    convert.flush()
+end
+
+-- Plugs in what can say an object is gone without asking the object: take(object) gives a handle (or nil), alive(handle) true or false.
+-- With a stamp() as well, an answer is kept only while that gives the same number, and not at all while it gives nil.
+function M.use_handles(module)
+    if module ~= nil and (type(module) ~= "table" or type(module.take) ~= "function" or type(module.alive) ~= "function") then
+        error("instance.use_handles expects a table with take(object) and alive(handle), or nil to take it out again", 2)
+    end
+    local gives = module ~= nil and type(module.stamp) == "function" and module.stamp or nil
+    if gives ~= stamp then forget_answers() end
+    handles, stamp = module, gives
 end
 
 function M.stats()

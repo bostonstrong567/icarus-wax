@@ -7,6 +7,7 @@ local kit = Wax.import("gui.kit")
 local events = Wax.import("gui.events")
 local tween = Wax.import("gui.tween")
 local controls = Wax.import("gui.controls")
+local grab = Wax.import("gui.drag")
 local scope = Wax.import("core.scope")
 local sched = Wax.import("core.sched")
 
@@ -16,6 +17,17 @@ local V, H, VA = style.Visibility, style.HAlign, style.VAlign
 local MIN_WIDTH, MIN_HEIGHT = 240, 140
 local SPLIT_WIDTH, MIN_SIDE, MIN_PAGE = 7, 96, 220
 local MAX_SIDE_NEED = 220
+local EDGE, CORNER, GRIP = 4, 8, 21     -- how far in from a window's edge its resize strips, its corner squares and its grip reach
+-- What a window is resized by, besides the grip in its bottom right corner: a strip along each edge, then a square at each other corner.
+local HANDLES = {
+    { edges = "n", cursor = style.Cursor.ResizeUpDown, height = EDGE, h = H.Fill, v = VA.Top },
+    { edges = "s", cursor = style.Cursor.ResizeUpDown, height = EDGE, h = H.Fill, v = VA.Bottom },
+    { edges = "w", cursor = style.Cursor.ResizeLeftRight, width = EDGE, h = H.Left, v = VA.Fill },
+    { edges = "e", cursor = style.Cursor.ResizeLeftRight, width = EDGE, h = H.Right, v = VA.Fill },
+    { edges = "nw", cursor = style.Cursor.ResizeSouthEast, width = CORNER, height = CORNER, h = H.Left, v = VA.Top },
+    { edges = "ne", cursor = style.Cursor.ResizeSouthWest, width = CORNER, height = CORNER, h = H.Right, v = VA.Top },
+    { edges = "sw", cursor = style.Cursor.ResizeSouthWest, width = CORNER, height = CORNER, h = H.Left, v = VA.Bottom },
+}
 local windows = {}
 local top_order = 0
 M.windows = windows
@@ -26,18 +38,22 @@ Window.__index = Window
 -- What a destroyed window turns into: it still answers IsVisible and Destroy, and everything else raises an error.
 local Gone = {}
 Gone.__index = function(_, key)
-    if key == "IsVisible" or key == "IsMinimized" then return function() return false end end
+    if key == "IsVisible" or key == "IsMinimized" or key == "IsShowing" then return function() return false end end
     if key == "Destroy" or key == "Hide" then return function() end end
     return function() error("this window no longer exists (it was destroyed or its mod reloaded)", 2) end
 end
 
 local function bar_height() return style.theme.bar_height end
 
-local function clamp_to_viewport(window)
-    local width, height = root.viewport_size()
-    if width < 200 or height < 200 then return end      -- the screen has no size yet (the game is still starting)
-    window.x = math.max(0, math.min(window.x, math.max(0, width - 80 * style.scale)))
-    window.y = math.max(0, math.min(window.y, math.max(0, height - bar_height() * style.scale)))
+-- Where a window is drawn: its own place, pulled in until its bar can be reached. The place itself is kept, for a larger screen.
+local function place_on_screen(window)
+    local x, y = window.x, window.y
+    if root.screen_known() then
+        local width, height = root.viewport_size()
+        x = math.max(0, math.min(x, math.max(0, width - 80 * style.scale)))
+        y = math.max(0, math.min(y, math.max(0, height - bar_height() * style.scale)))
+    end
+    window.at_x, window.at_y = x, y
 end
 
 -- A window is laid out at its own size and drawn at the interface scale, so its slot is the scaled size.
@@ -76,7 +92,8 @@ local function fit_tabs(window)
 end
 
 local function apply_geometry(window)
-    window.slot:SetPosition({ X = window.x, Y = window.y })
+    place_on_screen(window)
+    window.slot:SetPosition({ X = window.at_x, Y = window.at_y })
     set_size(window, window.width, window.minimized and bar_height() or window.height)
     if window.wrapped_at ~= window.width then
         window.wrapped_at = window.width
@@ -90,13 +107,12 @@ local function bring_to_front(window)
 end
 
 function Window:SetTitle(title)
-    self.title = tostring(title)
-    self.title_label:SetText(kit.text(self.title))
+    self.title = title == nil and "" or tostring(title)
+    kit.set_text(self.title_label, self.title)
 end
 
 function Window:SetPosition(x, y)
     self.x, self.y = x, y
-    clamp_to_viewport(self)
     apply_geometry(self)
 end
 
@@ -111,21 +127,42 @@ local function tint_outline(window, on)
     end, nil, nil, window)
 end
 
--- The edges by the resize grip glow under the mouse (level 0.5) and brighter while resizing (level 1).
-local function light_corner(window)
+-- The piece of the outline that glows for each resize handle: a corner's two edges near it, or an edge's whole length.
+local LIGHTS = { se = "glow12", sw = "glow12_sw", ne = "glow12_ne", nw = "glow12_nw", n = "glow12_n", s = "glow12_s", e = "glow12_e",
+    w = "glow12_w" }
+
+local function make_light(window, part, shape)
+    local clear = style.theme.clear
+    part.soft, part.glow = kit.image(clear, shape .. "_soft", 1, 1), kit.image(clear, shape, 1, 1)
+    for _, image in ipairs({ part.soft, part.glow }) do
+        image:SetVisibility(V.HitTestInvisible)
+        kit.slot(window.glow_layer:AddChild(image), { h = H.Fill, v = VA.Fill })
+    end
+end
+
+-- The outline by a resize handle glows under the mouse (level 0.5) and brighter while that handle resizes the window (level 1).
+-- All eight handles are lit by this one function. A handle's two pictures are made the first time it lights up.
+local function light(window, edges)
     local theme = style.theme
-    local resizing = window.drag ~= nil and window.drag.kind == "size"
-    local from, to = window.glow_level or 0, resizing and 1 or (window.grip_hover and 0.5 or 0)
-    -- the grip itself: accent under the mouse, a brighter accent while resizing
-    style.tint(window.grip_icon, "image", resizing and theme.accent_hover or (window.grip_hover and theme.accent)
-        or style.with_alpha(theme.dim, 0.55))
-    if window.glow_animation then window.glow_animation.cancel() end
-    window.glow_animation = tween.run(theme.animation, function(progress)
+    local part = window.lights[edges]
+    local resizing = window.drag ~= nil and window.drag.kind == "size" and window.drag.edges == edges
+    local from, to = part.level or 0, resizing and 1 or (part.hover and 0.5 or 0)
+    if edges == "se" then
+        -- the grip itself: accent under the mouse, a brighter accent while resizing
+        style.tint(window.grip_icon, "image", resizing and theme.accent_hover or (part.hover and theme.accent)
+            or style.with_alpha(theme.dim, 0.55))
+    end
+    if not part.glow then
+        if to == 0 then return end
+        style.extend(window, make_light, window, part, LIGHTS[edges])
+    end
+    if part.animation then part.animation.cancel() end
+    part.animation = tween.run(theme.animation, function(progress)
         local level = from + (to - from) * progress
-        window.glow_level = level
+        part.level = level
         local color = style.mix(theme.accent, theme.accent_hover, math.max(0, level - 0.5) * 2)
-        style.tint(window.glow, "image", style.with_alpha(color, level > 0 and 0.4 + level * 0.3 or 0))
-        style.tint(window.glow_soft, "image", style.with_alpha(color, math.max(0, level - 0.5) * 0.22))
+        style.tint(part.glow, "image", style.with_alpha(color, level > 0 and 0.4 + level * 0.3 or 0))
+        style.tint(part.soft, "image", style.with_alpha(color, math.max(0, level - 0.5) * 0.22))
     end, nil, nil, window)
 end
 
@@ -143,6 +180,38 @@ local function set_side_width(window, width)
     window.side_width, window.nav_width = width, width + SPLIT_WIDTH
     window.side_sizer:SetWidthOverride(width)
     window.wrapped_at = nil
+end
+
+-- A handle went down: its edges follow the mouse from now on (M.step), no smaller than the window may be and no further than the screen.
+local function take_edge(window, handle, edges)
+    if window.minimized then return end
+    local scale = style.scale
+    bring_to_front(window)
+    local limits = { min_width = window.min_width, min_height = window.min_height }
+    if root.screen_known() then
+        local wide, high = root.viewport_size()
+        limits.left, limits.top, limits.right, limits.bottom = 0, 0, wide / scale, high / scale
+        limits.reach_x, limits.reach_y = wide / scale - 80, high / scale - bar_height()
+    end
+    window.drag = { kind = "size", widget = handle, edges = edges, hold = grab.hold(handle), limits = limits,
+        west = edges:find("w", 1, true) ~= nil, north = edges:find("n", 1, true) ~= nil,
+        box = { x = window.at_x / scale, y = window.at_y / scale, width = window.width, height = window.height } }
+    light(window, edges)
+end
+
+-- The edges that are held go where the mouse is. Only the left and the top edge move the window's place. False while the mouse rests.
+local function follow_edge(window, held)
+    local scale = style.scale
+    local dx, dy = grab.moved(held.hold, scale)
+    if dx == held.dx and dy == held.dy then return false end
+    held.dx, held.dy = dx, dy
+    local x, y, width, height = grab.resize(held.box, held.edges, dx, dy, held.limits)
+    if held.west then window.x = x * scale end
+    if held.north then window.y = y * scale end
+    local wider = width ~= window.width
+    window.width, window.height = width, height
+    if wider and window.side_sizer then set_side_width(window, window.side_width) end
+    return true
 end
 
 function Window:SetSize(width, height)
@@ -169,6 +238,7 @@ function Window:Show()
         self.frame:SetRenderTranslation({ X = 0, Y = (1 - progress) * 10 })
     end, nil, nil, self)
     self.Opened:Fire()
+    if M.on_shown and not self.making then M.on_shown(self) end
 end
 
 function Window:Hide()
@@ -185,6 +255,8 @@ end
 
 function Window:SetVisible(shown) if shown then self:Show() else self:Hide() end end
 function Window:IsVisible() return self.shown end
+-- True while it is really on screen: shown, and its owner's windows are up (or the windows are in preview).
+function Window:IsShowing() return self.shown == true and self.on_screen == true end
 
 function Window:SetMinimized(minimized)
     minimized = minimized and true or false
@@ -194,9 +266,9 @@ function Window:SetMinimized(minimized)
     local from, to = minimized and self.height or bar_height(), minimized and bar_height() or self.height
     local hidden = minimized and V.Collapsed or V.Visible
     self.rule:SetVisibility(minimized and V.Collapsed or V.HitTestInvisible)
-    self.grip:SetVisibility(hidden)
-    self.glow:SetVisibility(minimized and V.Collapsed or V.HitTestInvisible)
-    self.glow_soft:SetVisibility(minimized and V.Collapsed or V.HitTestInvisible)
+    if self.grip then self.grip:SetVisibility(hidden) end
+    if self.resize_layer then self.resize_layer:SetVisibility(minimized and V.Collapsed or V.SelfHitTestInvisible) end
+    self.glow_layer:SetVisibility(minimized and V.Collapsed or V.HitTestInvisible)
     if self.status_holder then self.status_holder:SetVisibility(hidden) end
     self.minus_icon:SetVisibility(minimized and V.Hidden or V.HitTestInvisible)
     self.plus_icon:SetVisibility(minimized and V.HitTestInvisible or V.Hidden)
@@ -240,7 +312,7 @@ local function build_status(self, status, text)
     kit.slot(row:AddChild(icon_box), { v = VA.Center, pad = style.margin(0, 0, 7, 0) })
     local label = kit.label(text or "", { color = theme.dim, size = theme.small_size })
     kit.slot(row:AddChild(label), { v = VA.Center, fill = 1 })
-    local note = kit.label("", { color = theme.dim, size = theme.small_size })
+    local note = kit.label("", { color = theme.dim, size = theme.small_size, free = true })
     kit.slot(row:AddChild(note), { v = VA.Center, pad = style.margin(10, 0, 0, 0) })
     local padded = kit.box(theme.clear, nil, style.margin(14, 4, 28, 6))
     padded:SetContent(row)
@@ -253,6 +325,15 @@ local function build_status(self, status, text)
     self.controls[#self.controls + 1] = status
     local picture, picture_name = nil, nil
     local KIND = { info = "dim", good = "good", warn = "warn", bad = "bad" }
+    -- one line: the note at the right shows whole, and the message has the room that is left, cut with dots when it is longer
+    local window, marked = self, 0
+    local function fit()
+        local said = kit.said(note) or ""
+        local taken = said ~= "" and kit.text_width(said, theme.small_size) / kit.FIT + 10 or 0
+        kit.fit(label, window.width - 42 - marked - taken)
+    end
+    window.resizers = window.resizers or {}
+    window.resizers[#window.resizers + 1] = style.claim({ apply = fit })
     local function show_progress(amount)
         line:SetVisibility(amount and V.HitTestInvisible or V.Hidden)
         if not amount then return end
@@ -265,9 +346,11 @@ local function build_status(self, status, text)
         local kind = KIND[options.kind or "info"]
         if not kind then error("a status kind is \"info\", \"good\", \"warn\" or \"bad\"", 3) end
         local color = style.theme[kind]
-        label:SetText(kit.text(message or ""))
+        kit.set_text(label, message or "")
         style.tint(label, "text", color)
         spinner_box:SetVisibility(busy and V.HitTestInvisible or V.Collapsed)
+        marked = (busy or options.icon) and 21 or 0
+        fit()
         if options.icon and not busy then
             if not picture then
                 picture = style.extend(status, kit.icon, options.icon, 14, color)
@@ -288,13 +371,18 @@ local function build_status(self, status, text)
     function status:Busy(message) show(message, nil, true) end
     -- A thin line across the top of the bar, 0..1. nil hides it.
     function status:Progress(amount) show_progress(amount) end
-    function status:Right(message) note:SetText(kit.text(message or "")) end
+    function status:Right(message)
+        if kit.said(note) == (message or "") then return end
+        kit.set_text(note, message or "")
+        fit()
+    end
     function status:Clear()
         show("", nil, false)
         show_progress(nil)
     end
     style.follow(function() spinner_box:SetContentColorAndOpacity(style.theme.accent) end)
     show_progress(nil)
+    fit()
 end
 
 -- A line along the bottom of the window for what is going on. Returns the status bar (Set, Busy, Progress, Right, Clear).
@@ -326,7 +414,7 @@ function Window:Destroy()
         end
     end
     if self.owner and self.owner_slot then self.owner:remove(self.owner_slot) end
-    if M.on_hidden then M.on_hidden(self) end
+    if M.on_hidden then M.on_hidden(self, true) end
     setmetatable(self, Gone)
 end
 
@@ -402,7 +490,7 @@ local function build_page(self, page, name, options)
         icon = kit.icon(options.icon, 14, theme.dim)
         kit.slot(row:AddChild(icon), { v = VA.Center, pad = style.margin(0, 0, 8, 0) })
     end
-    local caption = kit.label(name, { color = theme.dim })
+    local caption = kit.label(name, { color = theme.dim, free = true })
     kit.slot(row:AddChild(caption), { v = VA.Center, fill = side and 1 or nil })
     if side then
         kit.fill_content(button, row)
@@ -535,6 +623,10 @@ local function build(window, options)
     end
     kit.fill_content(bar, bar_row)
     kit.slot(column:AddChild(kit.sized(bar, nil, bar_height())), { h = H.Fill })
+    -- the title is one line in the bar, beside the icon and the buttons: one too long for it ends in dots
+    local beside = 28 + (options.icon and 24 or 0) + 30 + (close and 28 or 0)
+    window.resizers = window.resizers or {}
+    window.resizers[#window.resizers + 1] = style.claim({ apply = function() kit.fit(window.title_label, window.width - beside) end })
 
     window.rule = kit.image(theme.line, nil, 1, 1)
     window.rule:SetVisibility(V.HitTestInvisible)
@@ -598,19 +690,35 @@ local function build(window, options)
     outline:SetVisibility(V.HitTestInvisible)
     kit.slot(frame:AddChild(outline), { h = H.Fill, v = VA.Fill })
     window.outline = outline
-    window.glow_soft = kit.image(theme.clear, "glow12_soft", 1, 1)
-    window.glow = kit.image(theme.clear, "glow12", 1, 1)
-    for _, layer in ipairs({ window.glow_soft, window.glow }) do
-        layer:SetVisibility(V.HitTestInvisible)
-        kit.slot(frame:AddChild(layer), { h = H.Fill, v = VA.Fill })
-    end
+    -- where the outline glows by a resize handle: each handle's pictures are put in here when it first lights up
+    window.glow_layer = root.new("Overlay")
+    window.glow_layer:SetVisibility(V.HitTestInvisible)
+    kit.slot(frame:AddChild(window.glow_layer), { h = H.Fill, v = VA.Fill })
+    window.lights = {}
 
-    -- resize grip: a see-through button. light_corner colours the icon inside it.
-    local grip = kit.button(nil, { flat = true, color = theme.clear, hover = theme.clear, press = theme.clear, padding = style.margin(0) })
-    window.grip_icon = kit.icon("wax-grip", 16, style.with_alpha(theme.dim, 0.55))
-    kit.slot(grip:SetContent(window.grip_icon), { h = H.Fill, v = VA.Fill, pad = style.margin(0) })
-    window.grip = kit.sized(grip, 16, 16)
-    kit.slot(frame:AddChild(window.grip), { h = H.Right, v = VA.Bottom, pad = style.margin(0, 0, 5, 5) })
+    local grip = nil
+    if window.resizable then
+        -- see-through buttons over the edges and the corners: each one, held, resizes the window from there
+        local layer = root.new("Overlay")
+        layer:SetVisibility(V.SelfHitTestInvisible)
+        kit.slot(frame:AddChild(layer), { h = H.Fill, v = VA.Fill })
+        window.resize_layer, window.edge_handles = layer, {}
+        for _, part in ipairs(HANDLES) do
+            local handle = kit.button(nil, { flat = true, color = theme.clear, hover = theme.clear, press = theme.clear,
+                padding = style.margin(0), cursor = part.cursor })
+            kit.slot(layer:AddChild(kit.sized(handle, part.width, part.height)), { h = part.h, v = part.v })
+            window.edge_handles[part.edges] = handle
+        end
+        -- the grip is the bottom right corner, and the one that shows. light() colours the icon inside it.
+        grip = kit.button(nil, { flat = true, color = theme.clear, hover = theme.clear, press = theme.clear,
+            padding = style.margin(0, 0, GRIP - 16, GRIP - 16), cursor = style.Cursor.ResizeSouthEast })
+        window.grip_icon = kit.icon("wax-grip", 16, style.with_alpha(theme.dim, 0.55))
+        kit.slot(grip:SetContent(window.grip_icon), { h = H.Fill, v = VA.Fill, pad = style.margin(0) })
+        window.grip = kit.sized(grip, GRIP, GRIP)
+        kit.slot(frame:AddChild(window.grip), { h = H.Right, v = VA.Bottom })
+        window.edge_handles.se = grip
+        for edges in pairs(window.edge_handles) do window.lights[edges] = { hover = false, level = 0 } end
+    end
 
     window.parking = root.new("VerticalBox")
     window.parking:SetVisibility(V.Collapsed)
@@ -627,11 +735,13 @@ local function build(window, options)
     local remembered = window.memory_key and M.recall and M.recall(window.memory_key)
     if remembered then
         window.x, window.y = remembered.x or window.x, remembered.y or window.y
-        window.width = math.max(window.min_width, remembered.width or window.width)
-        window.height = math.max(window.min_height, remembered.height or window.height)
+        -- a window the player cannot resize is the size its mod gave it
+        if window.resizable then
+            window.width = math.max(window.min_width, remembered.width or window.width)
+            window.height = math.max(window.min_height, remembered.height or window.height)
+        end
         if window.side_sizer and remembered.side then set_side_width(window, remembered.side) end
     end
-    clamp_to_viewport(window)
     apply_geometry(window)
 
     local chrome = { window = window, widget = bar, disconnects = {}, destroyed = false }
@@ -643,25 +753,27 @@ local function build(window, options)
     listen(bar, "OnPressed", function()
         local mouse_x, mouse_y = root.mouse()
         bring_to_front(window)
+        -- the player takes it from where it is drawn, and where they leave it is its place from then on
+        window.x, window.y = window.at_x or window.x, window.at_y or window.y
         window.drag = { kind = "move", widget = bar, mouse_x = mouse_x, mouse_y = mouse_y, x = window.x, y = window.y }
         tint_outline(window, true)
     end)
     listen(window.backdrop, "OnPressed", function() end)
-    listen(grip, "OnHovered", function()
-        window.grip_hover = true
-        light_corner(window)
-    end)
-    listen(grip, "OnUnhovered", function()
-        window.grip_hover = false
-        light_corner(window)
-    end)
-    listen(grip, "OnPressed", function()
-        if window.minimized then return end
-        local mouse_x, mouse_y = root.mouse()
-        bring_to_front(window)
-        window.drag = { kind = "size", widget = grip, mouse_x = mouse_x, mouse_y = mouse_y, width = window.width, height = window.height }
-        light_corner(window)
-    end)
+    if grip then
+        -- every handle the same way: lit under the mouse, brighter while it is held
+        for edges, handle in pairs(window.edge_handles) do
+            local part = window.lights[edges]
+            listen(handle, "OnHovered", function()
+                part.hover = true
+                light(window, edges)
+            end)
+            listen(handle, "OnUnhovered", function()
+                part.hover = false
+                light(window, edges)
+            end)
+            listen(handle, "OnPressed", function() take_edge(window, handle, edges) end)
+        end
+    end
     if window.splitter then
         listen(window.splitter, "OnPressed", function()
             local mouse_x = root.mouse()
@@ -677,7 +789,6 @@ local function build(window, options)
             if not (window.drag and window.drag.kind == "split") then light_splitter(window, false) end
         end)
     end
-    grip:SetCursor(style.Cursor.ResizeSouthEast)
     window.bar, window.grip_button, window.minimize_button, window.close_button = bar, grip, minimize, close
     listen(minimize, "OnClicked", function() window:SetMinimized(not window.minimized) end)
     if close then
@@ -690,8 +801,35 @@ local function build(window, options)
     if window.scroller then chrome.disconnects[#chrome.disconnects + 1] = watch_scroll(window, window.scroller, window) end
 end
 
--- options: { title, icon, width, height, x, y, closable = true, visible = true, nav = nil | "side" | "top", nav_width, remember = true }
-function M.create(options)
+-- Whose windows are on screen is the menu's business (gui.init): it answers here for one owner, "Wax" or a mod's id.
+M.visible_for = function(_) return true end
+
+-- Puts every window on or off the screen as its owner is. mode "fade" animates what changes, "logic" leaves the widgets as they are.
+function M.sync(mode)
+    for i = 1, #windows do
+        local window = windows[i]
+        local on = M.visible_for(window.owner_id) and true or false
+        window.on_screen = on
+        if mode ~= "logic" and on ~= window.outer_on then
+            window.outer_on = on
+            if window.owner_animation then window.owner_animation.cancel() end
+            if mode == "fade" then
+                if on then window.outer:SetVisibility(V.Visible) end
+                window.owner_animation = tween.run(style.theme.animation, function(progress)
+                    window.outer:SetRenderOpacity(on and progress or 1 - progress)
+                end, function()
+                    if not on then window.outer:SetVisibility(V.Collapsed) end
+                end, nil, window)
+            else
+                window.outer:SetRenderOpacity(1)
+                window.outer:SetVisibility(on and V.Visible or V.Collapsed)
+            end
+        end
+    end
+end
+
+-- options: { title, icon, width, height, x, y, closable = true, resizable = true, visible = true, nav = nil | "side" | "top", nav_width, remember = true }
+function M.create(options, owner)
     if not root.exists() then error("the GUI is not running", 2) end
     options = options or {}
     local theme = style.theme
@@ -706,15 +844,24 @@ function M.create(options)
         width = math.max(nav == "side" and 420 or MIN_WIDTH, options.width or (nav == "side" and 520 or 340)),
         height = math.max(nav == "top" and MIN_HEIGHT + 60 or MIN_HEIGHT, options.height or (nav and 380 or 420)),
         x = options.x or (60 + #windows * 30), y = options.y or (70 + #windows * 30),
-        shown = false, minimized = false, horizontal = false, count = 0,
+        shown = false, minimized = false, horizontal = false, count = 0, resizable = options.resizable ~= false,
         inset = theme.padding * 2 + 2,
         Opened = sched.Signal.new("Opened"), Closed = sched.Signal.new("Closed"), PageChanged = sched.Signal.new("PageChanged"),
     }, Window)
     window.window = window
     style.build(window, build, window, options)
+    window.owner_id = owner or "Wax"
+    local on = M.visible_for(window.owner_id) and true or false
+    window.on_screen, window.outer_on = on, on
+    if not on then window.outer:SetVisibility(V.Collapsed) end
     windows[#windows + 1] = window
     window.owner, window.owner_slot = scope.own(function() window:Destroy() end)
-    if options.visible ~= false then window:Show() end
+    if options.visible ~= false then
+        -- a window that starts shown waits for its owner's key like any other: only a later Show() brings its owner up
+        window.making = true
+        window:Show()
+        window.making = nil
+    end
     return window
 end
 
@@ -724,7 +871,7 @@ function M.step()
     step_count = step_count + 1
     for i = 1, #windows do
         local window = windows[i]
-        if step_count % 20 == 0 and window.shown and not window.minimized then
+        if step_count % 20 == 0 and window.shown and window.on_screen and not window.minimized then
             -- the page being shown, when its end is in view
             local target = window.nav and window.page or window
             local scroller = target and target.scroller
@@ -734,26 +881,25 @@ function M.step()
         end
         local drag = window.drag
         if drag then
-            if not drag.widget:IsPressed() then
+            if not grab.down(drag.widget) then
                 window.drag = nil
                 if drag.kind == "split" then light_splitter(window, window.split_hover) end
                 if drag.kind == "move" then tint_outline(window, false) end
-                if drag.kind == "size" then light_corner(window) end
+                if drag.kind == "size" then light(window, drag.edges) end
                 if window.memory_key and M.remember then
                     M.remember(window.memory_key, { x = window.x, y = window.y, width = window.width, height = window.height,
                         side = window.side_width })
                 end
+            elseif drag.kind == "size" then
+                if follow_edge(window, drag) then apply_geometry(window) end
             else
                 local mouse_x, mouse_y = root.mouse()
                 if drag.kind == "move" then
                     window.x, window.y = drag.x + mouse_x - drag.mouse_x, drag.y + mouse_y - drag.mouse_y
-                    clamp_to_viewport(window)
-                elseif drag.kind == "split" then
-                    set_side_width(window, drag.side + (mouse_x - drag.mouse_x) / style.scale)
+                    place_on_screen(window)
+                    window.x, window.y = window.at_x, window.at_y
                 else
-                    window.width = math.max(window.min_width, drag.width + (mouse_x - drag.mouse_x) / style.scale)
-                    window.height = math.max(window.min_height, drag.height + (mouse_y - drag.mouse_y) / style.scale)
-                    if window.side_sizer then set_side_width(window, window.side_width) end
+                    set_side_width(window, drag.side + (mouse_x - drag.mouse_x) / style.scale)
                 end
                 apply_geometry(window)
             end
@@ -765,8 +911,17 @@ end
 function M.rescale()
     for i = 1, #windows do
         windows[i].outer:SetUserSpecifiedScale(style.scale)
-        clamp_to_viewport(windows[i])
         apply_geometry(windows[i])
+    end
+end
+
+-- After the screen changed size: a window that is no longer where it belongs is moved, and nothing else is touched.
+function M.keep_on_screen()
+    for i = 1, #windows do
+        local window = windows[i]
+        local x, y = window.at_x, window.at_y
+        place_on_screen(window)
+        if window.at_x ~= x or window.at_y ~= y then window.slot:SetPosition({ X = window.at_x, Y = window.at_y }) end
     end
 end
 

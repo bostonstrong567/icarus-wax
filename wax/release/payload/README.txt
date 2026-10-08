@@ -84,15 +84,17 @@ Mods go in this folder, one folder per mod:
 
   ...\Binaries\Win64\ue4ss\Mods\Wax\mods
 
-A mod is a folder with an init.lua in it. One mod comes with Wax: Recipe
-Browser, which shows every item and its recipes beside your inventory. The
-docs explain how to write your own.
+A mod is a folder with an init.lua in it. One mod comes with Wax:
+Prospector's Codex, which shows every item with its recipes and every
+creature beside your inventory. Before Wax 0.3.0 it was called Recipe
+Browser, and its folder is still named RecipeBrowser. The docs explain how
+to write your own.
 
 A mod is code. Once it is switched on it can do what any program on your PC
 can do. Only add mods from people you trust.
 
 Mods added with the "Add to game" button on the Wax site keep themselves up to
-date, and so does Recipe Browser. While the game runs, Wax asks the mod
+date, and so does Prospector's Codex. While the game runs, Wax asks the mod
 catalogue at wax-icarus.duckdns.org whether a newer version is out, downloads
 it and puts it in. The version before stays in the mods folder, under a name
 that starts with ".removed-". A mod you wrote or copied in yourself is never

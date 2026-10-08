@@ -3,6 +3,7 @@
 local rows = {}
 
 rows.SHOW_TIMES = true      -- base times: the recipe's work divided by the bench's power, before talents and upgrades
+rows.SHOW_XP = true         -- base XP of a craft: the game's own sum over what the recipe takes, before bonuses
 rows.NAME_SHARE = 0.6       -- of a line: where the names end and the counts start
 rows.NAME_MOST = 300
 rows.SAFETY = 1.05
@@ -81,6 +82,28 @@ local function split_long(word, room, size, out)
     return word:sub(starts[from] or 1)
 end
 
+-- How a name and its figure can share a line, and the room each side then has for its text in a column `inner` wide.
+rows.PAIR_SPLITS = { { 3, 2 }, { 1, 1 }, { 2, 3 } }
+function rows.pair_room(inner, split, side)
+    return (inner - 8) * split[side] / (split[1] + split[2]) * 0.94
+end
+
+-- Which split shows every name with its figure whole, and the pairs no split has room for: they go under as sentences.
+function rows.pair_fit(names, values, inner)
+    local best, best_left = 1, nil
+    for index, split in ipairs(rows.PAIR_SPLITS) do
+        local left = {}
+        for at = 1, #names do
+            if measure(names[at]) > rows.pair_room(inner, split, 1) or measure(values[at]) > rows.pair_room(inner, split, 2) then
+                left[#left + 1] = at
+            end
+        end
+        if not best_left or #left < #best_left then best, best_left = index, left end
+        if #left == 0 then break end
+    end
+    return best, best_left or {}
+end
+
 -- The text as lines that each fit, broken between words.
 function rows.wrap(text, room, size)
     if fits(text, room, size) then return { text } end
@@ -138,7 +161,8 @@ end
 function rows.new(parts)
     local text, format, unlock = parts.text, parts.format, parts.unlock
     local separator = text.join("a", "b"):sub(2, -2)
-    local self = { MODES = rows.MODES, LINE = rows.LINE, measure = rows.measure, shorten = rows.shorten, wrap = rows.wrap }
+    local self = { MODES = rows.MODES, LINE = rows.LINE, measure = rows.measure, shorten = rows.shorten, wrap = rows.wrap,
+        PAIR_SPLITS = rows.PAIR_SPLITS, pair_room = rows.pair_room, pair_fit = rows.pair_fit }
 
     local function ready(m)
         return m ~= nil and m.stage >= 2 and not m.off.recipes
@@ -217,7 +241,7 @@ function rows.new(parts)
     end
 
     -- The stations of a recipe, one for each name: two sets called the same are one station. Each lists the benches
-    -- that show, with the time the recipe takes at each (empty while times are off).
+    -- that show, with the time the recipe takes at each (empty while times are off), and has the XP a craft gives there.
     local function stations_of(m, recipe)
         local list, by_name = {}, {}
         for _, id in ipairs(recipe.stations) do
@@ -229,6 +253,11 @@ function rows.new(parts)
                 station = { id = id, name = name, icon = set.icon, hand = set.hand == true, benches = {} }
                 by_name[key] = station
                 list[#list + 1] = station
+            end
+            local xp = station and rows.SHOW_XP and recipe.xp and recipe.xp[id] or nil
+            if xp then
+                station.xp = math.min(station.xp or xp, xp)
+                station.xp_most = math.max(station.xp_most or xp, xp)
             end
             if station then
                 if not station.item and set.link and m.items[set.link] then station.item = set.link end
@@ -255,6 +284,24 @@ function rows.new(parts)
         return figure or ""
     end
 
+    -- The least and the most XP one craft gives at a card's stations, or at the one called `name`. Nothing while unknown.
+    function self.xp(card, name)
+        local low, high = nil, nil
+        for _, station in ipairs(card.stations) do
+            if station.xp and (not name or station.name == name) then
+                low = math.min(low or station.xp, station.xp)
+                high = math.max(high or station.xp_most, station.xp_most)
+            end
+        end
+        return low, high
+    end
+
+    -- An amount of XP as the views print it. Nothing for none, and while XP is off.
+    function self.gives(low, high)
+        if not rows.SHOW_XP then return "" end
+        return text.xp(low, high)
+    end
+
     -- One recipe as a view shows it, whatever the view draws it with:
     --   name, item, icon, made   what heads it: the recipe's own title (a drink), else what it makes. made is "x5" or "0.5 L"
     --   inputs, outputs          { kind = "item" | "tag" | "resource", name, icon, count, amount, item, tag, resource }
@@ -262,6 +309,7 @@ function rows.new(parts)
     --   stations                 { id, name, icon, hand, item, benches = { { item, name, mw, time } } }
     --   station, bench           "Fabricator" or "3 stations"; the item a click on the station goes to
     --   time, needs, level       one figure or ""; what unlock.describe gives, or nil; the expansion's name, or nil
+    --   gives                    "52 XP" for one craft, "52 to 720 XP" when its stations differ, "" for none or unknown
     -- Under "make" a recipe that makes several things is headed by the picked one.
     function self.recipe(m, needs, number, picked, mode)
         local recipe = m.recipes[number]
@@ -324,6 +372,7 @@ function rows.new(parts)
             end
         end
         card.time = one_time(card.stations)
+        card.gives = self.gives(self.xp(card))
         local line = needs and unlock.describe(needs, m, recipe) or nil
         if line and (line.short ~= "" or line.extra ~= "") then card.needs = line end
         local level = recipe.level and m.levels[recipe.level]
@@ -340,7 +389,8 @@ function rows.new(parts)
             line.recipe = number
             out[#out + 1] = line
         end
-        add({ kind = "heading", text = card.name, value = card.made, note = text.join(card.station, card.time), pick = card.bench })
+        add({ kind = "heading", text = card.name, value = card.made, note = text.join(card.station, card.time, card.gives),
+            pick = card.bench })
         for _, input in ipairs(card.inputs) do
             add({ kind = "input", text = input.kind == "tag" and text.right.any(input.name) or input.name, value = input.amount,
                 pick = input.item, indent = 1 })

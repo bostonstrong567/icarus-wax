@@ -17,6 +17,7 @@ function Connection:Disconnect() end
 ---@field FireDirect fun(self: WaxSignal<F>, ...: any) Calls every handler directly, without a task. Handlers must not pause.
 ---@field DisconnectAll fun(self: WaxSignal<F>) Disconnects every handler.
 
+---Where a mod makes signals of its own: `local Opened = Signal.new("Opened")`.
 ---@class WaxSignalLibrary
 Signal = {}
 
@@ -25,6 +26,8 @@ Signal = {}
 ---@return WaxSignal
 function Signal.new(name) end
 
+---Runs functions as tasks: now, at the end of the frame, after a time, or again and again.
+---A task can pause with task.wait, and the game goes on while it waits.
 ---@class WaxTask
 task = {}
 
@@ -46,6 +49,15 @@ function task.defer(f, ...) end
 ---@param ... any
 ---@return thread
 function task.delay(seconds, f, ...) end
+
+---Runs f(...) again and again: the first time after `seconds`, then `seconds` after each run has ended. It never runs more than once a frame.
+---An error in f is reported and the runs go on. After five errors in a row they stop.
+---It stops when the mod unloads, and task.cancel stops it.
+---@param seconds number
+---@param f function
+---@param ... any
+---@return thread
+function task.every(seconds, f, ...) end
 
 ---Pauses the calling task for `seconds` (at least until the next frame) and returns the time it waited. It only works inside a task.
 ---@param seconds? number

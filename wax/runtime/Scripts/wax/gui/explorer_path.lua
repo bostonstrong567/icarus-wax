@@ -19,7 +19,9 @@ for word in ("and break do else elseif end false for function goto if in local n
     WORDS[word] = true
 end
 
-local function simple(name) return name:find("^[%a_][%w_]*$") ~= nil and not WORDS[name] and not OWN[name] end
+local function simple(name)
+    return name:find("^[%a_][%w_]*$") ~= nil and not WORDS[name] and not OWN[name] and not Wax.import("engine.easy").taken(name)
+end
 
 function M.quote(text) return (("%q"):format(tostring(text)):gsub("\\\n", "\\n")) end
 local quote = M.quote

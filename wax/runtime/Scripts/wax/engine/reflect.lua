@@ -9,6 +9,8 @@ local by_class = {}
 local oversized = nil       -- function path -> parameter block size, for functions UE4SS cannot call safely
 
 local function name_of(object) return object:GetFName():ToString() end
+-- names are compared without letter case and without a space at the end
+local function folded(path) return (path:lower():gsub("%s+$", "")) end
 
 local function own_members(class, members, list)
     class:ForEachProperty(function(property)
@@ -66,9 +68,13 @@ function reflect.oversized(member)
     if member.oversized ~= nil then return member.oversized or nil end
     if not oversized then
         local chunk = loadfile(Wax.root .. "/data/oversized_functions.lua")
-        oversized = chunk and chunk() or {}
+        oversized = {}
+        for listed, size in pairs(chunk and chunk() or {}) do
+            local key = folded(listed)
+            oversized[key] = math.max(oversized[key] or 0, size)
+        end
     end
-    local path = member.fn:GetFullName():gsub("^%S+%s+", "")     -- "Function /Script/X.Y:Z" -> "/Script/X.Y:Z"
+    local path = folded((member.fn:GetFullName():gsub("^%S+%s+", "")))     -- "Function /Script/X.Y:Z" -> "/script/x.y:z"
     member.oversized = oversized[path] or false
     return member.oversized or nil
 end

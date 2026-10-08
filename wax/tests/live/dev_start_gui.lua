@@ -4,8 +4,10 @@ local was_open = Wax.ui and Wax.ui.IsOpen and Wax.ui.IsOpen()
 if Wax.debug_panel then pcall(Wax.debug_panel.stop) end
 Wax.debug_panel = nil
 if Wax.ui then pcall(Wax.ui.stop) end
+local held = Wax.modules["world.assets"]
+if type(held) == "table" and held.forget_all then pcall(held.forget_all) end
 Wax.ui = nil
-for _, name in ipairs({ "root", "icons", "style", "kit", "events", "tween", "input", "picker", "tags", "pictures", "item", "split", "slots", "tip", "fit", "controls", "window",
+for _, name in ipairs({ "root", "icons", "style", "kit", "events", "tween", "input", "picker", "tags", "pictures", "item", "split", "drag", "slots", "tip", "fit", "model", "controls", "window",
     "overlay", "notify", "init", "explorer_index", "explorer_path", "explorer_members", "explorer", "debug" }) do
     Wax.modules["gui." .. name] = nil
 end

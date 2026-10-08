@@ -3,10 +3,10 @@
 .SYNOPSIS
   Builds the player download for Wax: build\Wax-<version>.zip, and the signed list of the release's files.
 .DESCRIPTION
-  The zip holds a "game" folder (the UE4SS build Wax is tested on, with Wax at ue4ss\Mods\Wax and Recipe Browser
-  at ue4ss\Mods\Wax\mods\RecipeBrowser), the installer files from wax\release\payload, README.txt and the licences.
+  The zip holds a "game" folder (the UE4SS build Wax is tested on, with Wax at ue4ss\Mods\Wax and the mod that
+  comes with it, Prospector's Codex, at ue4ss\Mods\Wax\mods\RecipeBrowser), the installer files from wax\release\payload, README.txt and the licences.
   UE4SS goes in as its own zip has it, except that its cheat and console mods are switched off in mods.txt and mods.json.
-  Recipe Browser gets a wax.origin file with its version, which is what lets Wax update it from the catalogue.
+  Prospector's Codex gets a wax.origin file with its version, which is what lets Wax update it from the catalogue.
   Everything in it is a real file: no junctions are followed or copied. The version comes from wax\VERSION.
   Every Lua file that goes in is compiled with tools\lua\lua54\lua.exe first, and the build fails if one does not.
 

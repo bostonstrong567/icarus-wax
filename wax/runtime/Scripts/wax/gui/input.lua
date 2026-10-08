@@ -27,11 +27,21 @@ local CAPTURE_KEYS = {
     "MiddleMouseButton", "ThumbMouseButton", "ThumbMouseButton2",
 }
 
+local holding, held = false, nil
+
 -- The local player controller, read from the game every time: nothing engine-side is kept between frames.
 function input.controller()
+    if holding and held ~= nil then return held or nil end
     local game = Wax.game
     local found = game and game.LocalPlayer
-    return found and found.Raw or nil
+    local player = found and found.Raw or nil
+    if holding then held = player or false end
+    return player
+end
+
+-- While on, the controller is read once and used again: only for the length of the GUI's frame step, in which the engine frees nothing.
+function input.hold(on)
+    holding, held = on == true, nil
 end
 
 local function key_struct(key)
@@ -97,9 +107,34 @@ function input.just_released(key)
     return player:WasInputKeyJustReleased(key_struct(key)) == true
 end
 
+-- True in a frame in which some key or mouse button went down (or, with released, came up): one question in place of one a key.
+function input.any(released)
+    local player = input.controller()
+    if not player then return false end
+    if released then return player:WasInputKeyJustReleased(key_struct("AnyKey")) == true end
+    return player:WasInputKeyJustPressed(key_struct("AnyKey")) == true
+end
+
+-- True while the key is held. A key written with Ctrl, Shift or Alt counts only with exactly those held.
+function input.is_down(key)
+    local player = input.controller()
+    if not player then return false end
+    local want = input.parse(key)
+    if player:IsInputKeyDown(key_struct(want.key)) ~= true then return false end
+    if not want.held then return true end
+    return down(player, "ctrl") == want.ctrl and down(player, "shift") == want.shift and down(player, "alt") == want.alt
+end
+
 -- callback(key) runs with the next key pressed, or with nil if Escape cancels.
 function input.capture(callback) capture, capture_alone = callback, nil end
 function input.capturing() return capture ~= nil or swallow > 0 end
+
+-- Stops waiting for a key. Whoever asked is told that none came.
+function input.cancel()
+    local callback = capture
+    capture, capture_alone = nil, nil
+    if callback then callback(nil) end
+end
 
 local function has_ui_stack(player)
     local class = StaticFindObject("/Script/Icarus.IcarusPlayerController")
@@ -140,8 +175,17 @@ function input.unblock()
     blocking = false
 end
 
+-- The game's own menu screen that shows now, as one text or nil. gui.init gives it (gui.fit cannot be imported from here).
+input.screen = function() return nil end
+
+local function screen_now()
+    local ok, key = pcall(input.screen)
+    return ok and key or nil
+end
+
 local function cursor_on(player)
-    local state = { address = player:GetAddress(), stacked = has_ui_stack(player), was_shown = player.bShowMouseCursor == true }
+    local state = { address = player:GetAddress(), stacked = has_ui_stack(player), was_shown = player.bShowMouseCursor == true,
+        screen = screen_now() }
     if state.stacked then
         -- The game's own stack of menus: it restores whatever was underneath when this entry is popped.
         player:PushUIInput(root.widget(), true, true)
@@ -169,7 +213,8 @@ local function cursor_off(state)
     end
     pcall(block_game, player, false)
     if state.stacked then
-        player:PopUIInput()
+        -- the game empties its whole stack when a screen of its own opens or closes: the top entry is ours only if neither happened since
+        if player.bShowMouseCursor == true and screen_now() == state.screen then player:PopUIInput() end
     elseif not state.was_shown then
         player.bShowMouseCursor = false
         root.library("WidgetBlueprintLibrary"):SetInputMode_GameOnly(player)
@@ -202,7 +247,17 @@ end
 
 function input.forget() cursor, capture, swallow, blocking = nil, nil, 0, false end
 
-function input.cursor_active() return cursor ~= nil and current_if_same(cursor) ~= nil end
+-- True while the controller the cursor was switched on for still shows it. When the game has taken it back, the state is forgotten.
+function input.cursor_active()
+    if not cursor then return false end
+    local player = current_if_same(cursor)
+    if not player then return false end
+    if player.bShowMouseCursor ~= true then
+        cursor = nil
+        return false
+    end
+    return true
+end
 
 function input.step()
     if swallow > 0 then swallow = swallow - 1 end

@@ -122,6 +122,8 @@ function tree.build(m, key, count, options)
                 node.raw, node.makes, node.crafts, node.left = false, makes, crafts, crafts * makes - node.need
                 node.mj = (recipe.mj or 0) * crafts
                 node.station, node.hand, node.set = set and set.name or nil, set ~= nil and set.hand == true, id
+                local each = id and recipe.xp and recipe.xp[id]
+                node.xp = each and each * crafts or nil
                 for _, input in ipairs(recipe.inputs or NONE) do
                     local child = new_node("item", m.items[input.item], input.item, input.count * crafts, below)
                     children[#children + 1] = child
@@ -181,13 +183,15 @@ function tree.steps(root)
         local step = found[node.key]
         if not step then
             step = { key = node.key, name = node.name, icon = node.icon, recipe = node.recipe, crafts = 0, makes = node.makes,
-                need = 0, left = 0, station = node.station, hand = node.hand, set = node.set, mj = 0 }
+                need = 0, left = 0, station = node.station, hand = node.hand, set = node.set, mj = 0, xp = 0 }
             list[#list + 1] = step
             found[node.key], deep[step], first[step] = step, node.depth, #list
         end
         -- Added up as each branch was built: what one branch leaves over is not used by another.
         step.crafts, step.need, step.left = step.crafts + node.crafts, step.need + node.need, step.left + node.left
         step.mj = step.mj + node.mj
+        -- the XP of all its crafts at its station, nothing once one of them is unknown
+        step.xp = step.xp and node.xp and (step.xp + node.xp) or nil
         if node.depth > deep[step] then deep[step] = node.depth end
         for _, child in ipairs(node.children) do visit(child) end
     end

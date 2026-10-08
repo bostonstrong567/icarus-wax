@@ -1,6 +1,9 @@
 -- Items, recipes, stations and the indexes between them, joined from the rows source.lua loaded.
 
-local model = { version = 2, PAUSE_ROWS = 150 }
+local model = { version = 4, PAUSE_ROWS = 150 }
+
+-- XP_RESOURCES: water, fuel and milk add to a craft's XP. Read from the game's code, not yet seen in a craft.
+model.XP_RESOURCES = true
 
 local ANCHOR = { hide = "FieldGuide_Hide", hidden = "Hidden", hand = "Character", seed = "SeedType_Enum" }
 local HAND_ITEM = "fieldguide_character"
@@ -55,6 +58,45 @@ local function each(value)
     if type(value) ~= "table" then return {} end
     if #value == 0 and next(value) ~= nil then return { value } end
     return value
+end
+
+-- The game works XP out in single floats and cuts to a whole number after each step.
+local function single(value)
+    return (string.unpack("<f", string.pack("<f", value)))
+end
+
+local function whole(value)
+    return value >= 0 and math.floor(value) or math.ceil(value)
+end
+
+local HUNDREDTH = single(0.01)
+
+-- A resource's part: a hundredth of its units times its crafting XP, rounded up as the game does it, at least 1.
+local function share(units, worth)
+    local amount = single(single(single(units) * HUNDREDTH) * single(worth))
+    local turned = single(-0.5 - single(amount + amount))
+    local nearest = math.floor(turned + 0.5)
+    if turned + 0.5 == nearest and nearest % 2 ~= 0 then nearest = nearest - 1 end
+    return math.max(1, -(nearest // 2))
+end
+
+local function serves(b, name, field)
+    return b.source.serves ~= nil and b.source.serves(name, field) == true
+end
+
+-- What one craft gives at each set the recipe is in: { [set id] = XP }. Nil while a part of it is not read.
+local function xp_of(b, recipe, own)
+    local m = b.model
+    if not b.xp or (#recipe.res_in > 0 and not b.xp_resources) then return nil end
+    local base = 0
+    for _, input in ipairs(recipe.inputs) do base = base + (m.items[input.item].xp or 0) * input.count end
+    for _, amount in ipairs(recipe.res_in) do base = base + share(amount.units, m.resources[amount.res].xp or 0) end
+    local out = {}
+    for _, id in ipairs(recipe.sets) do
+        local first = whole(single(single(base) * (m.sets[id].xp or 0)))
+        out[id] = whole(single(single(first) * own))
+    end
+    return out
 end
 
 -- What one row of each loop counts towards PAUSE_ROWS, from timing the loops on the real tables.
@@ -199,14 +241,15 @@ function model.begin(source, lower, tags)
     local m = {
         version = model.version, stamp = source.stamps and source.stamps() or "", stage = 0,
         items = {}, list = {}, categories = {}, category = {}, recipes = {}, recipe = {}, sets = {}, set_list = {},
-        tags = {}, resources = {}, levels = {}, subs = {},
+        tags = {}, resources = {}, levels = {}, subs = {}, templates = {},
         made_by = {}, used_in = {}, made_at = {}, tag_items = {}, res_used = {}, res_made = {}, uses = {},
         skipped = {}, missing = {}, off = {},
         counts = { items = 0, shown = 0, hidden = 0, bare = 0, seeds = 0, flags = 0, titles = 0, dropped = 0, recipes = 0,
             skipped_recipes = 0, made = 0, used = 0 },
     }
+    -- templates: the item a D_ItemTemplate row stands for, kept on the model for what else names templates
     return { model = m, source = source, lower = lower or string.lower, tags = tags, order = {}, statics = {}, variants = {},
-        kinds = {}, processing = {}, templates = {}, dropped = {}, scratch = {} }
+        kinds = {}, processing = {}, templates = m.templates, dropped = {}, scratch = {} }
 end
 
 -- One kind of a static: the seed or flag a template's number stands for. Nil when the number names no kind.
@@ -327,6 +370,7 @@ function model.items(b, pause)
     end
 
     local queries = read_categories(b)
+    local worth = serves(b, "ItemsStatic", "CraftingExperience")
     for _, name in ipairs(src.names("ItemsStatic")) do
         local row = src.row("ItemsStatic", name)
         if row then
@@ -347,6 +391,7 @@ function model.items(b, pause)
                 if tags.matches(queries[category.key], set) then item.fits[#item.fits + 1] = category.key end
             end
             b.processing[key] = ref(row.Processing)
+            if worth then item.xp = tonumber(row.CraftingExperience) or 0 end
             m.items[key] = item
             b.order[#b.order + 1] = item
             b.statics[#b.statics + 1] = item
@@ -400,6 +445,7 @@ local function read_sets(b)
             local label = words(row.RecipeSetName)
             local set = { id = key, row = name, name = label, lower = b.lower(label), icon = path(row.RecipeSetIcon),
                 benches = {}, auto = false, group = key }
+            if b.xp then set.xp = tonumber(row.ExperienceMultiplier) or 0 end
             if set.lower ~= "" then
                 groups[set.lower] = groups[set.lower] or key
                 set.group = groups[set.lower]
@@ -499,6 +545,7 @@ local function read_resources(b)
             local label = words(row.DisplayName)
             m.resources[key] = { key = key, row = name, name = label, lower = b.lower(label), units = words(row.Units),
                 icon = path(row.Recipe_Icon) }
+            if b.xp_resources then m.resources[key].xp = tonumber(row.CraftingExperience) or 0 end
             m.res_used[key], m.res_made[key] = {}, {}
         end
     end
@@ -569,6 +616,7 @@ local function read_recipe(b, name, row)
     recipe.talent = key_of(row.Requirement)
     recipe.char_flag = key_of(row.CharacterRequirement)
     recipe.session = key_of(row.SessionRequirement)
+    recipe.xp = xp_of(b, recipe, b.xp and tonumber(row.ExperienceMultiplier) or 0)
     return recipe
 end
 
@@ -718,6 +766,10 @@ function model.recipes(b, pause)
     if m.stage < 1 or m.off.list then return m end
     if broken(b, "recipes", "ProcessorRecipes", "ItemTemplate", "RecipeSets", "Processing") then return m end
 
+    b.xp = serves(b, "ItemsStatic", "CraftingExperience") and serves(b, "ProcessorRecipes", "ExperienceMultiplier")
+        and serves(b, "RecipeSets", "ExperienceMultiplier")
+    b.xp_resources = b.xp and model.XP_RESOURCES and serves(b, "IcarusResources", "CraftingExperience")
+    m.xp = b.xp or nil
     read_sets(b)
     read_tags(b, tick)
     read_resources(b)

@@ -31,6 +31,7 @@ local DECODE = {
 
 local handlers = {}     -- sink address -> wrapped handler
 local bindings = {}     -- "<widget address>:<delegate>" -> { sink, kind }
+local quiet = 0         -- above 0 while Wax itself is setting something off (see events.quietly)
 Wax.gui_event_handlers = handlers
 
 -- Real globals, so they survive a reload of the core: which sink functions this game process has hooked.
@@ -78,7 +79,7 @@ function events.connect(widget, delegate, parking, handler)
     local guarded = guard.wrap("gui " .. delegate, handler)
     handlers[address] = function(...)
         local seen = events.seen
-        if seen then pcall(seen, delegate, address) end
+        if seen and quiet == 0 then pcall(seen, delegate, address) end
         return guarded(...)
     end
     widget[delegate]:Add(sink, sink_info.name)
@@ -97,8 +98,17 @@ function events.connect(widget, delegate, parking, handler)
     end, address
 end
 
--- events.seen = fn(delegate, address): runs before every event is delivered (used to close what is open).
+-- events.seen = fn(delegate, address): runs before every event the user caused is delivered (used to close what is open).
 events.seen = nil
+
+-- Runs fn(...) for what Wax does itself (text put in a box is reported like typing): events.seen is not told of it.
+function events.quietly(fn, ...)
+    quiet = quiet + 1
+    local results = table.pack(pcall(fn, ...))
+    quiet = quiet - 1
+    if not results[1] then error(results[2], 0) end
+    return table.unpack(results, 2, results.n)
+end
 
 -- For tests: deliver an event the way the engine would after the delegate fires, without real input.
 function events.simulate(widget, delegate, value)

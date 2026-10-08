@@ -36,7 +36,7 @@ local function beside_panels()
     local room = 0
     for _, overlay in ipairs(Wax.import("gui.overlay").overlays) do
         if overlay.interactive and not overlay.destroyed and overlay.anchor == side and overlay:IsShowing() then
-            room = math.max(room, (overlay.x or 0) + (overlay.width or 0) * (overlay.zoom or 1) * style.scale)
+            room = math.max(room, (overlay.x or 0) + (overlay.width or 0) * (overlay.zoom or 1) * (overlay.place and 1 or style.scale))
         end
     end
     room = math.floor(room + 0.5)
@@ -61,14 +61,14 @@ Notification.__index = Notification
 
 function Notification:SetText(text)
     if self.closed then return end
-    self.text = tostring(text)
-    self.body:SetText(kit.text(self.text))
+    self.text = text == nil and "" or tostring(text)
+    kit.set_text(self.body, self.text)
 end
 
 function Notification:SetTitle(title)
     if self.closed or not self.heading then return end
-    self.title = tostring(title)
-    self.heading:SetText(kit.text(self.title))
+    self.title = title == nil and "" or tostring(title)
+    kit.set_text(self.heading, self.title)
 end
 
 -- Shows how far a task is, 0..1, in place of the countdown. The notification then stays until closed.
@@ -124,7 +124,7 @@ local function build(self, options)
     body:SetWrapTextAt(WIDTH - 84)
     words:AddChild(body)
     kit.slot(row:AddChild(words), { v = VA.Center, fill = 1 })
-    local counter = kit.label("", { color = theme.dim, family = "mono", size = theme.small_size })
+    local counter = kit.label("", { color = theme.dim, family = "mono", size = theme.small_size, free = true })
     kit.slot(row:AddChild(counter), { v = VA.Top, pad = style.margin(8, 1, 0, 0) })
     local padded = kit.box(theme.clear, nil, style.margin(12, 10, 12, 9))
     padded:SetContent(row)
@@ -156,13 +156,13 @@ function notify.show(text, options)
     local theme = style.theme
     local kind = KINDS[options.kind or "info"]
     if not kind then error("a notification's kind is \"info\", \"good\", \"warn\" or \"bad\"", 2) end
-    text = tostring(text)
+    text = text == nil and "" or tostring(text)
 
     -- the same message again restarts the one already showing instead of stacking a copy
     for _, other in ipairs(shown) do
         if other.text == text and other.title == options.title and other.kind == kind then
             other.count = other.count + 1
-            other.counter:SetText(kit.text("x" .. other.count))
+            kit.set_text(other.counter, "x" .. other.count)
             if other.expires then other.started, other.expires = clock(), clock() + other.seconds end
             return other
         end

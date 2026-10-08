@@ -11,6 +11,7 @@ local picker = Wax.import("gui.picker")
 local item = Wax.import("gui.item")
 local split = Wax.import("gui.split")
 local slots = Wax.import("gui.slots")
+local model = Wax.import("gui.model")
 local tip = Wax.import("gui.tip")
 local sched = Wax.import("core.sched")
 local guard = Wax.import("core.guard")
@@ -65,6 +66,14 @@ end
 
 function Control:SetVisible(shown)
     (self.cell or self.widget):SetVisibility(shown and V.Visible or V.Collapsed)
+    -- in a row, what is hidden leaves its width to the others: text fitted to a share of the row is fitted again
+    local share = self.share
+    if share and (share.hidden or false) ~= not shown then
+        share.hidden = not shown
+        for _, entry in ipairs(self.container.fitted or {}) do
+            if style.alive(entry) then entry.apply() end
+        end
+    end
 end
 
 function Control:SetEnabled(enabled)
@@ -88,6 +97,7 @@ local function new_control(container, widget)
     control.window, control.container, control.widget = host, container, widget
     host.controls[#host.controls + 1] = control
     control.cell, container.pending_cell = container.pending_cell, nil
+    control.share, container.pending_share = container.pending_share, nil
     return control
 end
 
@@ -154,6 +164,23 @@ local function hover_tip(control, widget)
             end)
         end)
         listen(control, widget, "OnUnhovered", function() drop_tip(state) end)
+    end
+end
+
+-- Text that shows cut says itself in full while the mouse rests on it. A text block cannot be asked about the mouse, so a
+-- see-through button is laid over it in `stack`, the first time the text is cut. Returns the function that takes the whole text, or nil.
+local function whole_tip(control, stack)
+    local set = nil
+    return function(whole)
+        if not set then
+            if not whole then return end
+            local theme = style.theme
+            local cover = style.extend(control, kit.button, nil, { flat = true, color = theme.clear, hover = theme.clear, press = theme.clear,
+                padding = style.margin(0), cursor = style.Cursor.Default })
+            kit.slot(stack:AddChild(cover), { h = H.Fill, v = VA.Fill })
+            set = hover_tip(control, cover)
+        end
+        set(whole)
     end
 end
 
@@ -235,7 +262,9 @@ local function place(container, widget, options)
         kit.slot(layout_slot, { pad = style.margin(gap, 0, 0, 0), v = options.v or VA.Center, h = H.Fill,
             fill = not options.snug and (options.weight or 1) or nil })
         container.shares = container.shares or {}
-        container.shares[container.count + 1] = { weight = not options.snug and (options.weight or 1) or false, gap = gap }
+        container.shares[container.count + 1] = { weight = not options.snug and (options.weight or 1) or false, gap = gap,
+            own = options.snug and options.own or nil }
+        container.pending_share = container.shares[container.count + 1]
     else
         kit.slot(layout_slot, { pad = options.pad or style.margin(0, 0, 0, theme.spacing), h = options.h or H.Fill,
             v = options.fill and VA.Fill or nil, fill = options.fill and 1 or nil })
@@ -248,16 +277,23 @@ local function place(container, widget, options)
     return layout_slot
 end
 
-local SNUG_WIDTH = 30       -- what a cell that keeps its own width is taken to need (an icon button)
+local SNUG_WIDTH = 38       -- what a cell that keeps its own width is taken to need when it does not say (an icon button)
+local SLOT = 8              -- what a button is wider than its padding and what is in it: the engine pads what a button holds by 4 a side
 
 -- The width one cell of a row gets: what the row has, less the gaps and the cells that keep their own width, shared by weight.
 local function row_share(container, index)
     local shares, width, total = container.shares or {}, controls.wrap_width(container), 0
     for _, share in ipairs(shares) do
-        width = width - share.gap
-        if share.weight then total = total + share.weight else width = width - SNUG_WIDTH end
+        -- a cell that was hidden takes no room
+        if not share.hidden then
+            width = width - share.gap
+            if share.weight then total = total + share.weight else width = width - (share.own or SNUG_WIDTH) end
+        end
     end
-    local own = shares[index] and shares[index].weight
+    local share = shares[index]
+    -- a cell that keeps its own width can have what the others leave
+    if share and not share.weight then return math.max(0, width + (share.own or SNUG_WIDTH)) end
+    local own = share and share.weight
     if not own or total <= 0 then return math.max(0, width) end
     return math.max(0, width * own / total)
 end
@@ -274,10 +310,19 @@ local function fit_later(container, apply)
     end
 end
 
+-- The width a control put in this container as its index-th has: a cell of a grid, a share of a row, or the container's width.
+-- Nothing where it may be as wide as it likes.
+local function room_of(container, index)
+    if container.flow then return container.cell_size and cell_width(container) or nil end
+    if container.horizontal then return row_share(container, index) end
+    return controls.wrap_width(container)
+end
+
 -- Text that sizes itself wraps at a share of its container. It must not also wrap automatically, or it breaks off its last letter.
 local function wrap_at(container, widget, share)
     widget.WrappingPolicy = style.Wrapping.AnyCharacter
     widget:SetWrapTextAt(controls.wrap_width(container) * share * WRAP_SAFETY)
+    kit.wraps(widget)
     local host = container.window
     host.wrapped = host.wrapped or {}
     host.wrapped[#host.wrapped + 1] = style.claim({ widget = widget, container = container, share = share })
@@ -333,11 +378,33 @@ function Container:Label(content, options)
     options = options or {}
     local justify = options.align == "center" and style.Justify.Center or (options.align == "right" and style.Justify.Right) or nil
     local widget = kit.label(content, { wrap = not self.horizontal, color = options.dim and style.theme.dim or options.color,
-        size = options.size, face = options.face, family = options.family, justify = justify })
+        size = options.size, face = options.face, family = options.family, justify = justify, free = self.flow })
     if not self.horizontal then wrap_at(self, widget, 1) end
-    place(self, widget, { weight = options.weight })
+    local lined = self.horizontal and not self.flow
+    local index, placed = self.count + 1, widget
+    if lined then
+        -- in a cell of its own, so that a tip can be laid over it
+        placed = root.new("Overlay")
+        kit.slot(placed:AddChild(widget), { h = H.Fill, v = VA.Center })
+    end
+    place(self, placed, { weight = options.weight })
+    if lined then self.pending_cell = placed end
     local control = new_control(self, widget)
-    function control:Set(value) widget:SetText(kit.text(value)) end
+    local fit = nil
+    if lined then
+        -- one line in its share of the row: what does not fit is cut with dots, and said in full beside the mouse
+        local container, tell = self, whole_tip(control, placed)
+        function fit()
+            kit.fit(widget, row_share(container, index))
+            tell(kit.whole(widget))
+        end
+        fit_later(self, fit)
+        fit()
+    end
+    function control:Set(value)
+        kit.set_text(widget, value)
+        if fit then fit() end
+    end
     function control:SetColor(color) style.tint(widget, "text", style.to_color(color)) end
     return control
 end
@@ -359,18 +426,29 @@ function Container:Title(content, description)
     kit.slot(column:AddChild(rule), { h = H.Fill, pad = style.margin(0, 9, 0, 0) })
     place(self, column, { pad = style.margin(0, self.count > 0 and 8 or 0, 0, theme.spacing + 2) })
     local control = new_control(self, column)
-    function control:Set(value) title:SetText(kit.text(value)) end
-    function control:SetDescription(value) if note then note:SetText(kit.text(value)) end end
+    function control:Set(value) kit.set_text(title, value) end
+    function control:SetDescription(value) if note then kit.set_text(note, value) end end
     return control
 end
 
 function Container:Heading(content)
     local theme = style.theme
-    local widget = kit.label(content, { size = theme.title_size, face = "Bold", wrap = not self.horizontal })
+    local widget = kit.label(content, { size = theme.title_size, face = "Bold", wrap = not self.horizontal, free = self.flow })
     if not self.horizontal then wrap_at(self, widget, 1) end
+    local index = self.count + 1
     place(self, widget, { pad = style.margin(0, self.count > 0 and 6 or 0, 0, theme.spacing) })
     local control = new_control(self, widget)
-    function control:Set(value) widget:SetText(kit.text(value)) end
+    local fit = nil
+    if self.horizontal and not self.flow then
+        local container = self
+        function fit() kit.fit(widget, row_share(container, index)) end
+        fit_later(self, fit)
+        fit()
+    end
+    function control:Set(value)
+        kit.set_text(widget, value)
+        if fit then fit() end
+    end
     return control
 end
 
@@ -387,20 +465,23 @@ function Container:Spacer(height)
     return new_control(self, gap)
 end
 
--- options: { primary, stretch = true (false keeps it as wide as its caption), icon, spin, tab, tip }. An icon with no caption makes an
--- icon button. tab = true makes one of a row of tabs. tip is help shown while the mouse rests on it: what an icon alone cannot say.
+-- options: { primary, stretch = true (false keeps it as wide as its caption), icon, spin, tab, tip, size }. An icon with no caption makes an
+-- icon button, and size makes that one a square of that side. tab = true makes one of a row of tabs. tip is help shown while the
+-- mouse rests on it: what an icon alone cannot say.
 function Container:Button(caption, on_click, options)
     options = options or {}
     local theme = style.theme
     local look = options.primary and { color = style.WHITE, hover = { R = 0.8, G = 0.8, B = 0.8, A = 1 },
         press = { R = 0.62, G = 0.62, B = 0.62, A = 1 } } or {}
     local button, picture, words, mark
+    local side = options.icon and caption == nil and tonumber(options.size) or nil
+    local glyph = side and math.max(8, math.floor(side * 0.6)) or 16
     if options.icon then
-        look.padding = caption and style.margin(10, 5, 12, 5) or style.margin(7, 6)
+        look.padding = caption and style.margin(10, 5, 12, 5) or (side and style.margin(0) or style.margin(7, 6))
         button = kit.button(nil, look)
         local content = root.new("HorizontalBox")
         local ink = options.primary and theme.on_accent or theme.text
-        picture = kit.icon(options.icon, 16, ink)
+        picture = kit.icon(options.icon, glyph, ink)
         kit.slot(content:AddChild(picture), { v = VA.Center, pad = style.margin(0, 0, caption and 7 or 0, 0) })
         if caption then
             words = kit.label(caption, { color = ink })
@@ -426,21 +507,44 @@ function Container:Button(caption, on_click, options)
     end
     if options.primary then style.follow(function() button:SetBackgroundColor(style.theme.accent) end) end
     local natural = options.stretch == false or (options.stretch == nil and options.icon ~= nil and caption == nil)
-    place(self, button, { h = natural and H.Left or H.Fill, snug = natural, gap = theme.spacing })
-    local control = new_control(self, button)
+    local widget = side and kit.sized(button, side, side) or button
+    -- what the button is wide beside its caption: its padding, and its icon with the gap after it
+    local spare = SLOT + (options.icon and (caption and 45 or 30) or (options.tab and 8 or 24))
+    local index = self.count + 1
+    place(self, widget, { h = natural and H.Left or H.Fill, snug = natural, gap = theme.spacing,
+        own = side or (words and kit.text_width(caption) + spare) or nil })
+    local control = new_control(self, widget)
     control.source = button
     control.Activated = control.Changed
     local set_tip = hover_tip(control, button)
+    local given_tip = options.tip
+    -- the caption is one line in the room the button has: one too long is cut with dots and said in full as the tip
+    local fit = nil
+    if words then
+        local container = self
+        function fit()
+            local room = room_of(container, index)
+            local cut = kit.fit(words, room and room - spare or nil)
+            if given_tip == nil then set_tip(cut and kit.said(words) or nil) end
+        end
+        fit_later(self, fit)
+    end
     -- Changes the help that shows while the mouse rests on the button. nil takes it away.
-    function control:SetTip(content) set_tip(content) end
-    if options.tip then set_tip(options.tip) end
+    function control:SetTip(content)
+        given_tip = content
+        set_tip(content)
+        if content == nil and fit then fit() end
+    end
+    if given_tip then set_tip(given_tip) end
+    if fit then fit() end
     function control:SetIcon(name)
         if not picture then error("this button was made without an icon", 2) end
-        kit.set_icon(picture, name, 16)
+        kit.set_icon(picture, name, glyph)
     end
     function control:SetCaption(text)
         if not words then error("this button was made without a caption", 2) end
-        words:SetText(kit.text(text))
+        kit.set_text(words, text)
+        fit()
     end
     function control:SetActive(on)
         if not mark then error("this button was not made as a tab", 2) end
@@ -469,7 +573,7 @@ function Container:Icon(name, options)
     local size = options.size or 20
     local picture = kit.icon(name, size, options.color or style.theme.text)
     local holder = kit.sized(picture, size, size)
-    place(self, holder, { h = H.Left, snug = true })
+    place(self, holder, { h = H.Left, snug = true, own = size })
     local control = new_control(self, holder)
     function control:Set(new_name) kit.set_icon(picture, new_name, size) end
     return control
@@ -491,10 +595,10 @@ function Container:Toggle(caption, initial, on_change)
     button:SetContent(switch)
     kit.slot(row:AddChild(button), { v = VA.Center })
     if compact then
-        name = kit.label(caption)
+        name = kit.label(caption, { free = true })
         kit.slot(row:AddChild(name), { v = VA.Center, pad = style.margin(8, 0, 0, 0) })
     end
-    place(self, row, { snug = compact })
+    place(self, row, { snug = compact, own = compact and 42 + SLOT + kit.text_width(caption) or nil })
 
     local control = new_control(self, row)
     control.source = button
@@ -518,7 +622,7 @@ function Container:Toggle(caption, initial, on_change)
         if animation then animation.cancel() end
         show(value and 1 or 0)
     end
-    function control:SetCaption(text) name:SetText(kit.text(text)) end
+    function control:SetCaption(text) kit.set_text(name, text) end
     listen(control, button, "OnClicked", function()
         value = not value
         animate()
@@ -658,7 +762,6 @@ function Container:Input(caption, options, on_commit)
     -- the cross sits over the right end of the box, so the text stops short of it
     local right = options.clear and 29 or 9
     look.Padding = options.mono and style.margin(9, 6.5, right, 5.5) or style.margin(9, 6, right, 6)
-    if options.hint then box:SetHintText(kit.text(options.hint)) end
     if options.text then box:SetText(kit.text(options.text)) end
     local field, ghost, wipe, wipe_box = box, nil, nil, nil
     if options.mono or options.clear then
@@ -668,7 +771,7 @@ function Container:Input(caption, options, on_commit)
     end
     if options.mono then
         -- greyed text laid over the box, starting where the typed text ends (in this font every letter is as wide as a space)
-        ghost = kit.label("", { family = "mono", size = theme.font_size, color = style.with_alpha(theme.dim, 0.75) })
+        ghost = kit.label("", { family = "mono", size = theme.font_size, color = style.with_alpha(theme.dim, 0.75), free = true })
         ghost:SetVisibility(V.HitTestInvisible)
         kit.slot(field:AddChild(ghost), { h = H.Left, v = VA.Center, pad = style.margin(9, 6.5, 9, 5.5) })
     end
@@ -681,11 +784,24 @@ function Container:Input(caption, options, on_commit)
     else
         kit.slot(row:AddChild(field), { v = self.horizontal and VA.Fill or VA.Center, fill = 1 })
     end
+    local index = self.count + 1
     place(self, row, { v = VA.Fill })
 
     local control = new_control(self, row)
     control.source, control.pointer = box, false
     control.cross, control.cross_box = wipe, wipe_box
+    -- the greyed hint is one line in the box: one too long for it ends in dots
+    local hint, hint_shown, container = options.hint, nil, self
+    local function fit_hint()
+        local room = room_of(container, index) or 400
+        if captioned and not stacked then room = (room - 10) * 0.5 end
+        local text = kit.shorten(hint or "", (room - 9 - right) * kit.FIT, theme.font_size, options.mono and "mono" or nil, nil, "Book")
+        if text == hint_shown then return end
+        hint_shown = text
+        box:SetHintText(kit.text(text))
+    end
+    fit_later(self, fit_hint)
+    if hint then fit_hint() end
     local value = options.text or ""
     -- the cross is there only while the box holds text
     local crossed, heard = nil, false
@@ -696,13 +812,19 @@ function Container:Input(caption, options, on_commit)
     end
     cross(value ~= "")
     function control:Get() return box:GetText():ToString() end
+    local function put() box:SetText(kit.text(value)) end
     function control:Set(new_text)
         value = tostring(new_text)
-        box:SetText(kit.text(value))
+        -- text put here by code is not the user doing something: an open list or tip elsewhere stays
+        events.quietly(put)
         cross(value ~= "")
     end
     -- Changes the greyed text that shows while the box is empty.
-    function control:SetHint(hint) box:SetHintText(kit.text(hint or "")) end
+    control.hint = hint
+    function control:SetHint(text)
+        hint, self.hint = text, text
+        fit_hint()
+    end
     control.Typed = sched.Signal.new("Typed")
     listen(control, box, "OnTextChanged", function(typed)
         heard = true
@@ -730,7 +852,7 @@ function Container:Input(caption, options, on_commit)
         if not ghost then return end
         local typed = box:GetText():ToString()
         text = tostring(text or "")
-        ghost:SetText(kit.text(text == "" and "" or (" "):rep(utf8.len(typed) or #typed) .. text))
+        kit.set_text(ghost, text == "" and "" or (" "):rep(utf8.len(typed) or #typed) .. text)
     end
     listen(control, box, "OnTextCommitted", function(committed)
         -- Enter is reported twice in a row (the commit, then the box losing the keyboard). Clicking away is reported once.
@@ -843,16 +965,15 @@ function Container:Dropdown(caption, choices, selected, on_change)
         else
             width = controls.wrap_width(self)
         end
-        if not bare and not stacked then width = width / 2 end
-        -- less the padding, the arrow and its gap, and a little for the edges of the letters
-        return width - 45
+        if not bare and not stacked then width = (width - 10) / 2 end
+        -- less the padding, the arrow and its gap
+        return width - 43 - SLOT
     end
-    local header_text = nil
+    local header_tip = nil
     local function fit_header(value_now)
-        local text = kit.shorten(value_now, header_room(), theme.font_size)
-        if text == header_text then return end
-        header_text = text
-        shown:SetText(kit.text(text))
+        kit.set_text(shown, value_now)
+        local cut = kit.fit(shown, header_room())
+        if header_tip then header_tip(cut and kit.said(shown) or nil) end
     end
     kit.slot(header_row:AddChild(shown), { v = VA.Center, pad = style.margin(0, 0, 8, 0), fill = 1 })
     local chevron = kit.icon("chevron-down", 14, theme.dim)
@@ -924,9 +1045,22 @@ function Container:Dropdown(caption, choices, selected, on_change)
         kit.fill_content(item, item_row)
         kit.slot(cell:AddChild(item), { h = H.Fill, v = VA.Fill })
         kit.slot(list:AddChild(cell), { h = H.Fill, pad = style.margin(0, 0, 0, index < #choices and 2 or 0) })
-        control.items[choice], rows[choice] = item, { check = check, chosen = chosen }
+        control.items[choice], rows[choice] = item, { check = check, chosen = chosen, cell = cell }
         listen(control, item, "OnClicked", function() choose(choice) end)
     end
+    -- Shows only these of its choices. The others stay built and out of sight (a size this screen cannot show, say).
+    function control.offer(offered)
+        local wanted = {}
+        for _, choice in ipairs(offered) do wanted[choice] = true end
+        for choice, row in pairs(rows) do
+            local on = wanted[choice] == true
+            if row.offered ~= on then
+                row.offered = on
+                row.cell:SetVisibility(on and V.SelfHitTestInvisible or V.Collapsed)
+            end
+        end
+    end
+    header_tip = hover_tip(control, header)
     mark()
     fit_later(self, function() fit_header(value) end)
     local function tint_head(color)
@@ -948,7 +1082,8 @@ function Container:Dropdown(caption, choices, selected, on_change)
     return control
 end
 
--- A card of controls with a title. Returns a container. options: { open = true, collapsible = true (false: a plain titled group) }
+-- A card of controls with a title. Returns a container. options: { open = true, collapsible = true (false: a plain titled group),
+-- fit = true (the title stays on one line: one too long is cut with "..." and shown whole as a tip) }
 function Container:Section(title, options)
     options = options or {}
     local theme = style.theme
@@ -975,7 +1110,9 @@ function Container:Section(title, options)
         chevron:SetVisibility(V.Collapsed)
         header:SetVisibility(V.HitTestInvisible)
     end
-    kit.slot(header_row:AddChild(kit.label(title, { face = "Bold", wrap = true })), { v = VA.Center, fill = 1 })
+    local fits = options.fit == true
+    local title_label = kit.label(fits and "" or title, { face = "Bold", wrap = not fits })
+    kit.slot(header_row:AddChild(title_label), { v = VA.Center, fill = 1 })
     kit.fill_content(header, header_row)
     local header_stack = root.new("Overlay")
     kit.slot(header_stack:AddChild(glow_open), { h = H.Fill, v = VA.Fill })
@@ -1023,6 +1160,20 @@ function Container:Section(title, options)
         glow()
     end
     function section:IsOpen() return parts.open end
+    if fits then
+        local container, set_tip = self, hover_tip(control, header)
+        parts.title, parts.before = title == nil and "" or tostring(title), 0
+        -- the room: the card less the header's padding, the arrow, and what its maker put before the title (parts.before)
+        function parts.fit()
+            local room = controls.wrap_width(container) - 20 - SLOT - (fixed and 0 or 22) - parts.before
+            kit.set_text(title_label, parts.title)
+            local cut = kit.fit(title_label, room)
+            parts.shown = cut and kit.shorten(parts.title, room * kit.FIT, theme.font_size, nil, nil, "Bold") or parts.title
+            set_tip(cut and parts.title or nil)
+        end
+        fit_later(self, parts.fit)
+        parts.fit()
+    end
     return section
 end
 
@@ -1076,7 +1227,7 @@ function Container:Progress(caption, value, options)
     local theme = style.theme
     local column = root.new("VerticalBox")
     local head = caption_row(self, caption, 0.8)
-    local percent = kit.label("", { color = theme.dim, family = "mono", size = theme.small_size })
+    local percent = kit.label("", { color = theme.dim, family = "mono", size = theme.small_size, free = true })
     kit.slot(head:AddChild(percent), { v = VA.Center })
     kit.slot(column:AddChild(head), { h = H.Fill })
     -- two cells sharing the track's width: the filled part and the rest
@@ -1100,7 +1251,7 @@ function Container:Progress(caption, value, options)
     function control:Get() return current end
     function control:Set(new_value)
         current = math.max(0, math.min(1, new_value or 0))
-        percent:SetText(kit.text(("%d%%"):format(math.floor(current * 100 + 0.5))))
+        kit.set_text(percent, ("%d%%"):format(math.floor(current * 100 + 0.5)))
         if animation then animation.cancel() end
         local from, to = shown, current
         animation = tween.run(theme.animation, function(progress) show(from + (to - from) * progress) end, nil, nil, control)
@@ -1125,7 +1276,7 @@ function Container:Field(name, value, options)
     kit.slot(row:AddChild(shown), { v = VA.Center, pad = style.margin(10, 0, 4, 0), fill = 1 })
     place(self, row)
     local control = new_control(self, row)
-    function control:Set(new_value) shown:SetText(kit.text(new_value == nil and "" or new_value)) end
+    function control:Set(new_value) kit.set_text(shown, new_value) end
     function control:SetColor(color) style.tint(shown, "text", style.to_color(color)) end
     return control
 end
@@ -1145,10 +1296,15 @@ function Container:Keybind(caption, key, on_change)
     local control = new_control(self, row)
     control.source = button
     local value = key
+    local container, index = self, self.count
     local function show(text, color)
-        shown:SetText(kit.text(text))
+        kit.set_text(shown, text)
         style.tint(shown, "text", color)
     end
+    -- the key's name in the button, which has the row's other half
+    local function fit() kit.fit(shown, ((room_of(container, index) or 400) - 10) / 2 - 20 - SLOT) end
+    fit_later(self, fit)
+    fit()
     function control:Get() return value end
     function control:Set(new_key)
         value = new_key
@@ -1511,7 +1667,7 @@ function controls.step()
         local host = grid.host
         if grid.control.destroyed then
             table.remove(grids, index)
-        elseif host.shown ~= false and not host.minimized and (not host.nav or host.page == grid.page) then
+        elseif host.shown ~= false and host.on_screen ~= false and not host.minimized and (not host.nav or host.page == grid.page) then
             guard.call("grid", grid.step)
         end
     end
@@ -1531,6 +1687,7 @@ picker.install(Container, tools)
 item.install(Container, tools)
 split.install(Container, tools)
 slots.install(Container, tools)
+model.install(Container, tools)
 
 -- Every builder above runs as the build of one control, so what it paints is owned by that control.
 for name, make in pairs(Container) do

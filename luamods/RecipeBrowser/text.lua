@@ -72,7 +72,16 @@ function text.duration(seconds)
     return left > 0 and (number(hours) .. " h " .. left .. " min") or (number(hours) .. " h")
 end
 
-text.title = "Recipe Browser"
+-- What a craft gives: "52 XP", or "52 to 720 XP" when its stations differ. Nothing for none.
+function text.xp(low, high)
+    low = tonumber(low)
+    high = tonumber(high) or low
+    if not low or high <= 0 then return "" end
+    if low == high then return number(high) .. " XP" end
+    return number(low) .. " to " .. number(high) .. " XP"
+end
+
+text.title = "Prospector's Codex"
 text.tabs = { browse = "Browse", settings = "Settings" }
 
 text.left = {
@@ -153,9 +162,10 @@ function text.right.amount(amount, unit)
     return tostring(amount) .. " " .. unit
 end
 
-local KEY_WORDS = { { "make", "how to make" }, { "used", "used in" }, { "favourite", "favourite" } }
+local KEY_WORDS = { { "make", "make" }, { "used", "uses" }, { "favourite", "favourite" } }
 
--- The keys line under the right list, from the binds in use: "R how to make - U used in - A favourite".
+-- The keys line under the right list, from the binds in use: "R make - U uses - A favourite". It is one line of the
+-- column, so it names the keys and no more.
 function text.right.keys(binds)
     local parts = {}
     for _, pair in ipairs(KEY_WORDS) do
@@ -171,8 +181,10 @@ function text.strip.caption(count)
     return "Favourites (" .. number(count) .. ")"
 end
 
-function text.strip.empty(key)
+-- hold: the key can be held and moved over several items.
+function text.strip.empty(key, hold)
     if not filled(key) then return "Use the star to keep an item here." end
+    if hold then return "Press " .. key .. " over an item to keep it here. Hold " .. key .. " and move over several to keep them all." end
     return "Press " .. key .. " over an item to keep it here."
 end
 
@@ -194,7 +206,7 @@ end
 
 function text.first_load(key)
     if not filled(key) then return "" end
-    return "Press " .. key .. " to open the Recipe Browser."
+    return "Press " .. key .. " to open the " .. text.title .. "."
 end
 
 text.needs = {
@@ -247,6 +259,12 @@ function text.tip.takes(time)
     return "Takes " .. time
 end
 
+-- "Gives 52 XP": what one craft gives, before bonuses.
+function text.tip.gives(xp)
+    if not filled(xp) then return "" end
+    return "Gives " .. xp
+end
+
 function text.tip.used_in(count)
     if count < 1 then return "" end
     return "Used in " .. counted(count, "recipe", "recipes")
@@ -291,6 +309,7 @@ text.panel = {
     order_drop = "Remove this order",
     order_open = "Click for what it takes",
     order_remove = "Middle click to remove it",
+    leaving = "Goes when you let go - Esc keeps it",
 }
 
 function text.panel.ready(count)
@@ -319,12 +338,11 @@ function text.tree.crafts(crafts, station)
     return "Make " .. times .. " at " .. station
 end
 
--- One line of the order's times: "Stick x10 - 25 s at Character".
-function text.tree.step(name, crafts, time, bench)
+-- One line of the order's times: "Stick x10 - 25 s at Character - 520 XP".
+function text.tree.step(name, crafts, time, bench, xp)
     local line = name .. " " .. text.right.times(crafts)
-    if not filled(time) then return line end
-    if not filled(bench) then return line .. SEPARATOR .. time end
-    return line .. SEPARATOR .. time .. " at " .. bench
+    local took = filled(time) and (filled(bench) and (time .. " at " .. bench) or time) or nil
+    return text.join(line, took, xp)
 end
 
 function text.tree.each(each, all)
@@ -332,8 +350,16 @@ function text.tree.each(each, all)
     return each .. " each, " .. all .. " in all"
 end
 
-function text.tree.total(time)
-    return "Making it all takes " .. time .. ", before talents and upgrades."
+-- The XP of a step: "Gives 52 XP", or "52 XP each, 520 XP in all".
+function text.tree.gives(each, all)
+    if each == all then return "Gives " .. all end
+    return each .. " each, " .. all .. " in all"
+end
+
+function text.tree.total(time, xp)
+    if not filled(xp) then return "Making it all takes " .. time .. ", before talents and upgrades." end
+    if not filled(time) then return "Making it all gives " .. xp .. ", before bonuses." end
+    return "Making it all takes " .. time .. " and gives " .. xp .. ", before talents, upgrades and bonuses."
 end
 
 function text.tree.makes(made, left)
@@ -437,13 +463,13 @@ end
 text.problem = {}
 
 function text.problem.needs_wax(version)
-    if not filled(version) then return "Recipe Browser needs a newer Wax." end
-    return "Recipe Browser needs Wax " .. version .. " or newer."
+    if not filled(version) then return text.title .. " needs a newer Wax." end
+    return text.title .. " needs Wax " .. version .. " or newer."
 end
 
 function text.problem.changed(table_name, name)
     local what = filled(name) and (table_name .. "." .. name) or table_name
-    return "This version of the game changed " .. what .. ". Recipes cannot be shown until Recipe Browser is updated."
+    return "This version of the game changed " .. what .. ". Recipes cannot be shown until " .. text.title .. " is updated."
 end
 
 return text

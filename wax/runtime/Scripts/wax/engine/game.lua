@@ -168,6 +168,10 @@ local getters = {
         local w = world()
         return w and wrap(w.AuthorityGameMode) or nil       -- nil when you are a client in someone else's game
     end,
+    IsHost = function()
+        local w = world()
+        return w ~= nil and w.AuthorityGameMode:IsValid()
+    end,
     LocalPlayer = function() return wrap(local_controller()) end,
     Character = function()
         local controller = local_controller()

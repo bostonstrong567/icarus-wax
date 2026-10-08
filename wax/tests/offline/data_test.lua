@@ -229,7 +229,8 @@ t.test("what is never read is left out, and an enum is read only when its path i
     t.eq(gold.SessionRequirement.RowName, "Art_Deco_Pack")
     t.eq(gold.SessionRequirement.DataTableName, nil, "naming the handle does not name its enum")
     t.eq(fake.enum_reads, 4)
-    for path, kind in pairs({ Overrides = "a Map field", OnCrafted = "a MulticastInlineDelegate field", Preview = "an Object field",
+    -- a map and a reference to an object are read when named: data_maps_test.lua has those
+    for path, kind in pairs({ OnCrafted = "a MulticastInlineDelegate field",
                               CachedHardReferences = "an array of Object", ["Requirement.DataTablePtr"] = "a WeakObject field" }) do
         local err = t.raises(function() recipes:Row("Bone_Knife", { path }) end, "which game.Data never reads", path)
         t.ok(tostring(err):find(kind, 1, true), path .. " names its kind: " .. tostring(err))
@@ -413,7 +414,7 @@ t.test("Meta is the table's meta table as a table object, or nil", function()
     local radar = meta:Row("kit_radar")
     t.eq(radar.bIsDeprecated, true)
     t.eq(radar.RequiredFeatureLevel.RowName, "Core")
-    t.eq(radar.ExtraMetadata, nil, "a map is never read")
+    t.eq(radar.ExtraMetadata, nil, "a map is only read when it is named")
     t.eq(meta:Row("Fish_03", { "RequiredFeatureLevel.RowName" }).RequiredFeatureLevel.RowName, "NewFrontiers")
     t.eq(meta:Row("Fish_03").Notes, "salt water")
     t.eq(meta:Meta(), nil)

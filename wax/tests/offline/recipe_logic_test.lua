@@ -778,7 +778,7 @@ t.test("parts are joined with a plain hyphen and empty ones are left out", funct
 end)
 
 t.test("the fixed texts of the window", function()
-    t.eq(text.title, "Recipe Browser")
+    t.eq(text.title, "Prospector's Codex")
     t.eq(text.tabs.browse, "Browse")
     t.eq(text.tabs.settings, "Settings")
     t.eq(text.left.heading, "Items")
@@ -872,11 +872,13 @@ t.test("the texts of a recipe's lines at 0, 1 and many", function()
 end)
 
 t.test("the keys line is made from the binds in use", function()
-    t.eq(text.right.keys({ make = "R", used = "U", favourite = "A" }), "R how to make - U used in - A favourite")
+    t.eq(text.right.keys({ make = "R", used = "U", favourite = "A" }), "R make - U uses - A favourite")
     t.eq(text.right.keys({ make = "F", used = "MiddleMouseButton", favourite = "BackSpace" }),
-        "F how to make - MiddleMouseButton used in - BackSpace favourite")
-    t.eq(text.right.keys({ used = "U" }), "U used in")
-    t.eq(text.right.keys({ make = "R", used = "", favourite = "A" }), "R how to make - A favourite")
+        "F make - MiddleMouseButton uses - BackSpace favourite")
+    t.eq(text.right.keys({ used = "U" }), "U uses")
+    t.eq(text.right.keys({ make = "R", used = "", favourite = "A" }), "R make - A favourite")
+    -- one line of the column: it says no more, whatever else it is handed
+    t.eq(text.right.keys({ make = "R", used = "U", favourite = "A" }, true, true), "R make - U uses - A favourite")
     t.eq(text.right.keys({}), "")
     t.eq(text.right.keys(nil), "")
 end)
@@ -888,6 +890,8 @@ t.test("the favourites strip at 0, 1 and many", function()
     t.eq(text.strip.caption(1023), "Favourites (1,023)")
     t.eq(text.strip.empty("A"), "Press A over an item to keep it here.")
     t.eq(text.strip.empty("K"), "Press K over an item to keep it here.")
+    t.eq(text.strip.empty("A", true), "Press A over an item to keep it here. Hold A and move over several to keep them all.")
+    t.eq(text.strip.empty(nil, true), "Use the star to keep an item here.")
     t.eq(text.strip.empty(), "Use the star to keep an item here.")
     t.eq(text.strip.empty(""), "Use the star to keep an item here.")
 end)
@@ -902,8 +906,8 @@ t.test("the status bar and the first notice", function()
     t.eq(text.status.counts(2668, 2215), "2,668 items, 2,215 recipes")
     t.eq(text.status.opens("F7"), "F7 opens this")
     t.eq(text.status.opens(nil), "")
-    t.eq(text.first_load("F7"), "Press F7 to open the Recipe Browser.")
-    t.eq(text.first_load("F6"), "Press F6 to open the Recipe Browser.")
+    t.eq(text.first_load("F7"), "Press F7 to open the Prospector's Codex.")
+    t.eq(text.first_load("F6"), "Press F6 to open the Prospector's Codex.")
     t.eq(text.first_load(nil), "")
     t.eq(text.panel.page(2, 1234), "Page 2 of 1,234")
     t.eq(text.panel.ready(12), "12 can be made now")
@@ -1022,14 +1026,14 @@ t.test("the settings page", function()
 end)
 
 t.test("the problems", function()
-    t.eq(text.problem.needs_wax("0.2.0"), "Recipe Browser needs Wax 0.2.0 or newer.")
-    t.eq(text.problem.needs_wax(), "Recipe Browser needs a newer Wax.")
+    t.eq(text.problem.needs_wax("0.2.0"), "Prospector's Codex needs Wax 0.2.0 or newer.")
+    t.eq(text.problem.needs_wax(), "Prospector's Codex needs a newer Wax.")
     t.eq(text.problem.changed("D_RecipeSets", "Character"),
-        "This version of the game changed D_RecipeSets.Character. Recipes cannot be shown until Recipe Browser is updated.")
+        "This version of the game changed D_RecipeSets.Character. Recipes cannot be shown until Prospector's Codex is updated.")
     t.eq(text.problem.changed("D_ProcessorRecipes", "Inputs.Count"),
-        "This version of the game changed D_ProcessorRecipes.Inputs.Count. Recipes cannot be shown until Recipe Browser is updated.")
+        "This version of the game changed D_ProcessorRecipes.Inputs.Count. Recipes cannot be shown until Prospector's Codex is updated.")
     t.eq(text.problem.changed("D_Talents"),
-        "This version of the game changed D_Talents. Recipes cannot be shown until Recipe Browser is updated.")
+        "This version of the game changed D_Talents. Recipes cannot be shown until Prospector's Codex is updated.")
 end)
 
 -- a copy of the mod from before it had a research line has none of these
@@ -1056,6 +1060,23 @@ if text.research then
         t.eq(research.points(1, 0), "Needs 1 point")
         t.eq(research.researched("Shotgun"), "Shotgun researched.")
         t.eq(research.refused("Cement Mixer"), "The game did not research Cement Mixer.")
+    end)
+end
+
+-- a copy of the mod from before it said what a craft gives has none of these
+if text.xp then
+    t.test("the XP of a craft: one amount, a range, a tip's line, a step of Materials and the sum", function()
+        t.eq(text.xp(52), "52 XP")
+        t.eq(text.xp(240, 2160), "240 to 2,160 XP")
+        t.eq(text.xp(0), "")
+        t.eq(text.tip.gives("52 XP"), "Gives 52 XP")
+        t.eq(text.tip.gives(""), "")
+        t.eq(text.tree.gives("52 XP", "52 XP"), "Gives 52 XP")
+        t.eq(text.tree.gives("52 XP", "520 XP"), "52 XP each, 520 XP in all")
+        t.eq(text.tree.step("Stick", 10, "25 s", "", "520 XP"), "Stick x10 - 25 s - 520 XP")
+        t.eq(text.tree.total("", "1,240 XP"), "Making it all gives 1,240 XP, before bonuses.")
+        t.eq(text.tree.total("2 min 5 s", "1,240 XP"),
+            "Making it all takes 2 min 5 s and gives 1,240 XP, before talents, upgrades and bonuses.")
     end)
 end
 

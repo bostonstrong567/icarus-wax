@@ -1,14 +1,16 @@
--- Recipe Browser: every item of the game, how it is made, what it is used in and at which station.
+-- Prospector's Codex: every item of the game, how it is made, what it is used in and at which station.
 -- This file is what the view needs: the check for game.Data, the settings, the open key and the read of the game's
 -- tables. The view itself is view.lua, started at the end.
 
 local text = require(mod.text)
+require(mod.text_creatures)(text)
 
-local NEEDS = "0.2.0"       -- the first Wax with the game's tables and the panels this mod is made of
+local NEEDS = "0.3.0"       -- the first Wax with everything this mod is made of
 
 if not ui then return end
 local found, data = pcall(function() return game.Data end)
-if not found or not data then
+-- an older Wax has no way to measure text
+if not found or not data or type(ui.TextWidth) ~= "function" then
     ui.Notify(text.problem.needs_wax(NEEDS), { kind = "bad", seconds = 10 })
     return
 end
@@ -16,6 +18,7 @@ end
 local source, tags, model, unlock = require(mod.source), require(mod.tags), require(mod.model), require(mod.unlock)
 local format, search = require(mod.format), require(mod.search)
 local loading = require(mod.load)
+local creatures = require(mod.creatures)
 
 local settings = storage.Load("settings", { key = "F7", internal_names = false, welcomed = false })
 
@@ -30,6 +33,7 @@ app.tree, app.gather, app.unlock = require(mod.tree), require(mod.gather), unloc
 local function details()
     local detail = source.new(data)
     app.stats = require(mod.stats).new(detail, text, format)
+    app.page = require(mod.creature_page).new({ beasts = text.beasts, text = text, creatures = creatures, stats = app.stats })
     -- The description and the line under it, from the item's row name in D_ItemsStatic. Either may be missing.
     function app.describe(row)
         local static = detail.detail("ItemsStatic", row)
@@ -44,6 +48,9 @@ end
 details()
 app.favourites = require(mod.favourites).new(function() return storage.Load("favourites", {}) end,
     function(list) storage.Save("favourites", list) end)
+-- The creatures the player keeps, as the favourites are kept.
+app.kept = require(mod.favourites).new(function() return storage.Load("creatures", {}) end,
+    function(list) storage.Save("creatures", list) end)
 
 function app.save() storage.Save("settings", settings) end
 
@@ -60,7 +67,20 @@ app.job = loading.new({ data = data, source = source, model = model, tags = tags
     task = task, kept = persist("model"),
     showing = function() return view ~= nil and view.showing ~= nil and view.showing() == true end,
     -- in a task of its own, so a view that takes its time does not hold the reading up
-    changed = function() if view and view.refresh then task.spawn(view.refresh) end end })
+    changed = function()
+        if app.beasts then app.beasts.items_changed() end
+        if view and view.refresh then task.spawn(view.refresh) end
+    end })
+
+-- The read of the creature tables, for the Bestiary side. It starts by itself once the items are read.
+app.beasts = require(mod.creature_load).new({ data = data, source = source, creatures = creatures, task = task,
+    kept = persist("creatures"), lower = search.lower, words = text.beasts.search_words(),
+    items = function() return app.job.model end,
+    showing = function() return view ~= nil and view.showing ~= nil and view.showing() == true end,
+    -- only a view that has a Bestiary side is told
+    changed = function() if view and view.creatures then task.spawn(view.creatures) end end })
+-- items kept from before a reload tell nobody that they are there
+app.beasts.items_changed()
 
 -- A key the Wax menu uses cannot be the open key as well: one press would open and close again.
 local function bind(key)
@@ -91,11 +111,13 @@ end
 -- toggle() and showing(), and may give key(key, refused).
 task.spawn(function()
     view = require(mod.view).start(app) or {}
+    app.view = view
     bind(settings.key)
     ui.KeyChanged:Connect(function() bind(settings.key) end)
     data.Changed:Connect(function(name)
         details()
         app.job.data_changed(name)
+        app.beasts.data_changed(name)
     end)
     if not settings.welcomed then
         settings.welcomed = true

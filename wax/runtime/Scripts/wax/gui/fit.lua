@@ -3,6 +3,7 @@
 local Wax = ...
 local input = Wax.import("gui.input")
 local scope = Wax.import("core.scope")
+local sched = Wax.import("core.sched")
 
 local M = {}
 
@@ -179,8 +180,11 @@ end
 
 -- The game's own menu screen that is showing now: its name ("UMG_MainMenu", "UMG_EscapeMenu", "UMG_Processor_C" for a bench)
 -- and, for the main menu, the number of its tab (0 inventory, 1 crafting, 2 tech tree, 3 talents, 4 map). Nothing when none shows.
--- Looked at the moment the game frees the mouse, then a few times a second.
+-- Looked at the moment the game frees the mouse, then a few times a second. Asked again in the same frame, it answers what it found.
 function M.screen()
+    local frame = sched.stats.frame
+    if seen.frame == frame then return seen.name, seen.tab end
+    seen.frame = frame
     local player = input.controller()
     if not player or player.bShowMouseCursor ~= true then
         seen.cursor, seen.name, seen.tab = false, nil, nil
@@ -193,8 +197,26 @@ function M.screen()
     return seen.name, seen.tab
 end
 
+-- The same, looked at now and as one text ("UMG_MainMenu 1"), or nil: for telling whether the game has changed screens since.
+function M.key()
+    local name, tab = look()
+    return name and (name .. " " .. tostring(tab)) or nil
+end
+
+-- Fires with the name and the tab of the game's screen when another one shows, or none any more (nil). It is looked for once a
+-- frame, and only while somebody listens: a mod that listens does not have to ask every frame itself.
+M.Changed = sched.Signal.new("GameScreenChanged")
+local told = { name = nil, tab = nil }
+
 function M.step()
     frames = frames + 1
+    if M.Changed.count > 0 then
+        local name, tab = M.screen()
+        if name ~= told.name or tab ~= told.tab then
+            told.name, told.tab = name, tab
+            M.Changed:Fire(name, tab)
+        end
+    end
     if shown and seen.name == "UMG_MainMenu" and (seen.tab == 2 or seen.tab == 3) and frames % M.TIPS == 0 then
         pcall(size_tips, shown.scale * M.TIP_SHARE)
     end

@@ -1,5 +1,6 @@
 -- Prints what the Recipe Browser reads from the game's tables, one "Table<TAB>path" line per field.
--- A names-only table prints "Table<TAB>*names"; a MetaTable field prints "Table<TAB>*meta.path".
+-- A names-only table prints "Table<TAB>*names"; a MetaTable field prints "Table<TAB>*meta.path"; a field the mod
+-- reads only while the game has it prints "Table<TAB>*maybe.path".
 -- Run from the workspace root:  tools\lua\lua54\lua.exe wax\tests\offline\recipe_fields.lua luamods\RecipeBrowser
 
 local folder = arg and arg[1]
@@ -12,10 +13,10 @@ if not chunk then
 end
 
 local source = chunk()
-local order, fields, seen = {}, {}, {}
+local order, fields, maybe, seen = {}, {}, {}, {}
 for _, entry in ipairs(source.lists(true)) do
     if not fields[entry.table] then
-        fields[entry.table] = {}
+        fields[entry.table], maybe[entry.table] = {}, {}
         order[#order + 1] = entry.table
     end
     for _, field in ipairs(entry.fields) do
@@ -23,6 +24,13 @@ for _, entry in ipairs(source.lists(true)) do
         if not seen[entry.table .. "\t" .. line] then
             seen[entry.table .. "\t" .. line] = true
             fields[entry.table][#fields[entry.table] + 1] = line
+        end
+    end
+    for _, field in ipairs(entry.maybe or {}) do
+        local line = "*maybe." .. field
+        if not seen[entry.table .. "\t" .. line] then
+            seen[entry.table .. "\t" .. line] = true
+            maybe[entry.table][#maybe[entry.table] + 1] = line
         end
     end
 end
@@ -33,4 +41,5 @@ for _, name in ipairs(order) do
     else
         for _, line in ipairs(fields[name]) do print(name .. "\t" .. line) end
     end
+    for _, line in ipairs(maybe[name]) do print(name .. "\t" .. line) end
 end

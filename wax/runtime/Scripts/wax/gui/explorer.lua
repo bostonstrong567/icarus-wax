@@ -30,7 +30,7 @@ M.worst = { index = 0, list = 0 }       -- the longest the index step and a rebu
 local ROW, GAP = 26, 1
 local BAND = 36             -- the least height of the third row of each side, so both lists start at the same place
 local FIT = 0.97            -- text may draw a little wider than its letters add up to
-local LEAST = 290           -- the narrowest a side may be: two choices side by side still show whole
+local LEAST = 310           -- the narrowest a side may be: two choices side by side still show whole
 local BUTTON, BACK = 38, 84 -- the room an icon button and the "List" button take in a row, with the gap before them
 local ICONS = { player = "user", creature = "paw-print", building = "hammer", item = "package", actor = "box",
     component = "puzzle", widget = "app-window", object = "circle-dot", world = "globe" }
@@ -989,8 +989,8 @@ function M.build(page)
 end
 
 local function showing(v)
-    local window, ui = v.window, Wax.ui
-    return window.shown == true and not window.minimized and window.page == v.page and ui ~= nil and (ui.IsOpen() or ui.IsPreview())
+    local window = v.window
+    return window.shown == true and window.on_screen == true and not window.minimized and window.page == v.page
 end
 
 local function step()

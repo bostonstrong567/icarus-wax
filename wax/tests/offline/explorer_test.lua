@@ -181,6 +181,7 @@ local paths = Wax.import("gui.explorer_path")
 local members = Wax.import("gui.explorer_members")
 local explorer = Wax.import("gui.explorer")
 local ui = Wax.import("gui.init")
+Wax.import("gui.kit").MEASURE = false      -- the stand-in engine gives every widget one size: text is fitted by its letters here
 local events = Wax.import("gui.events")
 ui.start()
 Wax.ui = ui
@@ -952,7 +953,7 @@ t.test("the page builds in the panel and does nothing until it is the page on sc
         window = ui.Window({ title = "Wax", nav = "side", width = 620, height = 440, x = 40, y = 80 })
         other_page = window:Page("Mods", { icon = "package" })
         other_page:Label("another page")
-        page = window:Page("Explorer", { icon = "folder-tree", scroll = false })
+        page = window:Page("Explorer", { icon = "scan-search", scroll = false })
         explorer.build(page)
     end)
     view = explorer.view()
@@ -1339,7 +1340,7 @@ t.test("only Enter and the button beside the box write: leaving the box writes n
     frames(2)
     t.eq(label_text(view.edit_name), "Stamina")
     for _, part in ipairs({ view.edit, view.set, view.code }) do t.eq(shows(part), true) end
-    t.eq(fake.last(view.edit.source, "SetHintText")[2]:ToString(), "a whole number, then Enter")
+    t.eq(view.edit.hint, "a whole number, then Enter")
     t.eq(box_text(view.edit), "60")
     -- typing, then clicking somewhere else
     fake.focused = view.edit.source
@@ -1405,15 +1406,15 @@ t.test("only Enter and the button beside the box write: leaving the box writes n
     find_members("health")
     click(member_cell("Health").line.source)
     frames(2)
-    t.eq(fake.last(view.edit.source, "SetHintText")[2]:ToString(), "a number, then Enter")
+    t.eq(view.edit.hint, "a number, then Enter")
     find_members("nickname")
     click(member_cell("Nickname").line.source)
     frames(2)
-    t.eq(fake.last(view.edit.source, "SetHintText")[2]:ToString(), "text, then Enter")
+    t.eq(view.edit.hint, "text, then Enter")
     find_members("crouch")
     click(member_cell("bIsCrouched").line.source)
     frames(2)
-    t.eq(fake.last(view.edit.source, "SetHintText")[2]:ToString(), "true or false, then Enter")
+    t.eq(view.edit.hint, "true or false, then Enter")
     -- a value too large for its type is refused by name
     find_members("flags")
     click(member_cell("Flags").line.source)
@@ -1425,6 +1426,58 @@ t.test("only Enter and the button beside the box write: leaving the box writes n
     click(view.clear_changes.source)
     t.eq(shows(view.changes_card), false)
     props.Stamina = 60
+    find_members("")
+    t.eq(errors(), 0)
+end)
+
+t.test("a dropdown of the page stays open while the picked member's value changes every frame", function()
+    local props = rawget(me, "__props")
+    find_members("health")
+    click(member_cell("Health").line.source)
+    frames(2)
+    t.eq(label_text(view.edit_name), "Health")
+    -- the engine reports text that is put in a box as a change of its text, in the middle of the call that put it there
+    local real, reported = fake.react.SetText, 0
+    fake.react.SetText = function(self, text)
+        if rawequal(self, view.edit.source) then
+            reported = reported + 1
+            events.simulate(view.edit.source, "OnTextChanged", text:ToString())
+        end
+    end
+    for _, dropdown in ipairs({ view.order, view.show, view.sort }) do
+        click(dropdown.source)
+        t.ok(dropdown.parts.open, "open after a click on its header")
+        local before = reported
+        for count = 1, 30 do
+            props.Health = 20 + count + reported
+            frames(1)
+        end
+        t.ok(reported > before + 10, "the box followed the value, frame after frame: " .. (reported - before))
+        t.ok(dropdown.parts.open, "and the list is still open")
+        click(dropdown.source)
+        t.ok(not dropdown.parts.open)
+    end
+    -- so the order can be changed while the value runs, which is when "Changed first" is wanted
+    click(view.order.source)
+    props.Health = 1
+    frames(3)
+    click(view.order.items["Changed first"])
+    frames(3)
+    t.eq(view.order:Get(), "Changed first")
+    t.eq(view.shown_rows[1].record.name, "Health", "what changed last is on top")
+    click(view.order.source)
+    props.Health = 2
+    frames(3)
+    click(view.order.items["By name"])
+    frames(3)
+    t.eq(view.order:Get(), "By name")
+    -- typing in the box is the user doing something, and closes a list as it always did
+    click(view.order.source)
+    events.simulate(view.edit.source, "OnTextChanged", "5")
+    t.ok(not view.order.parts.open)
+    fake.react.SetText = real
+    props.Health = 87.5
+    frames(30)
     find_members("")
     t.eq(errors(), 0)
 end)
@@ -1454,7 +1507,7 @@ t.test("a member that cannot be typed has no box, and the line under the list sa
     frames(2)
     t.eq(label_text(view.edit_name), "Spot.X")
     t.eq(shows(view.edit), true)
-    t.eq(fake.last(view.edit.source, "SetHintText")[2]:ToString(), "a number, then Enter")
+    t.eq(view.edit.hint, "a number, then Enter")
     click(member_cell("Spot").line.arrow)
     frames(20)
     t.eq(member_cell("Spot.X"), nil, "the arrow closes it")
@@ -1609,17 +1662,17 @@ t.test("with room, the list and the details show side by side, and the divider c
     t.eq(math.floor(grown + 0.5), math.floor((total - 7) * share + 100 - 12 + 0.5))
     fake.mouse.X = -5000
     frames(1)
-    t.eq(math.floor(controls.wrap_width(view.split.Left) + 0.5), 290 - 12, "neither side gets narrower than it can be used at")
+    t.eq(math.floor(controls.wrap_width(view.split.Left) + 0.5), 310 - 12, "neither side gets narrower than it can be used at")
     fake.pressed = false
     frames(1)
     ui.Close()
     ui.SetPreview(true)
     view.split:SetShare(0.42)
     -- at the narrowest the sides get, every choice still shows whole in the header of its dropdown
-    window:SetSize(790, 440)
+    window:SetSize(830, 440)
     frames(3)
     t.eq(view.split:IsSingle(), false)
-    t.eq(math.floor(controls.wrap_width(view.split.Left) + 0.5), 290 - 12)
+    t.eq(math.floor(controls.wrap_width(view.split.Left) + 0.5), 310 - 12)
     for _, dropdown in ipairs({ view.kind, view.sort, view.range, view.show, view.order }) do
         local chosen = dropdown:Get()
         for choice in pairs(dropdown.items) do
@@ -1973,7 +2026,7 @@ t.test("a page built again starts clean, and a page with no game behind it only 
     local again = scope.new("again")
     scope.run(again, function()
         window = ui.Window({ title = "Wax", nav = "side", width = 620, height = 440 })
-        page = window:Page("Explorer", { icon = "folder-tree", scroll = false })
+        page = window:Page("Explorer", { icon = "scan-search", scroll = false })
         explorer.build(page)
         explorer.build(page)
     end)
@@ -1987,7 +2040,7 @@ t.test("a page built again starts clean, and a page with no game behind it only 
     local once_more = scope.new("once more")
     scope.run(once_more, function()
         window = ui.Window({ title = "Wax", nav = "side", width = 620, height = 440 })
-        page = window:Page("Explorer", { icon = "folder-tree", scroll = false })
+        page = window:Page("Explorer", { icon = "scan-search", scroll = false })
         explorer.build(page)
     end)
     view = explorer.view()
@@ -2019,7 +2072,7 @@ t.test("the filters are kept for the next session, and what was typed in a searc
     local first = scope.new("first session")
     scope.run(first, function()
         window = ui.Window({ title = "Wax", nav = "side", width = 620, height = 440 })
-        page = window:Page("Explorer", { icon = "folder-tree", scroll = false })
+        page = window:Page("Explorer", { icon = "scan-search", scroll = false })
         explorer.build(page)
     end)
     view = explorer.view()
@@ -2039,7 +2092,7 @@ t.test("the filters are kept for the next session, and what was typed in a searc
     local second = scope.new("second session")
     scope.run(second, function()
         window = ui.Window({ title = "Wax", nav = "side", width = 620, height = 440 })
-        page = window:Page("Explorer", { icon = "folder-tree", scroll = false })
+        page = window:Page("Explorer", { icon = "scan-search", scroll = false })
         later.build(page)
     end)
     local fresh = later.view()

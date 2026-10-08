@@ -211,6 +211,11 @@ local NAMED = {
             "D_FeatureLevels.Icon and D_DLCPackageData.DLCName"
     end,
     needs = function(entry) return needs_of(entry.key), "D_Talents, D_TalentTrees, D_TalentArchetypes and the flag tables" end,
+    xp = function(entry)
+        local recipe = recipe_of(entry.key)
+        return recipe and recipe.xp and recipe.xp[entry.set],
+            "D_ItemsStatic.CraftingExperience of what it takes, D_RecipeSets.ExperienceMultiplier, D_ProcessorRecipes.ExperienceMultiplier"
+    end,
 }
 for _, entry in ipairs(E.named) do
     local what = (entry.kind .. " " .. entry.key):gsub(" $", "")
@@ -263,6 +268,13 @@ for key in pairs(m.items) do
     if not item_seen[key] then differ("item", "item " .. key, "an entry", "nothing", "D_ItemsStatic and D_ItemTemplate") end
 end
 
+-- "character=52 crafting_bench=52": what one craft gives at each set, in the recipe's order of sets
+local function xp_line(recipe)
+    local out = {}
+    for position, id in ipairs(recipe.xp and recipe.sets or {}) do out[position] = id .. "=" .. math.tointeger(recipe.xp[id]) end
+    return table.concat(out, " ")
+end
+
 local recipe_seen = compare("recipe", E.recipe_fields, E.recipes, function(key)
     local number = m.recipe[key]
     local recipe = number and m.recipes[number]
@@ -270,8 +282,9 @@ local recipe_seen = compare("recipe", E.recipe_fields, E.recipes, function(key)
     return { recipe.row, amounts(recipe.inputs, "item"), amounts(recipe.tags_in, "tag"), amounts(recipe.res_in, "res"),
         amounts(recipe.outputs, "item"), amounts(recipe.res_out, "res"), joined(recipe.sets), joined(recipe.stations), recipe.mj,
         recipe.title or "", recipe.talent or "", recipe.char_flag or "", recipe.session or "", recipe.random, recipe.disabled,
-        recipe.hidden_only, recipe.level or "" }
+        recipe.hidden_only, recipe.level or "", xp_line(recipe) }
 end, {
+    xp = "D_ItemsStatic.CraftingExperience and D_IcarusResources.CraftingExperience of what it takes, ExperienceMultiplier of the set and the recipe",
     entry = "D_ProcessorRecipes", row = "D_ProcessorRecipes row name", inputs = "D_ProcessorRecipes.Inputs",
     tags_in = "D_ProcessorRecipes.QueryInputs", res_in = "D_ProcessorRecipes.ResourceInputs", outputs = "D_ProcessorRecipes.Outputs through D_ItemTemplate",
     res_out = "D_ProcessorRecipes.ResourceOutputs", sets = "D_ProcessorRecipes.RecipeSets",

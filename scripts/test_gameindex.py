@@ -2,6 +2,7 @@
 """Tests for gameindex.py: python scripts\\test_gameindex.py"""
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -623,6 +624,17 @@ class HandWrittenDump(Scratch):
         actor = by_name(chunks["script.Engine"]["types"])["Actor"]
         self.assertIn(["GetParent", [], "Actor", 'local result = obj:Call("GetParent")'], actor["funcs"])
         self.assertIn(["X", "number", "print(value.X)"], by_name(chunks["script.CoreUObject"]["types"])["Vector"]["props"])
+        # whole lists every type of the index, without what a compiler made; the default is the editor's narrower choice.
+        self.assertEqual(manifest["scope"], "what a mod meets")
+        self.assertNotIn("EAxis", listed)
+        whole, whole_manifest = gameindex.make_site(self.typed, self.wax, whole=True)
+        every = {name for name, _chunk, _kind in json.loads(whole["search.json"])["types"]}
+        self.assertEqual(whole_manifest["scope"], "every type")
+        self.assertTrue({"EAxis", "BigDamagePacket"} <= every and set(listed) <= every, sorted(every))
+        self.assertNotIn("UberGraphFrame", whole["chunks/content.Game.json"])
+        everything, everything_manifest = gameindex.make_site(self.typed, self.wax, everything=True)
+        self.assertEqual(everything_manifest["scope"], "everything")
+        self.assertIn("UberGraphFrame", everything["chunks/content.Game.json"])
 
     def test_site_chunks_stay_under_their_limit(self):
         files, manifest = gameindex.make_site(self.typed, self.wax, limit=3000)
@@ -784,6 +796,324 @@ class HandWrittenDump(Scratch):
         self.assertEqual(sorted(item["name"] for item in state["unknown"]),
                          ["D_Damage (its meta table):Level.RowName", "D_Loose:Hits.Never.Filled"])
 
+    def test_a_name_in_another_letter_case_is_found_whatever_made_the_index(self):
+        # As the engine finds it, and as Wax's own check in the game does: the mirror of the case in needs_test.lua.
+        text = NEEDS
+        for old, new in (('"/Script/Icarus.CharacterState", properties = { "Health", "Stamina" }, functions = { "IsAlive" }',
+                          '"/script/icarus.characterstate", properties = { "health", "STAMINA" }, functions = { "isalive" }'),
+                         ('struct = "/Script/Icarus.BigDamagePacket", fields = { "Amount", "Scale" }',
+                          'struct = "/Script/Icarus.bigdamagepacket", fields = { "amount", "SCALE" }'),
+                         ('enum = "/Script/Icarus.EAliveState", values = { Alive = 0, Dead = 1 }',
+                          'enum = "/Script/Icarus.ealivestate", values = { alive = 0, DEAD = 1 }'),
+                         ('fields = { "Amount", "Scale", "Causer" }, meta = { "Level.RowName" }',
+                          'fields = { "amount", "scale", "CAUSER" }, meta = { "level.rowname" }'),
+                         ('fields = { "Hits.At.X", "Hits.Never.Filled" }', 'fields = { "hits.at.x", "Hits.Never.Filled" }')):
+            self.assertIn(old, text)
+            text = text.replace(old, new)
+        folder = os.path.join(self.dir, "tables")
+        for name, data in TABLES.items():
+            self.put("tables/" + name, json.dumps(data))
+        parts = gameindex.read_needs(self.put("needs/cased.lua", text))
+        for source in ({"dump": "ObjectDump.txt"}, {"model": "abc-1"}):
+            with self.subTest(source):
+                state = gameindex.check_needs(parts, dict(self.index, source=source), gameindex.TableFiles(folder))[0]
+                self.assertEqual(state["missing"], [])
+                self.assertEqual([item["name"] for item in state["unknown"]], ["D_Loose:Hits.Never.Filled"])
+        # A name that is really another one is still gone, with the right one offered.
+        gone = gameindex.read_needs(self.put("needs/typo.lua", text.replace('"health"', '"healt"')))
+        missing = gameindex.check_needs(gone, self.index, gameindex.TableFiles(folder))[0]["missing"]
+        self.assertEqual([(item["name"], item["hint"]) for item in missing], [("/Script/Icarus.CharacterState:healt", "Health")])
+
+    def test_a_function_wax_refuses_says_so_in_the_editor(self):
+        # The list Wax's runtime goes by, in the files' spelling or the running game's: the editor says what the game will do.
+        listed = self.put("refused/oversized_functions.lua", "-- a list\nreturn {\n"
+                          '  ["/Script/Icarus.ActorState:sethealth "] = 14880,\n  ["/Script/Icarus.ActorState:SetHealth"] = 700,\n'
+                          '  ["/Script/Icarus.ActorState:BigCall"] = 9000,\n  ["/Game/Mods/BP_Thing.BP_Thing_C:Get Fog Scale"] = 600,\n'
+                          '  ["/Script/Icarus.Gone:Nothing"] = 600,\n}\n')
+        refused = gameindex.refused_calls(listed)
+        self.assertEqual(refused, {"/script/icarus.actorstate:sethealth": 14880, "/script/icarus.actorstate:bigcall": 9000,
+                                   "/game/mods/bp_thing.bp_thing_c:get fog scale": 600, "/script/icarus.gone:nothing": 600})
+        self.assertEqual(gameindex.refused_calls(os.path.join(self.dir, "refused", "none.lua")), {})
+        files, summary = self.types(refused=refused)
+        icarus = files["script/Icarus.lua"]
+        # No figure: the list's number was measured with local variables, which do not count.
+        self.assertIn("---@field SetHealth fun(self: ActorState, Amount: integer) Wax refuses this call from Lua.\n", icarus)
+        self.assertIn("---@field BigCall fun(self: ActorState, Packet: DamagePacket|{}, Tail: integer) Do not call from Lua: "
+                      "it needs 516 bytes and the call buffer holds 512.\n", icarus)
+        self.assertIn("---@field GetHealth fun(self: ActorState): integer\n", icarus)
+        self.assertIn('---@field ["Get Fog Scale"] fun(self: BP_Thing_C, Scale_Out: Vector|{}) Wax refuses this call from Lua.\n',
+                      files["content/Game.lua"])
+        self.assertEqual((summary["refused"], summary["do_not_call"]), (2, 1))
+        self.assertEqual(sorted(summary["refused_written"]), [("ActorState", "BigCall"), ("ActorState", "SetHealth"), ("BP_Thing_C", "Get Fog Scale")])
+        self.assertEqual(self.types()[1]["refused"], 0)
+        site, _manifest = gameindex.make_site(self.typed, self.wax, refused=refused)
+        state = next(entry for name, text in site.items() if name.startswith("chunks/") for entry in json.loads(text)["types"]
+                     if entry["name"] == "ActorState")
+        flags = {row[0]: (row[4] if len(row) > 4 else []) for row in state["funcs"]}
+        self.assertEqual((flags["SetHealth"], flags["BigCall"], flags["GetHealth"]), (["oversized"], ["oversized"], []))
+        self.assertEqual(gameindex.call_note({"flags": ["blueprint", "unsized"]}),
+                         "Do not call from Lua: the size of its parameters is not known for this build of the game.")
+        self.assertEqual(gameindex.call_note({"flags": ["blueprint"]}, True), "Wax refuses this call from Lua.")
+
+    def model_made(self):
+        """The fixture as a model would give it: names as the game's files spell them, not as the running game does."""
+        index = json.loads(json.dumps(self.typed))
+        index["source"] = {"model": "abc-1"}
+        classes = {record["path"]: record for record in index["classes"]}
+        state, thing = classes["/Script/Icarus.ActorState"], classes["/Game/Mods/BP_Thing.BP_Thing_C"]
+        by_name(state["properties"])["Health"]["name"] = "health"
+        by_name(state["functions"])["GetHealth"]["name"] = "Gethealth"
+        thing["name"] = "bp_thing_c"
+        state["properties"].append({"name": "seen_12", "type": "Int", "offset": 800})
+        index["classes"].append({"name": "BP_Late_C", "path": "/Game/Mods/BP_Late.BP_Late_C", "package": "/Game/Mods/BP_Late",
+                                 "native": False, "kind": "BlueprintGeneratedClass", "parent": "/Script/Icarus.IcarusCharacter",
+                                 "properties": [{"name": "maxhealth", "type": "Int", "offset": 1}, {"name": "Unheard", "type": "Int", "offset": 5}],
+                                 "functions": []})
+        return index
+
+    def test_names_take_the_running_games_spelling_when_a_dump_is_there(self):
+        dumped = json.loads(json.dumps(self.typed))
+        by_name(by_name(dumped["classes"])["BP_Thing_C"]["functions"])["UseItem"]["name"] = "UseItem "
+        spelling = gameindex.Spelling(dumped)
+        self.assertEqual((spelling.name("health"), spelling.name("SEEN_12"), spelling.name("Unheard_3"), spelling.name("bp_thing_c")),
+                         ("Health", "Seen_12", "Unheard_3", "BP_Thing_C"))
+        self.assertEqual(spelling.member("/game/mods/bp_thing.BP_THING_C", "useitem"), "UseItem ")
+        self.assertEqual(spelling.member("/Script/Icarus.ActorState", "UseItem"), "UseItem", "the space belongs to that class's member")
+        self.assertTrue(spelling.holds("/script/icarus.ACTORSTATE") and not spelling.holds("/Game/Mods/BP_Late.BP_Late_C"))
+        index = self.model_made()
+        plain = "".join(gameindex.make_types(index, self.wax)[0].values())
+        self.assertIn("---@field health integer\n", plain)
+        self.assertIn("---@class bp_thing_c : IcarusCharacter\n", plain)
+        files, summary = gameindex.make_types(index, self.wax, spelling=spelling)
+        text = "".join(files.values())
+        for line in ("---@field Health integer", "---@field GetHealth fun(self: ActorState): integer", "---@field Seen_12 integer",
+                     "---@class BP_Thing_C : IcarusCharacter", '---@field ["UseItem "] fun(self: BP_Thing_C, Target: Actor?): boolean',
+                     "---@class BP_Late_C : IcarusCharacter\n---@field MaxHealth integer\n---@field Unheard integer"):
+            self.assertIn(line + "\n", text)
+        self.assertNotIn("---@field health ", text)
+        self.assertEqual(summary["respelled_by"], dumped["source"]["written"])
+        self.assertIn("BP_Thing_C", files["classes.txt"].split())
+        self.assertEqual(by_name(index["classes"])["ActorState"]["properties"][0]["name"], "health", "the index handed in is not changed")
+        # An index made from a dump already spells as the running game did, and no dump means no respelling.
+        self.assertIs(gameindex.respelled(self.typed, spelling), self.typed)
+        self.assertIs(gameindex.respelled(index, None), index)
+        site, _ = gameindex.make_site(index, self.wax, spelling=spelling)
+        self.assertIn('"UseItem "', "".join(site.values()))
+        gameindex.write_index(self.typed, os.path.join(self.dir, "spelling", gameindex.DUMP_INDEX))
+        gameindex.write_index(index, os.path.join(self.dir, "spelling", "index.json"))
+        self.assertEqual(gameindex.dump_spelling(os.path.join(self.dir, "spelling", "index.json")).name("health"), "Health")
+        self.assertIsNone(gameindex.dump_spelling(os.path.join(self.dir, "no-such", "index.json")))
+
+    def test_two_classes_of_one_name_and_the_one_that_keeps_it(self):
+        index = json.loads(json.dumps(self.typed))
+        thing = by_name(index["classes"])["BP_Thing_C"]
+        index["classes"].append(dict(thing, path="/Game/Alpha/Proto/BP_Thing.BP_Thing_C", package="/Game/Alpha/Proto/BP_Thing"))
+        index["classes"].append(dict(thing, name="BP_thing_C", path="/Game/Mods/Low/BP_thing.BP_thing_C", package="/Game/Mods/Low/BP_thing"))
+        game = gameindex.Game(index)
+        names = gameindex.Names(game)
+        # By path the prototype comes first and takes the plain name; a name in another letter case is the same name.
+        self.assertEqual((names.of["/Game/Alpha/Proto/BP_Thing.BP_Thing_C"], names.of["/Game/Mods/BP_Thing.BP_Thing_C"],
+                          names.of["/Game/Mods/Low/BP_thing.BP_thing_C"]), ("BP_Thing_C", "BP_Thing_C__Mods", "BP_thing_C__Low"))
+        self.assertEqual(len({name.lower() for name in names.of.values()}), len(names.of))
+        summary = gameindex.make_types(index, self.wax)[1]
+        self.assertEqual(summary["same_named"], [("BP_Thing_C", "/Game/Alpha/Proto/BP_Thing.BP_Thing_C",
+                                                  ["/Game/Mods/BP_Thing.BP_Thing_C", "/Game/Mods/Low/BP_thing.BP_thing_C"])])
+        self.assertTrue(any(line.startswith("3 blueprint classes are called BP_Thing_C: /Game/Alpha/Proto/BP_Thing.BP_Thing_C keeps the name")
+                            and line.endswith("PLAIN_NAMES of scripts\\gameindex.py.") for line in gameindex.check_lines(summary)))
+        # A pair that is settled in the table: the listed class keeps the name, in the spelling given, and nothing is asked.
+        self.addCleanup(gameindex.PLAIN_NAMES.pop, "/game/mods/bp_thing.bp_thing_c", None)
+        gameindex.PLAIN_NAMES["/game/mods/bp_thing.bp_thing_c"] = "BP_Thing_C"
+        names = gameindex.Names(gameindex.Game(index))
+        self.assertEqual((names.of["/Game/Mods/BP_Thing.BP_Thing_C"], names.of["/Game/Alpha/Proto/BP_Thing.BP_Thing_C"]),
+                         ("BP_Thing_C", "BP_Thing_C__Proto"))
+        self.assertEqual(gameindex.make_types(index, self.wax)[1]["same_named"], [])
+        self.assertEqual(gameindex.make_types(self.typed, self.wax)[1]["same_named"], [])
+
+    def wax_with(self, name, **files):
+        folder = os.path.join(self.dir, name)
+        self.put(name + "/game.lua", WAX_GAME)
+        for file, text in files.items():
+            self.put("%s/%s.lua" % (name, file), text)
+        return folder
+
+    def test_what_wax_declares_is_read_from_every_types_file(self):
+        folder = self.wax_with("wax-read", character="\n".join([
+            "---@meta _", "", "---What Wax adds.", "---@class IcarusCharacter", "---@field Alive boolean? False once it is dead.",
+            '---@field ["Odd Name"] integer', "---@field private hidden integer", "---@field [string] any", "local Character = {}", "",
+            "---@param amount integer", "function Character:Heal(amount) end", "function Character.Kill() end", "",
+            "---@class WaxOptions: WaxBase, IcarusCharacter", "---@field like string", "", "---@class WaxSignal<F>", "",
+            "---@alias WaxColorName \"red\"|\"blue\"", "---@enum WaxMode", "local Other = {}", "function Other:NotAMember() end", ""]))
+        api = gameindex.WaxApi(folder)
+        character = api.classes["IcarusCharacter"]
+        self.assertEqual((character["file"], character["parents"]), ("character.lua", []))
+        self.assertEqual(sorted(character["members"]), ["Alive", "Heal", "Kill", "Odd Name", "hidden"])
+        self.assertEqual((api.classes["WaxOptions"]["parents"], sorted(api.classes["WaxOptions"]["members"])), (["WaxBase", "IcarusCharacter"], ["like"]))
+        self.assertEqual(api.classes["WaxSignal"]["members"], {})
+        self.assertEqual(api.other, {"WaxColorName", "WaxMode"})
+        self.assertEqual(api.instance_members(), {"Name", "Parent", "GetParent", "GetChildren"})
+        self.assertEqual(gameindex.instance_api(folder), api.instance_members())
+        self.assertEqual(api.above("WaxOptions"), ["WaxOptions", "IcarusCharacter"])
+        self.assertEqual(gameindex.instance_api(os.path.join(self.dir, "no-wax")), set(gameindex.INSTANCE_MEMBERS))
+        self.assertEqual(gameindex.declared_names(folder), {"WaxInstance", "WaxGame", "IcarusCharacter", "WaxOptions", "WaxSignal",
+                                                            "WaxColorName", "WaxMode"})
+
+    def test_a_types_file_that_adds_to_a_game_class_does_not_rename_it(self):
+        plain_files, plain = self.types()
+        folder = self.wax_with("wax-adds", character="---@meta _\n\n---@class IcarusCharacter\n---@field Alive boolean\n"
+                               "---@field Health integer\nlocal Character = {}\n\nfunction Character:Heal(amount) end\n",
+                               other="---@meta _\n\n---@alias Vector table\n\n---@class DamagePacket\n---@field Wax integer\n")
+        files, summary = gameindex.make_types(self.typed, folder)
+        self.assertIn("---@class IcarusCharacter : Pawn\n", files["script/Icarus.lua"])
+        self.assertEqual(files["classes.txt"], plain_files["classes.txt"])
+        self.assertIn("---@class BP_Thing_C : IcarusCharacter\n", files["content/Game.lua"])
+        self.assertEqual(summary["wax_adds_to"], {"IcarusCharacter": "/Script/Icarus.IcarusCharacter"})
+        self.assertEqual(plain["wax_adds_to"], {})
+        # An alias, and a class Wax declares where the game has a struct of that name, stay Wax's: the game's is told apart.
+        self.assertIn("---@class Vector__CoreUObject\n", files["script/CoreUObject.lua"])
+        self.assertIn("---@class DamagePacket__Icarus\n", files["script/Icarus.lua"])
+        self.assertNotIn("---@class DamagePacket\n", files["script/Icarus.lua"])
+
+    def test_a_wax_name_in_front_of_a_reflected_member_is_a_check_line(self):
+        index = json.loads(json.dumps(self.typed))
+        classes = by_name(index["classes"])
+        classes["Actor"]["properties"].append({"name": "Owner", "type": "Object", "ref": "/Script/Engine.Actor", "offset": 8})
+        classes["Pawn"]["functions"].append({"name": "heal", "params": [], "flags": ["native"]})
+        classes["BP_Thing_C"]["properties"].append({"name": "Health", "type": "Int", "offset": 4})
+        classes["ActorState"]["properties"].append({"name": "Owner", "type": "Int", "offset": 4})
+        folder = self.wax_with("wax-clash", character="---@meta _\n\n---@class IcarusCharacter\n---@field Alive boolean\n"
+                               "---@field Health integer\n---@field Owner WaxInstance\nlocal Character = {}\n\n"
+                               "function Character:Heal(amount) end\n",
+                               me="---@meta _\n\n---@class WaxExtra\n---@field Mode integer\n---@field Free integer\n\n"
+                                  "---@class WaxMe : BP_Thing_C, WaxExtra\n---@field Seen integer\n\n"
+                                  "---@class WaxLoose\n---@field Health integer\n")
+        files, summary = gameindex.make_types(index, folder)
+        thing, actor, pawn = "/Game/Mods/BP_Thing.BP_Thing_C", "/Script/Engine.Actor", "/Script/Engine.Pawn"
+        own = [row for row in summary["wax_clashes"] if row[1] != "WaxInstance"]
+        self.assertEqual(own, [
+            # above the class, with another letter case, and in a class built on it
+            ("character.lua", "IcarusCharacter", "Heal", pawn, "heal"),
+            ("character.lua", "IcarusCharacter", "Health", thing, "Health"),
+            ("character.lua", "IcarusCharacter", "Owner", actor, "Owner"),
+            # a Wax class built on a game class, itself and the Wax classes above it
+            ("me.lua", "WaxExtra", "Mode", thing, "Mode"),
+            ("me.lua", "WaxMe", "Seen", thing, "Seen"),
+        ])
+        every = [row[2:] for row in summary["wax_clashes"] if row[1] == "WaxInstance"]
+        self.assertIn(("GetParent", actor, "GetParent"), every)
+        self.assertIn(("Name", "/Game/Mods/BP_Thing.BP_Thing_C", "Name"), every)
+        # Name and Parent are the ruling's two; every other clash is open until it is on the list of accepted ones.
+        self.assertEqual(sorted(row[2] for row in summary["wax_clashes_open"]), ["GetParent", "Heal", "Health", "Mode", "Owner", "Seen"])
+        lines = gameindex.check_lines(summary)
+        self.assertIn("wax\\types\\character.lua: IcarusCharacter.Owner replaces the game's Actor.Owner (reach the game's with :Call / :Get)", lines)
+        self.assertIn("wax\\types\\game.lua: WaxInstance.GetParent replaces the game's Actor.GetParent (reach the game's with :Call / :Get)", lines)
+        self.assertFalse([line for line in lines if ".Name replaces" in line or "ActorState.Owner" in line])
+        self.addCleanup(gameindex.ACCEPTED_CLASHES.discard, ("IcarusCharacter", "Owner", actor))
+        gameindex.ACCEPTED_CLASHES.add(("IcarusCharacter", "Owner", actor))
+        again = gameindex.make_types(index, folder)[1]
+        self.assertNotIn("Owner", [row[2] for row in again["wax_clashes_open"]])
+        self.assertIn("wax\\types\\character.lua: IcarusCharacter.Owner replaces the game's Actor.Owner (reach the game's with :Call / :Get)",
+                      gameindex.check_lines(again), "an accepted clash is still said")
+        # What Wax answers on a class is not declared again on that class or on one built on it; elsewhere it stays.
+        mods = files["content/Game.lua"]
+        block = mods[mods.index("---@class BP_Thing_C : IcarusCharacter\n"):]
+        block = block[:block.index("\n\n")] if "\n\n" in block else block
+        self.assertNotIn("---@field Health ", block)
+        self.assertIn("---@field Mode E_Mode\n", block)
+        self.assertIn("---@field Health integer\n", files["script/Icarus.lua"])
+        self.assertIn("---@field Owner integer\n", files["script/Icarus.lua"])
+        # A class above keeps its own member: there Wax answers nothing, and below it Wax's declaration comes first.
+        self.assertIn("---@field Owner Actor\n", files["script/Engine.lua"].split("---@class Actor ")[1].split("---@class ")[0])
+
+    def test_a_game_class_also_extends_the_wax_class_that_lists_what_wax_gives_it(self):
+        thing, pawn = "/Game/Mods/BP_Thing.BP_Thing_C", "/Script/Engine.Pawn"
+        character, spectator = "/Script/Icarus.IcarusCharacter", "/Script/Icarus.IcarusSpectatorPawn"
+        gone, controller = "/Script/Icarus.Gone", "/Script/Engine.Controller"
+        # With the table as shipped and no Wax class of those names, nothing is added and it is said.
+        plain = self.types()[1]
+        self.assertEqual(plain["also_extends"], {})
+        self.assertIn((character, "WaxCharacter", "wax\\types declares no such class"), plain["also_extends_unwritten"])
+        self.assertIn(("/Script/Icarus.Inventory", "WaxInventory", "the index has no such class"), plain["also_extends_unwritten"])
+        index = json.loads(json.dumps(self.typed))
+        classes = by_name(index["classes"])
+        classes["Pawn"]["functions"].append({"name": "getstat", "params": [], "flags": ["native"]})
+        classes["BP_Thing_C"]["properties"].append({"name": "Health", "type": "Int", "offset": 4})
+        classes["IcarusSpectatorPawn"]["properties"].append({"name": "Backpack", "type": "Int", "offset": 4})
+        folder = self.wax_with("wax-also", character="\n".join([
+            "---@meta _", "", "---@class WaxCharacterStats", "---@field Stats table<string, integer>?", "local Stats = {}", "",
+            "function Stats:GetStat(name) end", "", "---@class WaxCharacter : WaxCharacterStats", "---@field Health integer?",
+            "---@field Level integer?", "", "---@class WaxPlayerItems", "---@field Backpack WaxInstance?", "",
+            "---@class WaxPlayerCharacter : WaxCharacter, WaxPlayerItems", "---@field Food integer?", "",
+            "---@class WaxMe : BP_Thing_C, WaxPlayerCharacter", "---@field Exists boolean", ""]))
+        table = dict(gameindex.ALSO_EXTENDS)
+        self.addCleanup(lambda: (gameindex.ALSO_EXTENDS.clear(), gameindex.ALSO_EXTENDS.update(table)))
+        gameindex.ALSO_EXTENDS.clear()
+        gameindex.ALSO_EXTENDS.update({character: ("WaxPlayerCharacter", "WaxPlayerItems"), spectator: ("WaxPlayerItems", "WaxNotThere"),
+                                       gone: ("WaxCharacter",), controller: ("WaxMe",)})
+        files, summary = gameindex.make_types(index, folder)
+        # Wax's class comes before the game's parent; one that is reached through another listed one is not repeated.
+        self.assertIn("---@class IcarusCharacter : WaxPlayerCharacter, Pawn\n", files["script/Icarus.lua"])
+        self.assertIn("---@class IcarusSpectatorPawn : WaxPlayerItems, Pawn\n", files["script/Icarus.lua"])
+        self.assertIn("---@class BP_Thing_C : IcarusCharacter\n", files["content/Game.lua"])
+        self.assertIn("---@class Controller : Actor\n", files["script/Engine.lua"])
+        self.assertEqual(summary["also_extends"], {"IcarusCharacter": ["WaxPlayerCharacter"], "IcarusSpectatorPawn": ["WaxPlayerItems"]})
+        self.assertEqual(summary["also_extends_unwritten"], [
+            (spectator, "WaxNotThere", "wax\\types declares no such class"), (gone, "WaxCharacter", "the index has no such class"),
+            (controller, "WaxMe", "it is built on a game class itself")])
+        lines = gameindex.check_lines(summary)
+        self.assertIn("scripts\\gameindex.py: ALSO_EXTENDS gives Controller what WaxMe lists, and that was not written: "
+                      "it is built on a game class itself.", lines)
+        # A reflected member named like one of those: in a class built on it, above it in another letter case, on the class itself.
+        own = [row for row in summary["wax_clashes"] if row[1] != "WaxInstance"]
+        self.assertEqual(own, [
+            ("character.lua", "WaxCharacter", "Health", thing, "Health"),
+            ("character.lua", "WaxCharacterStats", "GetStat", pawn, "getstat"),
+            ("character.lua", "WaxPlayerItems", "Backpack", spectator, "Backpack"),
+        ])
+        self.assertEqual([row for row in own if row not in summary["wax_clashes_open"]], [])
+        self.assertIn("wax\\types\\character.lua: WaxCharacter.Health replaces the game's BP_Thing_C.Health "
+                      "(reach the game's with :Call / :Get)", lines)
+        # What Wax answers there is not declared again, so the editor finds Wax's; a class that is not under it keeps its own.
+        mods = files["content/Game.lua"]
+        block = mods[mods.index("---@class BP_Thing_C : IcarusCharacter\n"):].split("\n\n")[0]
+        self.assertNotIn("---@field Health ", block)
+        self.assertIn("---@field Mode E_Mode\n", block + "\n")
+        icarus = files["script/Icarus.lua"]
+        self.assertNotIn("---@field Backpack ", icarus[icarus.index("---@class IcarusSpectatorPawn "):].split("\n\n")[0])
+        self.assertIn("---@field Health integer\n", icarus[icarus.index("---@class ActorState "):].split("\n\n")[0] + "\n")
+        self.assertIn("---@field getstat fun(self: Pawn)\n", files["script/Engine.lua"])
+        # The game browser's example reaches the game's own member the long way, as it does for every name Wax answers.
+        site, manifest = gameindex.make_site(index, folder)
+        chunks = {c["id"]: json.loads(site[c["file"]]) for c in manifest["chunks"]}
+        self.assertIn(["Health", "integer", 'print(obj:Get("Health"))'], by_name(chunks["content.Game"]["types"])["BP_Thing_C"]["props"])
+        self.assertIn(["Health", "integer", "print(obj.Health)"], by_name(chunks["script.Icarus"]["types"])["ActorState"]["props"])
+
+    def test_a_member_of_game_that_could_not_be_compared_is_said(self):
+        self.assertEqual(self.types()[1]["entry_points_unread"], [])
+        index = json.loads(json.dumps(self.typed))
+        engine = by_name(index["classes"])["Engine"]
+        engine["properties"][0]["name"] = "gameviewport"
+        cased = gameindex.make_types(index, self.wax)[1]
+        self.assertEqual((cased["entry_points_unread"], len(cased["entry_points"])), ([], 8))
+        engine["properties"] = []
+        summary = gameindex.make_types(index, self.wax)[1]
+        self.assertEqual(summary["entry_points_unread"], ["Viewport", "World", "GameInstance", "GameState", "GameMode", "LocalPlayer", "Character"])
+        self.assertEqual([row[0] for row in summary["entry_points"]], ["Engine"])
+        self.assertIn("wax\\types\\game.lua: game.Character was not compared, the index does not hold the properties Wax reads to reach it.",
+                      gameindex.check_lines(summary))
+        game = gameindex.Game(self.typed)
+        self.assertEqual(game.property("/Script/Icarus.CharacterState", "health")["name"], "Health")
+        twins = json.loads(json.dumps(self.typed))
+        by_name(twins["classes"])["CharacterState"]["properties"].append({"name": "health", "type": "Float", "offset": 2})
+        self.assertEqual(gameindex.Game(twins).property("/Script/Icarus.CharacterState", "Health")["type"], "Int", "the exact name first")
+
+    def test_help_says_what_the_index_is_made_from(self):
+        done = subprocess.run([sys.executable, os.path.join(HERE, "gameindex.py"), "--help"], capture_output=True, text=True)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        said = " ".join(done.stdout.split())
+        self.assertIn("written from the model of the game (scripts\\gamemodel) or from a UE4SS object dump", said)
+        self.assertNotIn("read from the UE4SS object dump", said)
+        self.assertEqual(gameindex.__doc__.splitlines()[0][:27], "Index of the game's classes")
+
     def test_needs_command_line(self):
         script = os.path.join(HERE, "gameindex.py")
         index = os.path.join(self.dir, "needs-cli", "index.json")
@@ -818,7 +1148,10 @@ class HandWrittenDump(Scratch):
         index = os.path.join(out, "index.json")
         self.assertIn("files", run("types", "--index", index, "--out", os.path.join(out, "types"), "--wax-types", self.wax))
         self.assertTrue(os.path.isfile(os.path.join(out, "types", "script", "Icarus.lua")))
-        self.assertIn("chunks", run("site", "--index", index, "--out", os.path.join(out, "site"), "--wax-types", self.wax))
+        self.assertIn("(what a mod meets)", run("site", "--met", "--index", index, "--out", os.path.join(out, "site"), "--wax-types", self.wax))
+        site = run("site", "--index", index, "--out", os.path.join(out, "site"), "--wax-types", self.wax)
+        self.assertIn("chunks", site)
+        self.assertIn("(every type)", site)
         self.assertTrue(os.path.isfile(os.path.join(out, "site", "manifest.json")))
         self.assertIn("ActorState.Health: integer", run("find", "Health", "--index", index))
         self.assertIn("0 changed", run("diff", index, index))
@@ -903,6 +1236,8 @@ class RealDump(Scratch):
         self.assertIn("---@field SetScrollbarPadding fun(self: ScrollBox, NewScrollbarPadding: Margin|{})\n", text)
         self.assertIn(("Character", "IcarusPlayerCharacter?"), [row[:2] for row in summary["entry_points"]])
         self.assertEqual(summary["entry_points_differ"], [], "wax\\types\\game.lua and the dump disagree about a member of game")
+        self.assertEqual(summary["entry_points_unread"], [], "a member of game was not compared: the dump does not hold the "
+                         "properties Wax reads to reach it")
         site, manifest = gameindex.make_site(self.index)
         self.assertLessEqual(max(c["bytes"] for c in manifest["chunks"]), gameindex.SITE_CHUNK_LIMIT)
         self.assertLess(manifest["search"]["bytes"], 400 * 1024)
@@ -957,12 +1292,155 @@ class RealDump(Scratch):
             "---@type string",
             "local health = character.ActorState.Health",
             "print(health)",
+            # what Wax gives a character and a creature has its own type too, not the `any` of an unlisted member
+            "---@type string",
+            "local given = character.Health",
+            "---@type integer",
+            "local kind = assert(game.Creatures:GetNearest()).Kind",
+            "print(given, kind)",
             "",
         ]))
         found = check()
-        self.assertIn("2 problems found", found)
+        self.assertIn("4 problems found", found)
         self.assertIn("SetHealth", found)
         self.assertNotIn("NotListed`", found)
+
+
+def stored_model():
+    """The model of the installed build, when scripts\\gamemodel is here and has made one: (its folder's name, its file)."""
+    try:
+        from gamemodel import model
+    except ImportError:
+        return None
+    path = model.find()
+    return (os.path.basename(os.path.dirname(path)), path) if path else None
+
+
+FIELD_LINE = re.compile(r'^---@field (?:\["((?:[^"\\]|\\.)*)"\]|(\w+)) (.*)$')
+
+
+def written_classes(files):
+    """{editor type name: {member name: the rest of its line}} of the generated definitions."""
+    found, current = {}, None
+    for name, text in files.items():
+        if not name.endswith(".lua"):
+            continue
+        for line in text.splitlines():
+            if line.startswith("---@class "):
+                current = found.setdefault(line.split()[1], {})
+            elif line.startswith("---@alias "):
+                current = None
+            elif current is not None:
+                field = FIELD_LINE.match(line)
+                if field:
+                    current[field.group(1).replace('\\"', '"').replace("\\\\", "\\") if field.group(1) is not None else field.group(2)] = field.group(3)
+    return found
+
+
+@unittest.skipUnless(os.path.isfile(gameindex.INDEX), f"no index at {gameindex.INDEX} (python scripts\\gameindex.py build)")
+class Stored(unittest.TestCase):
+    """What is on disk: the index, the editor's definitions made from it, and the lists Wax's runtime reads."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.index = gameindex.load_index(gameindex.INDEX)
+        cls.files, cls.summary = gameindex.types_of()
+
+    def test_the_definitions_on_disk_are_the_ones_the_index_gives(self):
+        changed = []
+        for name, text in self.files.items():
+            path = os.path.join(gameindex.TYPES_DIR, *name.split("/"))
+            if not os.path.isfile(path):
+                changed.append(name + " is not there")
+                continue
+            with open(path, encoding="utf-8", newline="") as file:
+                if file.read() != text:
+                    changed.append(name + " differs")
+        self.assertEqual(changed[:5], [], "%d of %d files of wax\\types\\icarus are not what the index gives. Run: "
+                         "python scripts\\gameindex.py types" % (len(changed), len(self.files)))
+        kept = {os.path.normcase(os.path.join(gameindex.TYPES_DIR, *name.split("/"))) for name in self.files}
+        extra = []
+        for folder, _folders, names in os.walk(gameindex.TYPES_DIR):
+            for name in names:
+                path = os.path.join(folder, name)
+                with open(path, encoding="utf-8", errors="replace") as file:
+                    if os.path.normcase(path) not in kept and gameindex.GENERATED_BY in file.read(400):
+                        extra.append(path)
+        self.assertEqual(extra, [], "generated files of an earlier run are still there")
+
+    def test_the_library_list_on_disk_is_the_one_the_index_gives(self):
+        with open(gameindex.LIBRARY_LIST, encoding="utf-8", newline="") as file:
+            self.assertEqual(file.read(), gameindex.libraries_text(self.summary["libraries"]),
+                             "wax\\runtime\\data\\libraries.lua is not what the index gives. Run: python scripts\\gameindex.py types")
+        self.assertGreater(len(self.summary["libraries"]), 400)
+
+    def test_the_index_is_made_from_the_model_of_the_installed_build(self):
+        model = stored_model()
+        if model is None:
+            self.skipTest("no model of the installed build to compare with")
+        self.assertEqual(self.index["source"].get("model"), model[0], "the index was made from a dump, or from the model of "
+                         "another build, while a model of the installed build is there. Run: python scripts\\gameindex.py build")
+
+    def test_every_function_wax_refuses_carries_a_note(self):
+        refused = gameindex.refused_calls()
+        if not refused:
+            self.skipTest("no list at %s" % gameindex.REFUSED_LIST)
+        classes = written_classes(self.files)
+        self.assertGreater(len(self.summary["refused_written"]), 900)
+        bare = [(own, name) for own, name in self.summary["refused_written"]
+                if "Do not call from Lua" not in classes[own][name] and not classes[own][name].endswith(gameindex.REFUSED_NOTE)]
+        self.assertEqual(bare, [], "functions Wax's runtime refuses are written as plain callable ones")
+        self.assertEqual(self.summary["do_not_call"] + self.summary["refused"],
+                         sum(1 for members in classes.values() for text in members.values()
+                             if "Do not call from Lua:" in text or text.endswith(gameindex.REFUSED_NOTE)))
+
+    def test_no_name_differs_from_the_running_games_spelling_by_case_or_an_end_space(self):
+        path = os.path.join(gameindex.INDEX_DIR, gameindex.DUMP_INDEX)
+        if not os.path.isfile(path) or "dump" in self.index["source"]:
+            self.skipTest("no index made from an object dump beside one made from the model")
+        with open(path, encoding="utf-8") as file:
+            dumped = json.load(file)
+        game = gameindex.Game(gameindex.respelled(self.index, gameindex.dump_spelling(gameindex.INDEX)))
+        names = gameindex.names_for(game, gameindex.WaxApi(gameindex.WAX_TYPES))
+        mine = {found.lower(): name for found, name in names.of.items()}
+        classes = written_classes(self.files)
+        wrong, compared = [], 0
+        for group, keys in (("classes", ("properties", "functions")), ("structs", ("fields",))):
+            for record in dumped[group]:
+                written = classes.get(mine.get(record["path"].lower()))
+                if written is None:
+                    continue
+                folded = {name.strip().lower(): name for name in written}
+                for key in keys:
+                    for item in record[key]:
+                        found = folded.get(item["name"].strip().lower())
+                        if found is not None:
+                            compared += 1
+                            if found != item["name"]:
+                                wrong.append("%s: %r is %r in the running game" % (record["path"], found, item["name"]))
+        self.assertGreater(compared, 50000)
+        self.assertEqual(wrong[:5], [], "%d names in wax\\types\\icarus are spelled otherwise than the running game spells them, "
+                         "and Wax looks members up by the running game's spelling" % len(wrong))
+        for one in ("UMG_InventoryItem_C", "UMG_MainMenu_C"):
+            self.assertTrue(any(name.endswith(" ") for name in classes[one]), one + " has a member whose name ends in a space")
+
+    def test_no_wax_name_stands_in_front_of_a_reflected_member_unseen(self):
+        # The ruling: no Wax name replaces a reflected member of the game, beyond Name and Parent.
+        self.assertEqual(self.summary["wax_clashes_open"], [], "a Wax name replaces a reflected member of the game. Rename it, "
+                         "or put it on ACCEPTED_CLASHES in scripts\\gameindex.py with the owner's word")
+        found = {(name, member, path) for _file, name, member, path, _theirs in self.summary["wax_clashes"]}
+        self.assertEqual(sorted(gameindex.ACCEPTED_CLASHES - found), [], "accepted clashes that are no longer clashes: take them off the list")
+
+    def test_what_types_would_ask_a_person_to_look_at(self):
+        self.assertEqual(self.summary["same_named"], [], "blueprint classes share a name and PLAIN_NAMES does not say which keeps it")
+        self.assertEqual(self.summary["entry_points_unread"], [])
+        self.assertEqual(self.summary["entry_points_differ"], [])
+        self.assertEqual(self.summary["also_extends_unwritten"], [], "a game class does not extend the Wax class that lists "
+                         "what Wax gives it: see ALSO_EXTENDS in scripts\\gameindex.py")
+        names = written_classes(self.files)
+        self.assertIn("TempBrush", names["UMG_PlayerName_C"], "the HUD's name tag, not the space station prototype's")
+        self.assertIn("UMG_Spawnblocker_C", names)
+        self.assertNotIn("UMG_SpawnBlocker_C", names, "a spelling the running game never shows")
 
 
 if __name__ == "__main__":

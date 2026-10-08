@@ -8,7 +8,7 @@ local LEVEL = { "RequiredFeatureLevel.RowName" }
 -- rows: "all" (the default), "named" (only rows other tables name), "request" (read when asked), "names" (row names only)
 local LISTS = {
     { table = "ItemsStatic", stage = 1, fields = { "Itemable.RowName", "Processing.RowName",
-        "Manual_Tags.GameplayTags.TagName", "Generated_Tags.GameplayTags.TagName" } },
+        "Manual_Tags.GameplayTags.TagName", "Generated_Tags.GameplayTags.TagName" }, maybe = { "CraftingExperience" } },
     { table = "Itemable", stage = 1, fields = { "DisplayName", "Icon", "Weight", "MaxStack" } },
     { table = "ItemTemplate", stage = 1, fields = { "ItemStaticData.RowName", "ItemCustomStats.Stat.Value", "ItemCustomStats.Value" } },
     { table = "FarmingSeeds", stage = 1, fields = { "Itemable.RowName" } },
@@ -23,12 +23,13 @@ local LISTS = {
         "Outputs.Count", "QueryInputs.Query.RowName", "QueryInputs.Count", "ResourceInputs.Type.Value",
         "ResourceInputs.RequiredUnits", "ResourceOutputs.Type.Value", "ResourceOutputs.RequiredUnits", "RecipeSets.RowName",
         "Requirement.RowName", "CharacterRequirement.RowName", "SessionRequirement.RowName", "RequiredMillijoules",
-        "bSelectOutputItemRandomly", "bForceDisableRecipe", "ItemIconOverride.ItemStaticData.RowName" } },
-    { table = "RecipeSets", stage = 2, fields = { "RecipeSetName", "RecipeSetIcon" } },
+        "bSelectOutputItemRandomly", "bForceDisableRecipe", "ItemIconOverride.ItemStaticData.RowName" },
+        maybe = { "ExperienceMultiplier" } },
+    { table = "RecipeSets", stage = 2, fields = { "RecipeSetName", "RecipeSetIcon" }, maybe = { "ExperienceMultiplier" } },
     { table = "Processing", stage = 2, fields = { "DefaultRecipeSet.RowName", "MaxMilliwattage", "AutoSelectRecipe" } },
     { table = "CraftingTags", stage = 2, fields = { "TagName", "TagIcon", "Query.RowName" } },
     { table = "TagQueries", stage = 2, rows = "named", fields = QUERY, from = { { "CraftingTags", "Query.RowName" } } },
-    { table = "IcarusResources", stage = 2, fields = { "DisplayName", "Units", "Recipe_Icon" } },
+    { table = "IcarusResources", stage = 2, fields = { "DisplayName", "Units", "Recipe_Icon" }, maybe = { "CraftingExperience" } },
     { table = "FieldGuideMetaData", stage = 2, fields = { "Item.RowName", "Description1", "Description2", "Description3" } },
     { table = "WorkshopItems", stage = 2, fields = { "Item.RowName" } },
     { table = "FieldGuideRedirect", stage = 2, fields = { "DisplayItem.RowName", "HiddenItems.RowName" } },
@@ -81,15 +82,6 @@ local LISTS = {
 
 source.STAGES = 3
 
-local FIELDS, DETAIL = {}, {}
-for _, entry in ipairs(LISTS) do
-    if entry.stage > source.STAGES then
-        DETAIL[entry.table] = entry.fields
-    elseif not entry.meta then
-        FIELDS[entry.table] = entry.fields
-    end
-end
-
 function source.fold(name)
     if type(name) ~= "string" then return nil end
     return name:lower()
@@ -107,13 +99,15 @@ end
 
 local ref = source.ref
 
--- The lists of the load stages. With `asked`, those of stage 4 as well.
+-- The lists of the load stages. With `asked`, those of stage 4 as well. maybe: fields read only while the game has them.
 function source.lists(asked)
     local out = {}
     for _, entry in ipairs(LISTS) do
         if asked or entry.stage <= source.STAGES then
-            local copy = { table = entry.table, stage = entry.stage, rows = entry.rows or "all", meta = entry.meta or false, fields = {} }
+            local copy = { table = entry.table, stage = entry.stage, rows = entry.rows or "all", meta = entry.meta or false, fields = {},
+                maybe = {} }
             for position, field in ipairs(entry.fields) do copy.fields[position] = field end
+            for position, field in ipairs(entry.maybe or {}) do copy.maybe[position] = field end
             out[#out + 1] = copy
         end
     end
@@ -128,7 +122,7 @@ local function gather(value, parts, depth, out)
         if inner ~= nil then out[#out + 1] = inner end
         return
     end
-    if type(inner) ~= "table" then return end
+    if type(inner) ~= "table" or next(inner) == nil then return end
     if #inner > 0 then
         for position = 1, #inner do gather(inner[position], parts, depth + 1, out) end
     else
@@ -145,10 +139,20 @@ function source.values(row, path)
     return out
 end
 
-function source.new(provider)
+-- lists: a list like LISTS to read in its place. An entry's maybe = { fields } are read only while the provider serves them.
+function source.new(provider, lists)
+    lists = lists or LISTS
     local self = { problems = {}, broken = {} }
     local tables, names, index, rows, whole, levels, noted, checked = {}, {}, {}, {}, {}, {}, {}, {}
-    local details, asked = {}, {}
+    local details, asked, ready, serving = {}, {}, {}, {}
+    local FIELDS, DETAIL = {}, {}
+    for _, entry in ipairs(lists) do
+        if entry.stage > source.STAGES then
+            DETAIL[entry.table] = entry
+        elseif not entry.meta then
+            FIELDS[entry.table] = entry
+        end
+    end
 
     -- A table is broken when it is missing or lost a field. A MetaTable that fails does not break its table.
     local function problem(name, field, message, beside)
@@ -223,6 +227,36 @@ function source.new(provider)
         return good
     end
 
+    -- What one list entry reads: its usable fields, and each maybe field the provider gave when it was tried alone.
+    local function fields_of(opened, name, entry, beside)
+        local known = ready[entry]
+        if known then return known end
+        local good = usable(opened, name, entry.fields, beside)
+        local first = entry.maybe and self.names(name)[1]
+        if first then
+            local all = {}
+            for position = 1, #good do all[position] = good[position] end
+            for _, field in ipairs(entry.maybe) do
+                if pcall(opened.Row, opened, first, { field }) then
+                    all[#all + 1] = field
+                    serving[name .. "." .. field] = true
+                end
+            end
+            good = all
+        end
+        ready[entry] = good
+        return good
+    end
+
+    -- True when a maybe field of a table is being read.
+    function self.serves(name, field)
+        for _, entry in ipairs({ DETAIL[name] or false, FIELDS[name] or false }) do
+            local opened = entry and entry.maybe and open(name)
+            if opened then fields_of(opened, name, entry, entry == DETAIL[name]) end
+        end
+        return serving[name .. "." .. field] == true
+    end
+
     local function keep(name, got)
         local store = rows[name]
         if not store then
@@ -232,11 +266,17 @@ function source.new(provider)
         for row, value in pairs(got) do store[fold(row)] = value end
     end
 
-    function self.load(name, fields, wanted, budget)
+    -- entry: the list entry the fields are from, when read() asks.
+    function self.load(name, fields, wanted, budget, entry)
         local opened = open(name)
         if not opened then return {} end
         self.names(name)
-        fields = usable(opened, name, fields or FIELDS[name] or {})
+        if not fields then entry = FIELDS[name] end
+        if entry then
+            fields = fields_of(opened, name, entry)
+        else
+            fields = usable(opened, name, fields or {})
+        end
         local ok, got = pcall(opened.Load, opened, { fields = fields, names = wanted, budget = budget })
         if not ok or type(got) ~= "table" then
             problem(name, nil, got)
@@ -256,7 +296,8 @@ function source.new(provider)
         if whole[name] or not self.has(name, row) then return nil end
         local opened = open(name)
         if not opened then return nil end
-        local fields = usable(opened, name, FIELDS[name] or {})
+        local entry = FIELDS[name]
+        local fields = entry and fields_of(opened, name, entry) or {}
         local ok, got = pcall(opened.Row, opened, row, fields)
         if not ok then
             problem(name, nil, got)
@@ -283,9 +324,12 @@ function source.new(provider)
         if found ~= nil then return found or nil end
         local opened = open(name)
         if opened and self.has(name, row) then
-            if not asked[name] then asked[name] = usable(opened, name, DETAIL[name], true) end
-            local ok, got = pcall(opened.Row, opened, row, asked[name])
-            if ok then found = got else problem(name, nil, got, true) end
+            if not asked[name] then asked[name] = fields_of(opened, name, DETAIL[name], true) end
+            -- an entry of maybe fields alone, all refused, reads nothing
+            if #asked[name] > 0 or #DETAIL[name].fields > 0 then
+                local ok, got = pcall(opened.Row, opened, row, asked[name])
+                if ok then found = got else problem(name, nil, got, true) end
+            end
         end
         store[key] = found or false
         return found or nil
@@ -315,7 +359,7 @@ function source.new(provider)
 
     function self.stamps()
         local seen, parts = {}, {}
-        for _, entry in ipairs(LISTS) do
+        for _, entry in ipairs(lists) do
             if entry.stage <= source.STAGES and not seen[entry.table] then
                 seen[entry.table] = true
                 parts[#parts + 1] = entry.table .. "=" .. self.stamp(entry.table)
@@ -357,9 +401,9 @@ function source.new(provider)
         levels[entry.table] = store
     end
 
-    -- Reads one stage. The budget is milliseconds a frame, or a function that gives them.
-    function self.read(stage, budget)
-        for _, entry in ipairs(LISTS) do
+    -- Reads one stage. The budget is milliseconds a frame, or a function that gives them. between() runs after each table.
+    function self.read(stage, budget, between)
+        for _, entry in ipairs(lists) do
             if entry.stage == stage then
                 local ms = budget
                 if type(budget) == "function" then ms = budget() end
@@ -370,13 +414,14 @@ function source.new(provider)
                     self.names(entry.table)
                 elseif mode == "request" then
                     local opened = open(entry.table)
-                    if opened then usable(opened, entry.table, entry.fields) end
+                    if opened then fields_of(opened, entry.table, entry) end
                 elseif mode == "named" then
                     local list = wanted(entry)
-                    if #list > 0 then self.load(entry.table, entry.fields, list, ms) end
+                    if #list > 0 then self.load(entry.table, entry.fields, list, ms, entry) end
                 else
-                    self.load(entry.table, entry.fields, nil, ms)
+                    self.load(entry.table, entry.fields, nil, ms, entry)
                 end
+                if between then between() end
             end
         end
         return self

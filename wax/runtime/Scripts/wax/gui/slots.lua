@@ -10,6 +10,7 @@ local sched = Wax.import("core.sched")
 local guard = Wax.import("core.guard")
 local scope = Wax.import("core.scope")
 local tween = Wax.import("gui.tween")
+local grab = Wax.import("gui.drag")
 
 local slots = {}
 
@@ -19,16 +20,24 @@ local V, H, VA = style.Visibility, style.HAlign, style.VAlign
 local blocks = {}               -- every live block
 local over = nil                -- { block, index } under the mouse
 local held = nil                -- the cell whose button went down, until it comes up
-local press = nil               -- where the mouse was when it went down: { x, y }
-local drag = nil                -- a cell being dragged: { block, index, x, y, dx, dy }
-local ghost = nil               -- the picture that follows the mouse during a drag
+local press = nil               -- the button that went down and where the mouse was then (gui.drag)
+local drag = nil                -- a cell being dragged: { block, index, hold, dx, dy }
+local ghost = nil               -- the picture that follows the mouse during a drag (gui.drag)
 
 slots.DRAG_AFTER = 6            -- how far the mouse moves with the button down before it is a drag
-local on_hover = nil            -- called with (look, block) when what is under the mouse changes
+local on_hover = nil            -- called with (look, block, the whole of a count that shows cut) when what is under the mouse changes
 local last = nil                -- the cell the mouse was over a moment ago, and when: { block, index, at }
 local seen = { right = 0, fired = 0, late = 0, lost = 0, gaps = {} }
 
 slots.GRACE = 0.25              -- seconds a cell still counts as under the mouse after the game took the mouse from it
+slots.FOLLOW_HELD = true        -- while the right or middle button is held, the cell under the mouse is worked out from where the mouse is
+local following = false         -- such a button is held and no cell says the mouse is over it
+local looked = 0                -- frames since a block's place was last learned
+
+slots.COUNT_SIZES = { 10, 9, 8 }    -- the sizes a count is drawn at: the largest that fits its cell
+slots.COUNT_EDGE = 3                -- what a cell keeps of its width beside the letters of its count
+
+local unfinished = true         -- some block may still be short of cells: warm() looks at them all only then
 
 local function now() return (Wax.perf and Wax.perf.now or os.clock)() end
 
@@ -57,13 +66,29 @@ function slots.install(Container, tools)
         end
         local holder = kit.sized(column, columns * size + (columns - 1) * gap, rows * size + (rows - 1) * gap)
         local sides = { left = H.Left, center = H.Center, right = H.Right }
-        place(self, holder, { h = sides[options.align] or H.Left, snug = true,
+        place(self, holder, { h = sides[options.align] or H.Left, snug = true, own = columns * size + (columns - 1) * gap,
             pad = options.below and style.margin(0, 0, 0, options.below) or nil })
 
         local control = new_control(self, holder)
         local cells, looks = {}, {}
         local block = { control = control, cells = cells, looks = looks, count = columns * rows, host = self.window,
-            drag = options.drag and true or false, size = size }
+            drag = options.drag and true or false, size = size, lines = lines, columns = columns, gap = gap }
+        unfinished = true
+        -- a block that was hidden is not asked about the mouse
+        local set_visible = control.SetVisible
+        function control:SetVisible(shown)
+            block.hidden = not shown
+            return set_visible(self, shown)
+        end
+        -- nor is one that was switched off, and its cells do not show the hand
+        local set_enabled = control.SetEnabled
+        function control:SetEnabled(enabled)
+            enabled = enabled and true or false
+            set_enabled(self, enabled)
+            if block.off == not enabled then return end
+            block.off = not enabled
+            for index = 1, #cells do cells[index].button:SetCursor(enabled and style.Cursor.Hand or style.Cursor.Default) end
+        end
         control.Activated = control.Changed
         control.RightClicked = sched.Signal.new("RightClicked")
         control.MiddleClicked = sched.Signal.new("MiddleClicked")
@@ -80,6 +105,10 @@ function slots.install(Container, tools)
                     cell.button:SetVisibility(V.Hidden)
                     if cell.back then cell.back:SetVisibility(V.Collapsed) end
                     cell.shown = false
+                end
+                if cell.count then
+                    cell.count_box:SetVisibility(V.Collapsed)
+                    cell.count, cell.whole = false, nil
                 end
                 return
             end
@@ -108,16 +137,17 @@ function slots.install(Container, tools)
             local count = look.count and tostring(look.count) or false
             if count ~= cell.count then
                 if count and not cell.count_text then
-                    -- the narrow font, and smaller in a small cell, so four characters are not cut off
-                    cell.count_text = style.extend(control, kit.label, count, { size = size < 34 and theme.small_size - 2 or theme.small_size })
-                    cell.count_box = style.extend(control, kit.box, style.with_alpha(theme.window, 0.8), "round4", style.margin(3, 0))
+                    cell.count_text = style.extend(control, kit.label, count, { size = slots.COUNT_SIZES[1] })
+                    cell.count_box = style.extend(control, kit.box, style.with_alpha(theme.window, 0.8), "round4", style.margin(1, 0))
                     cell.count_box:SetContent(cell.count_text)
-                    kit.slot(cell.layers:AddChild(cell.count_box), { h = H.Right, v = VA.Bottom, pad = style.margin(0, 0, 1, 1) })
+                    -- over the whole cell, so the cell's width is the count's room: smaller letters when it is long, dots when it is too long
+                    kit.slot(cell.stack:AddChild(cell.count_box), { h = H.Right, v = VA.Bottom, pad = style.margin(0, 0, 1, 1) })
+                    kit.fit(cell.count_text, size - slots.COUNT_EDGE, { sizes = slots.COUNT_SIZES })
                 elseif count then
-                    cell.count_text:SetText(kit.text(count))
+                    kit.set_text(cell.count_text, count)
                 end
                 if cell.count_box then cell.count_box:SetVisibility(count and V.HitTestInvisible or V.Collapsed) end
-                cell.count = count
+                cell.count, cell.whole = count, count and kit.whole(cell.count_text) or nil
             end
             local mark = look.mark or false
             if mark ~= cell.mark then
@@ -156,16 +186,21 @@ function slots.install(Container, tools)
                 if cell.tone_line then cell.tone_line:SetVisibility(tone and V.HitTestInvisible or V.Collapsed) end
                 cell.tone = tone
             end
+            -- faint: the picture, and the icon of a cell that has no picture
             local dim = look.dim and true or false
             if dim ~= cell.dim then
                 cell.dim = dim
                 cell.picture:SetRenderOpacity(dim and 0.35 or 1)
             end
+            if cell.glyph and dim ~= cell.glyph_dim then
+                cell.glyph_dim = dim
+                cell.glyph:SetRenderOpacity(dim and 0.35 or 1)
+            end
         end
 
         local function make(index)
             local button = kit.button(nil, { shape = "round6", color = theme.clear, hover = theme.hover, press = theme.press,
-                padding = style.margin(0) })
+                padding = style.margin(0), cursor = block.off and style.Cursor.Default or nil })
             -- the box of a cell is its own picture under the button, so one cell can be shown without it
             local stack, back = root.new("Overlay"), nil
             if options.backing ~= false then
@@ -185,7 +220,7 @@ function slots.install(Container, tools)
             local row = math.floor((index - 1) / columns) + 1
             local cell_box = kit.sized(stack, size, size)
             kit.slot(lines[row]:AddChild(cell_box), { pad = style.margin((index - 1) % columns > 0 and gap or 0, 0, 0, 0) })
-            local cell = { button = button, layers = layers, picture = picture, back = back, stack = stack, shown = true, plain = false,
+            local cell = { button = button, layers = layers, picture = picture, back = back, stack = stack, box = cell_box, shown = true, plain = false,
                 image = false,
                 icon = false, count = false, mark = false, selected = false, dim = false, tone = false }
             cells[index] = cell
@@ -228,6 +263,42 @@ function slots.install(Container, tools)
             end, "out", control)
         end
 
+        -- Changes how many cells stand in a row and how large a cell is. The cells that exist are kept and put in their new rows.
+        function control:SetLayout(new_columns, new_size)
+            new_columns, new_size = math.max(1, math.floor(tonumber(new_columns) or columns)), tonumber(new_size) or size
+            if new_columns == columns and new_size == size then return end
+            local reflow, before = new_columns ~= columns, block.count
+            columns, size = new_columns, new_size
+            block.count, block.size, block.columns = columns * rows, size, columns
+            unfinished = true
+            holder:SetWidthOverride(columns * size + (columns - 1) * gap)
+            holder:SetHeightOverride(rows * size + (rows - 1) * gap)
+            if reflow then
+                for row = 1, rows do lines[row]:ClearChildren() end
+            end
+            for index = 1, #cells do
+                local cell = cells[index]
+                cell.box:SetWidthOverride(size)
+                cell.box:SetHeightOverride(size)
+                if cell.count_text then
+                    kit.fit(cell.count_text, size - slots.COUNT_EDGE, { sizes = slots.COUNT_SIZES })
+                    cell.whole = cell.count and kit.whole(cell.count_text) or nil
+                end
+                if reflow then
+                    -- a cell there is no room for any more stays where the engine keeps it, out of sight at the end of the last row
+                    local used = index <= block.count
+                    local row = used and math.floor((index - 1) / columns) + 1 or rows
+                    kit.slot(lines[row]:AddChild(cell.box), { pad = style.margin(used and (index - 1) % columns > 0 and gap or 0, 0, 0, 0) })
+                    if used ~= cell.used then
+                        cell.used = used
+                        cell.box:SetVisibility(used and V.SelfHitTestInvisible or V.Collapsed)
+                    end
+                end
+            end
+            for index = block.count + 1, math.max(before, #cells) do looks[index] = nil end
+            if over and over.block == block then over.changed = true end
+        end
+
         blocks[#blocks + 1] = block
         if options.looks then control:Set(options.looks) end
         return control
@@ -238,7 +309,7 @@ local function showing(block)
     local host = block.host
     if block.control.destroyed or host.destroyed then return false end
     if host.visible_now ~= nil then return host.visible_now end
-    return host.shown ~= false and not host.minimized
+    return host.shown ~= false and host.on_screen ~= false and not host.minimized
 end
 
 -- Fires a signal of a block with these values, as the code of whoever made the block.
@@ -252,27 +323,19 @@ end
 -- The picture of the cell being dragged, drawn under the mouse over everything else.
 local function ghost_show(block, look, x, y)
     if not ghost then
-        local made = { destroyed = false }
-        style.build(made, function()
+        ghost = grab.float(function(made)
             made.layers = root.new("Overlay")
             made.picture = kit.image(style.WHITE, nil, 1, 1)
             kit.slot(made.layers:AddChild(made.picture), { h = H.Fill, v = VA.Fill })
             made.glyph = kit.icon("package", 20, style.theme.text)
             kit.slot(made.layers:AddChild(made.glyph), { h = H.Center, v = VA.Center })
             made.box = kit.sized(made.layers, 36, 36)
-            made.outer = kit.scaled(made.box)
-            made.outer:SetVisibility(V.Collapsed)
-            made.slot = root.layer("toasts"):AddChild(made.outer)
-            made.slot:SetAutoSize(true)
-            made.slot:SetZOrder(1001)
-            made.slot:SetAlignment({ X = 0.5, Y = 0.5 })
+            return made.box
         end)
-        ghost = made
     end
     local size = block.size or 36
     ghost.box:SetWidthOverride(size)
     ghost.box:SetHeightOverride(size)
-    ghost.outer:SetUserSpecifiedScale(style.scale * (block.host.zoom or 1))
     if look.image then
         pictures.show(ghost.picture, look.image, ghost)
         ghost.glyph:SetVisibility(V.Collapsed)
@@ -281,13 +344,11 @@ local function ghost_show(block, look, x, y)
         kit.set_icon(ghost.glyph, look.icon or "package", math.floor(size * 0.5))
         ghost.glyph:SetVisibility(V.HitTestInvisible)
     end
-    ghost.slot:SetPosition({ X = x, Y = y })
-    ghost.outer:SetRenderOpacity(0.9)
-    ghost.outer:SetVisibility(V.HitTestInvisible)
+    ghost:show(x, y, (block.host.place and 1 or style.scale) * (block.host.zoom or 1), 0.9)
 end
 
 local function ghost_hide()
-    if ghost then ghost.outer:SetVisibility(V.Collapsed) end
+    if ghost then ghost:hide() end
 end
 
 local function fire(block, signal, index)
@@ -300,6 +361,7 @@ end
 
 -- Every frame: makes cells that do not exist yet, a few at a time, shown or not.
 function slots.warm()
+    if not unfinished then return end
     local started = nil
     for at = #blocks, 1, -1 do
         local block = blocks[at]
@@ -317,25 +379,119 @@ function slots.warm()
             if now() - started > slots.MAKE_SECONDS then return end
         end
     end
+    -- every block has its cells: nothing is looked at again until a block is made or laid out anew
+    unfinished = false
+end
+
+-- Whether the mouse is over what a block sits in. A panel was asked this frame already (overlay.watch); a window is asked here, once.
+local function host_hovered(host, asked)
+    if host.hovered ~= nil then return host.hovered end
+    local known = asked[host]
+    if known == nil then
+        if asked.windows == nil then asked.windows = root.layer("windows"):IsHovered() == true end
+        known = asked.windows and host.frame ~= nil and host.frame:IsHovered() == true
+        asked[host] = known
+    end
+    return known
+end
+
+-- The cell of a block that the mouse is over: its row is found first, so a large block costs a few questions and not one a cell.
+local function cell_under(block)
+    local cells, columns = block.cells, block.columns
+    for row = 1, #block.lines do
+        local first = (row - 1) * columns + 1
+        if first > #cells or first > block.count then return nil end
+        if block.lines[row]:IsHovered() then
+            for index = first, math.min(first + columns - 1, #cells, block.count) do
+                local cell = cells[index]
+                if cell.shown and cell.button:IsHovered() then return index end
+            end
+            return nil
+        end
+    end
+    return nil
+end
+
+-- A block the mouse can be over: it shows, and was neither hidden nor switched off.
+local function takes_mouse(block)
+    return not block.hidden and not block.off and showing(block)
+end
+
+-- How large one unit of a block is drawn on the screen.
+local function drawn(block)
+    return (block.host.place and 1 or style.scale) * (block.host.zoom or 1)
+end
+
+-- The mouse at x, y is over this cell: so the block's top left corner is within one cell's width and height of a known place.
+-- Every look narrows that down. A look that cannot be true of the place kept (the block has moved) starts it again.
+local function learn_place(block, index, x, y)
+    local scale = drawn(block)
+    local pitch, size = (block.size + block.gap) * scale, block.size * scale
+    local column, row = (index - 1) % block.columns, (index - 1) // block.columns
+    local high_x, high_y = x - column * pitch, y - row * pitch
+    local low_x, low_y = high_x - size, high_y - size
+    local place = block.place
+    if place and place.scale == scale and place.columns == block.columns and place.size == block.size then
+        low_x, high_x = math.max(low_x, place.low_x), math.min(high_x, place.high_x)
+        low_y, high_y = math.max(low_y, place.low_y), math.min(high_y, place.high_y)
+        if low_x <= high_x and low_y <= high_y then
+            place.low_x, place.high_x, place.low_y, place.high_y = low_x, high_x, low_y, high_y
+            return
+        end
+        low_x, high_x, low_y, high_y = x - column * pitch - size, x - column * pitch, y - row * pitch - size, y - row * pitch
+    end
+    block.place = { scale = scale, columns = block.columns, size = block.size, low_x = low_x, high_x = high_x, low_y = low_y, high_y = high_y }
+end
+
+-- The cell of a block whose place is known that x, y is in. Nothing between two cells, off the block, or on an empty cell.
+local function cell_at(block, x, y)
+    local place = block.place
+    if not place or place.scale ~= drawn(block) or place.columns ~= block.columns or place.size ~= block.size then return nil end
+    local pitch, size = (block.size + block.gap) * place.scale, block.size * place.scale
+    local across, down = x - (place.low_x + place.high_x) / 2, y - (place.low_y + place.high_y) / 2
+    local column, row = math.floor(across / pitch), math.floor(down / pitch)
+    if column < 0 or column >= block.columns or row < 0 or row >= #block.lines then return nil end
+    if across - column * pitch > size or down - row * pitch > size then return nil end
+    local index = row * block.columns + column + 1
+    local cell = block.cells[index]
+    if index > block.count or not cell or not cell.shown or cell.plain then return nil end
+    return index
+end
+
+-- While the right or the middle button is held: the block and the cell the mouse is in, from where the mouse is.
+local function cell_at_mouse()
+    local x, y = root.mouse()
+    for at = 1, #blocks do
+        local block = blocks[at]
+        if block.place and takes_mouse(block) then
+            local index = cell_at(block, x, y)
+            if index then return block, index end
+        end
+    end
+    return nil, nil
+end
+
+local function mouse_held()
+    return input.is_down("MiddleMouseButton") or input.is_down("RightMouseButton")
 end
 
 -- Every frame while something that takes the mouse is showing: which cell is under the mouse, and what was pressed on it.
-function slots.step(active)
+-- key_down: false when the caller knows that no key or button went down in this frame.
+-- over_host: false when the caller knows that the mouse is over nothing a block of slots could be in.
+function slots.step(active, key_down, over_host)
     if not active then
         if over then
             over = nil
             if on_hover then on_hover(nil, nil) end
         end
-        held = nil
+        held, following = nil, false
         return
     end
     if drag then
         local cell = showing(drag.block) and drag.block.cells[drag.index] or nil
-        local x, y = root.mouse()
-        local scale = style.scale * (drag.block.host.zoom or 1)
-        local dx, dy = (x - drag.x) / scale, (y - drag.y) / scale
-        if cell and cell.button:IsPressed() then
-            ghost.slot:SetPosition({ X = x, Y = y })
+        local dx, dy, x, y = grab.moved(drag.hold, (drag.block.host.place and 1 or style.scale) * (drag.block.host.zoom or 1))
+        if cell and grab.down(cell.button) then
+            ghost:move(x, y)
             if dx ~= drag.dx or dy ~= drag.dy then
                 drag.dx, drag.dy = dx, dy
                 emit(drag.block, drag.block.control.DragMoved, dx, dy)
@@ -350,37 +506,70 @@ function slots.step(active)
     end
     local found_block, found_index = nil, nil
     -- the cell that was under the mouse last frame is asked first: the mouse seldom moves far in a frame
-    if over and showing(over.block) then
+    if over and takes_mouse(over.block) then
         local cell = over.block.cells[over.index]
         if cell and cell.shown and cell.button:IsHovered() then found_block, found_index = over.block, over.index end
     end
-    if not found_block then
+    if not found_block and over_host ~= false then
+        -- only what the mouse is over is asked: the panel or window first, then its blocks that show, then one row
+        local asked = {}
         for at = 1, #blocks do
             local block = blocks[at]
-            if showing(block) and block.control.widget:IsHovered() then
-                for index = 1, #block.cells do
-                    local cell = block.cells[index]
-                    if cell.shown and cell.button:IsHovered() then
-                        found_block, found_index = block, index
-                        break
-                    end
+            if takes_mouse(block) and host_hovered(block.host, asked) and block.control.widget:IsHovered() then
+                found_index = cell_under(block)
+                if found_index then
+                    found_block = block
+                    break
                 end
-                if found_block then break end
             end
+        end
+    end
+    local time = now()
+    if slots.FOLLOW_HELD then
+        if found_block then
+            following = false
+            -- the mouse is read until the block's place is known to a unit; after that only when it comes to another cell,
+            -- and now and then, in case the block has moved
+            local place = found_block.place
+            looked = looked + 1
+            if not place or looked >= 20 or not over or over.block ~= found_block or over.index ~= found_index
+                or place.high_x - place.low_x > 1 or place.high_y - place.low_y > 1 then
+                looked = 0
+                local x, y = root.mouse()
+                learn_place(found_block, found_index, x, y)
+            end
+        elseif following or (last and time - last.at <= slots.GRACE) then
+            -- the game has the mouse while one of these buttons is down, and no cell says the mouse is over it
+            local ok, down = pcall(mouse_held)
+            following = ok and down == true
+            if following then found_block, found_index = cell_at_mouse() end
         end
     end
     -- The right and the middle button are read from the game, and count when they come up again: beside the game's own
     -- screens it is not told of the press itself, only of the release. The game also takes the mouse for itself while
     -- a button is down, so a cell may stop saying the mouse is over it: the cell it was over a moment ago gets the click.
-    local ok, right = pcall(input.just_released, "RightMouseButton")
-    local fine, middle = pcall(input.just_released, "MiddleMouseButton")
-    right, middle = ok and right == true, fine and middle == true
-    local told, pressed = pcall(input.just_pressed, "RightMouseButton")
-    if told and pressed == true then seen.pressed = (seen.pressed or 0) + 1 end
-    local time = now()
+    -- With no cell under the mouse now or a moment ago there is nobody to give a click to, and nothing is read.
+    local right, middle = false, false
+    if found_block or (last and time - last.at <= slots.GRACE) then
+        local ok, up = pcall(input.any, true)
+        if not ok or up then
+            local fine, was = pcall(input.just_released, "RightMouseButton")
+            right = fine and was == true
+            fine, was = pcall(input.just_released, "MiddleMouseButton")
+            middle = fine and was == true
+        end
+        if key_down ~= false then
+            local told, pressed = pcall(input.just_pressed, "RightMouseButton")
+            if told and pressed == true then seen.pressed = (seen.pressed or 0) + 1 end
+        end
+    end
     if found_block then
-        last = { block = found_block, index = found_index, at = time }
-    elseif (right or middle) and last and time - last.at <= slots.GRACE and showing(last.block) and last.block.cells[last.index] then
+        if last and last.block == found_block and last.index == found_index then
+            last.at = time
+        else
+            last = { block = found_block, index = found_index, at = time }
+        end
+    elseif (right or middle) and last and time - last.at <= slots.GRACE and takes_mouse(last.block) and last.block.cells[last.index] then
         if right then
             seen.right, seen.late = seen.right + 1, seen.late + 1
             fire(last.block, last.block.control.RightClicked, last.index)
@@ -404,7 +593,9 @@ function slots.step(active)
             local value = look and look.value
             guard.call("slot hover", function() found_block.control.Hovered:Fire(value, found_index, look) end)
         end
-        if on_hover then on_hover(look, found_block) end
+        -- a count that shows cut is said in full beside the mouse
+        local cell = found_block and found_block.cells[found_index]
+        if on_hover then on_hover(look, found_block, cell and cell.whole or nil) end
     end
     if not over then return end
     local block, index = over.block, over.index
@@ -414,14 +605,13 @@ function slots.step(active)
     if down then
         if held ~= cell then
             held = cell
-            local x, y = root.mouse()
-            press = { x = x, y = y }
+            press = grab.hold(cell.button)
         elseif block.drag and press and block.looks[index] then
             -- held and moved far enough: from here on it is a drag, and letting go is not a click
-            local x, y = root.mouse()
-            if math.abs(x - press.x) > slots.DRAG_AFTER or math.abs(y - press.y) > slots.DRAG_AFTER then
+            local far, x, y = grab.far(press, slots.DRAG_AFTER)
+            if far then
                 local look = block.looks[index]
-                drag = { block = block, index = index, x = press.x, y = press.y, dx = 0, dy = 0 }
+                drag = { block = block, index = index, hold = press, dx = 0, dy = 0 }
                 ghost_show(block, look, x, y)
                 if on_hover then on_hover(nil, nil) end
                 emit(block, block.control.DragStarted, look.value, index, look)
@@ -451,7 +641,8 @@ function slots.on_hover(fn) on_hover = fn end
 -- The interface was rebuilt: nothing kept here may be touched again.
 function slots.forget_all()
     blocks, over, held, last, press, drag = {}, nil, nil, nil, nil, nil
-    if ghost then ghost.destroyed = true end
+    unfinished, following = true, false
+    if ghost then ghost:forget() end
     ghost = nil
 end
 

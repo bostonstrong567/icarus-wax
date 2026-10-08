@@ -13,6 +13,12 @@ M.clock = perf.now          -- seconds (replaced in tests)
 M.min_tables = 250          -- a shorter list was taken while the game was still loading, so it is not kept
 M.relist_seconds = 5        -- a name the list lacks makes it be taken again, at most this often
 M.pauses = 0                -- how often a Load gave the frame back
+M.epoch = 0                 -- counts up whenever rows are forgotten, so a reader can tell its copy is old
+M.MAPS = true               -- a map field is read when its own path is named. Off, it is refused as before
+M.CURVES = true             -- so is a field that refers to a CurveFloat, as numbers. Off, it is refused as before
+M.max_entries = 4096        -- a map with more entries than this is not read
+M.max_samples = 1024        -- a curve over more whole steps than this gives its keys and no values
+M.max_keys = 256            -- a curve with more keys than this gives its values and no keys
 
 local LIST_CLASS = "IcarusDataTable"
 local TABLE_KIND = "UDataTable"
@@ -40,7 +46,16 @@ local seen = setmetatable({}, { __mode = "k" })         -- a field list -> { key
 local slices = setmetatable({}, { __mode = "k" })       -- task -> when its share of the frame began
 local list, recent, listed_at = nil, nil, nil           -- the kept table list, the last one taken, and when
 local Changed = sched.Signal.new("Data.Changed")
+local Patched = sched.Signal.new("Data.Patched")
 local reading = nil     -- the field being read, for the message when a row fails
+local curves = {}       -- a curve asset's full name -> its numbers, or false for an object that is no curve
+local refusal = nil     -- set when a read found a field that can never be read: the caller hears it as an error
+local CURVE_CLASS = "CurveFloat"
+-- what UE4SS calls a reference to a live object, by the kind of wrapper it hands out
+local OBJECTS = { UObject = true, AActor = true, UClass = true, UWorld = true, UDataTable = true, UEnum = true, UFunction = true,
+                  UInterface = true }
+
+M.writer = nil          -- data.patch puts itself here when it starts. Until then nothing can be changed
 
 local function strip(full) return (full:gsub("^%S+%s+", "")) end
 local function leaf_name(path) return path:match("([^%.:/]+)$") or path end
@@ -86,6 +101,11 @@ local function own_fields(path)
                 elseif READ[inner_class] then
                     field.how, field.item, field.named = "array", READ[inner_class], inner_class == "EnumProperty"
                 end
+            elseif class == "MapProperty" then
+                -- `reads`, not `how`: read when named, and nothing the writer goes by
+                if M.MAPS then field.reads = "map" end
+            elseif class == "ObjectProperty" then
+                if M.CURVES then field.reads = "object" end
             else
                 field.how, field.named = READ[class], class == "EnumProperty"
             end
@@ -99,21 +119,26 @@ local function own_fields(path)
 end
 
 local function build_plan(path)
-    local fields, by, at, depth = {}, {}, path, 0
+    local fields, by, fold, chain, at, depth = {}, {}, {}, {}, path, 0
     while at do
         depth = depth + 1
         if depth > MAX_DEPTH then error(("the struct %s has more than %d parents"):format(path, MAX_DEPTH), 0) end
+        chain[depth] = at
         local own, parent = own_fields(at)
         for i = 1, #own do
             local field = own[i]
             if not by[field.Name] then
                 by[field.Name] = field
                 fields[#fields + 1] = field
+                field.id = at .. ":" .. field.Name
+                -- the game's own files spell a few fields in another letter case than the game does
+                local key = lower(field.Name)
+                if not fold[key] then fold[key] = field end
             end
         end
         at = parent
     end
-    return { path = path, short = leaf_name(path), list = fields, by = by }
+    return { path = path, short = leaf_name(path), list = fields, by = by, fold = fold, chain = chain }
 end
 
 -- A struct's fields with those of its parents. One that fails is not asked for again.
@@ -138,25 +163,28 @@ local function walk(struct, path)
     for segment in path:gmatch("[^%.]+") do
         if field then
             if not field.Struct then
+                if field.reads == "map" then
+                    error(("'%s' is a map, which is read whole: name it without what follows it (in '%s')"):format(kept, path), 0)
+                end
                 error(("'%s' is %s, so it has no fields (in '%s')"):format(kept, describe(field), path), 0)
             end
             plan = plan_of(field.Struct)
         end
-        field = plan.by[segment]
+        field = plan.by[segment] or plan.fold[lower(segment)]
         if not field then
             local names = {}
             for i = 1, #plan.list do names[i] = plan.list[i].Name end
             error(("%s has no field named '%s'%s.%s"):format(plan.short, segment,
                 kept and (" (in '" .. path .. "')") or "", suggest.phrase(segment, names)), 0)
         end
-        kept = kept and (kept .. "." .. segment) or segment
+        kept = kept and (kept .. "." .. field.Name) or field.Name
     end
     if not field then error("a field path cannot be empty", 0) end
     return field, kept
 end
 
--- Adds every value below a struct that is read without being asked for by name.
-local function add_readable(struct, prefix, leaves, trail, depth)
+-- Adds every value below a struct that is read without being asked for by name. `row` is true for a row itself.
+local function add_readable(struct, prefix, leaves, trail, depth, row)
     if depth > MAX_DEPTH or trail[struct] then return end
     local ok, plan = pcall(plan_of, struct)
     if not ok then return end
@@ -164,8 +192,8 @@ local function add_readable(struct, prefix, leaves, trail, depth)
     local fields = plan.list
     for i = 1, #fields do
         local field = fields[i]
-        -- at the top, Name is the row's own name. A name with a dot in it could not be told from a path
-        if field.how and not field.named and not (prefix == "" and field.Name == "Name") and not field.Name:find(".", 1, true) then
+        -- in a row, Name is the row's own name. A name with a dot in it could not be told from a path
+        if field.how and not field.named and not (row and field.Name == "Name") and not field.Name:find(".", 1, true) then
             if field.Struct then
                 add_readable(field.Struct, prefix .. field.Name .. ".", leaves, trail, depth + 1)
             else
@@ -179,7 +207,9 @@ end
 local function add_named(struct, path, leaves)
     if path == "Name" then return end
     local field, kept = walk(struct, path)
-    if not field.how then error(("'%s' is %s, which game.Data never reads"):format(kept, describe(field)), 0) end
+    if kept == "Name" then return end
+    if not field.how and not field.reads then error(("'%s' is %s, which game.Data never reads"):format(kept, describe(field)), 0) end
+    if field.refused then error(field.refused, 0) end
     if field.Struct then
         plan_of(field.Struct)
         add_readable(field.Struct, kept .. ".", leaves, {}, 1)
@@ -226,7 +256,7 @@ local function selection_for(record, fields)
     local leaves, sorted = {}, {}
     plan_of(record.struct)
     if fields == nil then
-        add_readable(record.struct, "", leaves, {}, 1)
+        add_readable(record.struct, "", leaves, {}, 1, true)
     else
         for i = 1, #fields do add_named(record.struct, fields[i], leaves) end
     end
@@ -250,7 +280,7 @@ local function compile(struct, leaves)
         for segment in leaves[i]:gmatch("[^%.]+") do
             local field, entry = plan.by[segment], node.by[segment]
             if not entry then
-                entry = { name = segment, how = field.how, item = field.item }
+                entry = { name = segment, how = field.how or field.reads, item = field.item, field = field.reads and field or nil }
                 node.by[segment] = entry
                 node.list[#node.list + 1] = entry
             end
@@ -313,6 +343,8 @@ local function scalar(how, value)
     return path
 end
 
+local read_map, read_object
+
 -- Reads the values of `node` from an engine struct into `target`, which keeps what it already holds.
 local function read_struct(node, source, target)
     local entries = node.list
@@ -355,10 +387,206 @@ local function read_struct(node, source, target)
                 end
             end
             for index = #into, count + 1, -1 do into[index] = nil end
+        elseif how == "map" then
+            target[name] = read_map(entry.field, name, value)
+        elseif how == "object" then
+            target[name] = read_object(entry.field, value, false)
         else
             target[name] = scalar(how, value)
         end
     end
+end
+
+-- A field that turned out to hold what is never read. It is remembered, and whoever named it hears why.
+local function refuse(field, text)
+    field.refused = text
+    refusal = text
+    error(text, 0)
+end
+
+-- A curve's numbers: its value at each whole step from its first key to its last, and the keys themselves.
+local function sample(object)
+    local keys = object.FloatCurve.Keys
+    local count = keys:GetArrayNum()
+    if type(count) ~= "number" then error("the game gave no length for a curve's keys", 0) end
+    local out = { First = 0, Last = -1, Values = {} }
+    if count == 0 then
+        out.Keys = {}
+        return out
+    end
+    local from, to = keys[1].Time, keys[count].Time
+    if type(from) ~= "number" or type(to) ~= "number" or from ~= from or to ~= to then
+        error("the game gave no time for a curve's key", 0)
+    end
+    if count <= M.max_keys then
+        local points = {}
+        for index = 1, count do
+            local key = keys[index]
+            points[index] = { Time = key.Time, Value = key.Value }
+        end
+        out.Keys = points
+    end
+    local first, last = math.ceil(from - 1e-6), math.floor(to + 1e-6)
+    out.First, out.Last = first, last
+    if last - first >= M.max_samples then
+        out.Values = nil
+        return out
+    end
+    local values = out.Values
+    for step = first, last do
+        local value = object:GetFloatValue(step)
+        if type(value) ~= "number" then error("the game gave no value for a curve", 0) end
+        values[#values + 1] = value
+    end
+    return out
+end
+
+local function curve_copy(kept)
+    local out = { First = kept.First, Last = kept.Last }
+    local values, keys = kept.Values, kept.Keys
+    if values then out.Values = table.move(values, 1, #values, 1, {}) end
+    if keys then
+        local points = {}
+        for index = 1, #keys do points[index] = { Time = keys[index].Time, Value = keys[index].Value } end
+        out.Keys = points
+    end
+    return out
+end
+
+-- A reference to a live object as plain values: the numbers of a CurveFloat. Nil for a reference to nothing.
+function read_object(field, value, inside)
+    if field.refused then refuse(field, field.refused) end
+    if value == nil or not value:IsValid() then return nil end
+    local full = value:GetFullName()
+    if type(full) ~= "string" then error("the game gave no name for an object", 0) end
+    local kept = curves[full]
+    if kept == nil then
+        kept = full:match("^(%S+)") == CURVE_CLASS and sample(value) or false
+        curves[full] = kept
+    end
+    if not kept then
+        local class = full:match("^(%S+)") or "object"
+        refuse(field, (inside and "the values of '%s' are references to %s objects, which game.Data never reads. Only a CurveFloat is read, as its numbers"
+            or "'%s' refers to a %s object, which game.Data never reads. Only a CurveFloat is read, as its numbers"):format(field.Name, class))
+    end
+    return curve_copy(kept)
+end
+
+-- The one field a struct is named by when it is the key of a map: a row handle's row, else its only value.
+local function key_field(plan)
+    local row = plan.by.RowName
+    if row and row.how == "text" then return row end
+    local only = nil
+    for index = 1, #plan.list do
+        local field = plan.list[index]
+        if field.how then
+            if only or field.named or (field.how ~= "text" and field.how ~= "number") then return nil end
+            only = field
+        end
+    end
+    return only
+end
+
+-- The reads for everything below a struct that a map holds, as for a struct that was named.
+local function value_tree(path)
+    local leaves, sorted = {}, {}
+    add_readable(path, "", leaves, {}, 1)
+    for leaf in pairs(leaves) do sorted[#sorted + 1] = leaf end
+    table.sort(sorted)
+    return compile(path, sorted)
+end
+
+-- What a map's keys or its values are, from the first one the game hands out. Strings only, nothing of the engine's.
+local function element_of(field, value, is_key)
+    local side = is_key and "keys" or "values"
+    local kind = type(value)
+    if kind == "number" then return { how = "number" } end
+    if kind == "string" then return { how = "text" } end
+    if kind == "boolean" and not is_key then return { how = "bool" } end
+    if kind ~= "userdata" and kind ~= "table" then
+        refuse(field, ("the %s of '%s' are %s values, which game.Data does not read from a map"):format(side, field.Name, kind))
+    end
+    local what = value:type()
+    if type(what) ~= "string" then error("the game did not say what a map holds", 0) end
+    if what == "FName" or what == "FText" or what:find("String$") then return { how = "text" } end
+    if what:find("^TSoft") then return { how = "soft" } end
+    if what == "UScriptStruct" then
+        if not value:IsMappedToProperty() then error("the game did not say which struct a map holds", 0) end
+        local path = strip(value:GetProperty():GetStruct():GetFullName())
+        local plan = plan_of(path)
+        if not is_key then return { how = "struct", node = value_tree(path) } end
+        local pick = key_field(plan)
+        if not pick then
+            refuse(field, ("the keys of '%s' are %s structs, which game.Data cannot use as keys"):format(field.Name, plan.short))
+        end
+        return { how = "struct", pick = pick.Name, as = pick.how }
+    end
+    if what == "TArray" or what == "TMap" or what == "TSet" then
+        refuse(field, ("the %s of '%s' are lists, maps or sets themselves, which game.Data does not read from a map"):format(side, field.Name))
+    end
+    if not OBJECTS[what] then
+        refuse(field, ("the %s of '%s' are %s values, which game.Data does not read from a map"):format(side, field.Name, what))
+    end
+    if is_key then
+        refuse(field, ("the keys of '%s' are references to live objects, which game.Data cannot use as keys"):format(field.Name))
+    end
+    return { how = "object" }
+end
+
+-- UE4SS leaves an enum's names in a global each time one is read.
+local function clear_enum(name)
+    local global = "Enum_" .. name
+    if rawget(_G, global) ~= nil then rawset(_G, global, nil) end
+end
+
+-- A map as a plain table. A key is a number or a string: a struct key is the one name in it.
+function read_map(field, name, map)
+    if field.refused then refuse(field, field.refused) end
+    local out, count, problem = {}, 0, nil
+    local shape = field.shape
+    local function entry(key_at, value_at)
+        count = count + 1
+        if count > M.max_entries then
+            error(("'%s' holds more than %d entries, which is more than game.Data reads of one map"):format(name, M.max_entries), 0)
+        end
+        local key, value = key_at:get(), value_at:get()
+        if not shape then
+            shape = { key = element_of(field, key, true), value = element_of(field, value, false) }
+            field.shape = shape
+        end
+        local how = shape.key.how
+        if how == "struct" then
+            key = scalar(shape.key.as, key[shape.key.pick])
+        else
+            key = scalar(how, key)
+        end
+        if key == nil then return end
+        how = shape.value.how
+        if how == "struct" then
+            local into = {}
+            read_struct(shape.value.node, value, into)
+            value = into
+        elseif how == "object" then
+            value = read_object(field, value, true)
+        else
+            value = scalar(how, value)
+        end
+        -- as in a list: a reference to nothing is false, so its key is still there
+        if value == nil then value = false end
+        out[key] = value
+    end
+    -- an error must not leave the callback, where it would pass through UE4SS's own code
+    map:ForEach(function(key_at, value_at)
+        if problem == nil then
+            local ok, err = pcall(entry, key_at, value_at)
+            if not ok then problem = err or "a map entry could not be read" end
+        end
+    end)
+    reading = name
+    clear_enum(name .. "_Key")
+    clear_enum(name)
+    if problem ~= nil then error(problem, 0) end
+    return out
 end
 
 local function take_list()
@@ -442,6 +670,9 @@ local function open(name)
     record = new_record(entry.name, object, nil)
     record.path = entry.path
     records[record.key] = record
+    -- the writer hears of a table that was read from the game again: it may be a new one without the mods' changes
+    local found = M.writer
+    if found and found.opened then pcall(found.opened, record) end
     return record
 end
 
@@ -470,6 +701,7 @@ local function locate(record)
 end
 
 local function drop(record)
+    M.epoch = M.epoch + 1
     if record.owner then
         if metas[record.owner] == record then metas[record.owner] = nil end
     else
@@ -479,7 +711,8 @@ local function drop(record)
 end
 
 function M.flush()
-    records, metas, plans = {}, {}, {}
+    M.epoch = M.epoch + 1
+    records, metas, plans, curves = {}, {}, {}, {}
     list, recent, listed_at = nil, nil, nil
 end
 
@@ -570,8 +803,15 @@ local function read_row(record, object, real, step, selection)
         return nil
     end
     local target = record.rows[real] or { Name = real }
+    refusal = nil
     local ok, problem = pcall(read_struct, step.tree, row, target)
     if not ok then
+        -- a field that can never be read is the asker's mistake, not this row's
+        if refusal then
+            local text = refusal
+            refusal = nil
+            error(text, 0)
+        end
         fail(record, real, selection, problem)
         return nil
     end
@@ -655,7 +895,7 @@ end
 
 -- The reading itself. It runs outside any pcall of Wax's own, so its pauses are plain ones.
 local function load_rows(self, fields, names, limit)
-    local mark, renewed = slice(), 0
+    local mark, renewed, passes = slice(), 0, 0
     while true do
         -- nothing of the engine's is carried over a pause: the table is found again when a row needs it
         local record = record_of(self)
@@ -710,14 +950,26 @@ local function load_rows(self, fields, names, limit)
             end
         end
         if not again then
-            local out = {}
+            -- a row that was changed during a pause was forgotten, and is read once more
+            local out, missing = {}, false
             for i = 1, #wanted do
                 local real = wanted[i]
                 local state = record.state[real] or record.empty
                 local step = state.steps[selection] or step_of(record, state, selection)
-                if not step.tree then out[real] = held_row(record, real) end
+                if not step.tree then
+                    out[real] = held_row(record, real)
+                else
+                    local failed = record.failed[real]
+                    if not (failed and failed[selection]) then
+                        missing = true
+                        break
+                    end
+                end
             end
-            return out
+            if not missing then return out end
+            -- rows that keep changing: after three tries the rest is read without a pause
+            passes = passes + 1
+            if passes >= 3 then limit = math.huge end
         end
     end
 end
@@ -762,15 +1014,97 @@ local function stamp(self)
         local object = locate(record)
         if object then
             local address = math.tointeger(record.address)
-            return ("%d:%s"):format(record.size, address and ("0x%X"):format(address) or tostring(record.address))
+            local text = ("%d:%s"):format(record.size, address and ("0x%X"):format(address) or tostring(record.address))
+            -- a third part once a mod has changed the table, so what was worked out before is not trusted
+            local writer = M.writer
+            local changes = writer and writer.count(record.key) or 0
+            if changes > 0 then text = text .. ":" .. changes end
+            return text
         end
         if attempt == 1 then record = renew(self, record, object) end
     end
     error(("the table %s keeps changing, so it cannot be read right now"):format(record.name), 0)
 end
 
+-- The record of a table object and the game's table, found now.
+local function live(self)
+    local record = record_of(self)
+    for attempt = 1, 2 do
+        local object = locate(record)
+        if object then return record, object end
+        if attempt == 1 then record = renew(self, record, object) end
+    end
+    error(("the table %s keeps changing, so it cannot be read right now"):format(record.name), 0)
+end
+
+-- The row names of a table by its name, or nothing when the game has no such table. Returns index, names, name, and the name the game lists it under.
+local function rows_of(name)
+    local record = records[lower(short_name(name))]
+    if not record then
+        if not listed(name) then return nil end
+        local ok, opened = pcall(open, name)
+        if not ok then return nil end
+        record = opened
+    end
+    return record.index, record.names, record.name, record.path and leaf_name(record.path) or nil
+end
+
+-- What was read of a row is dropped, so the next Row reads it again.
+local function forget_row(record, real)
+    M.epoch = M.epoch + 1
+    record.rows[real], record.state[real], record.failed[real] = nil, nil, nil
+end
+
+-- A row was added to the game's table: the cache learns its name instead of being read again.
+local function row_added(record, name, object)
+    M.epoch = M.epoch + 1
+    local key = lower(name)
+    if not record.index[key] then
+        record.index[key], record.index[name] = name, name
+        record.names[#record.names + 1] = name
+        record.count = record.count + 1
+    end
+    record.size = #object
+end
+
+local function row_removed(record, name, object)
+    local real = record.index[name] or record.index[lower(name)]
+    if real then
+        record.index[real], record.index[lower(real)] = nil, nil
+        for at = #record.names, 1, -1 do
+            if record.names[at] == real then table.remove(record.names, at) end
+        end
+        record.count = record.count - 1
+        forget_row(record, real)
+    end
+    record.size = #object
+end
+
+-- A writer of rows, or an error when this version has none.
+local function writer()
+    local found = M.writer
+    if not found then error("changing the game's tables is not switched on in this version of Wax", 0) end
+    return found
+end
+
 local Table = {}
-local TABLE_NAMES = { "Name", "RowStruct", "Raw", "Count", "GetNames", "Has", "Row", "Load", "Loaded", "Fields", "Meta", "Stamp" }
+local TABLE_NAMES = { "Name", "RowStruct", "Raw", "Count", "GetNames", "Has", "Row", "Load", "Loaded", "Fields", "Meta", "Stamp",
+                      "Set", "Change", "Add", "Reset", "Changes", "Conflicts" }
+
+Table.Set = public(function(self, row, field, value) return writer().set(self, row, field, value) end)
+Table.Change = public(function(self, row, field, fn) return writer().change(self, row, field, fn) end)
+Table.Add = public(function(self, name, values, options) return writer().add(self, name, values, options) end)
+Table.Reset = public(function(self, row, field) return writer().reset(self, row, field) end)
+
+Table.Changes = public(function(self)
+    record_of(self)
+    return M.writer and M.writer.changes(self) or {}
+end)
+
+Table.Conflicts = public(function(self)
+    record_of(self)
+    return M.writer and M.writer.conflicts(self) or {}
+end)
 
 Table.Count = public(function(self) return record_of(self).count end)
 
@@ -821,14 +1155,18 @@ M.table_meta = {
         error(("%s is not a member of a data table.%s"):format(tostring(key), suggest.phrase(tostring(key), TABLE_NAMES)), 2)
     end,
     __newindex = function(_, key)
-        error(("%s cannot be assigned because a data table is read-only"):format(tostring(key)), 2)
+        error(("%s cannot be assigned because a data table is read-only. Rows are changed with Set"):format(tostring(key)), 2)
     end,
     __tostring = function(self) return "DataTable(" .. infos[self].name .. ")" end,
     __names = function() return TABLE_NAMES end,
 }
 
-local Data = { Changed = Changed }
-local NAMES = { "Table", "GetTables", "Has", "Resolve", "Flush", "Changed" }
+local Data = { Changed = Changed, Patched = Patched }
+local NAMES = { "Table", "GetTables", "Has", "Resolve", "Flush", "Changed", "Changes", "Conflicts", "Patched" }
+
+-- What mods changed in every table, and where one mod's change hides another's.
+Data.Changes = public(function() return M.writer and M.writer.changes(nil) or {} end)
+Data.Conflicts = public(function() return M.writer and M.writer.conflicts(nil) or {} end)
 
 local function check_table_name(name)
     if type(name) ~= "string" then error(("a table name is a string such as \"ItemsStatic\", got %s"):format(type(name)), 0) end
@@ -936,8 +1274,23 @@ function M.stats()
         end
     end
     for _ in pairs(plans) do out.structs = out.structs + 1 end
+    out.curves = 0
+    for _ in pairs(curves) do out.curves = out.curves + 1 end
     return out
 end
+
+-- What data.patch works with. Nothing here is for mods.
+M.internal = {
+    plan_of = plan_of, scalar = scalar, clean = clean, describe = describe, live = live, record_of = record_of, rows = rows_of,
+    forget = forget_row, row_added = row_added, row_removed = row_removed, Patched = Patched,
+    named = function(name) return object_for(open(name)) end,
+    meta = function(record) return metas[record.key] or nil end,
+    changed = function(name) Changed:Fire(name) end,
+    table_names = function()
+        local known = list or recent
+        return known and known.names or {}
+    end,
+}
 
 M.api = Data
 return M

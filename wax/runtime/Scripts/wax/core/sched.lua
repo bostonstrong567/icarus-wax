@@ -190,6 +190,31 @@ function task.label(thread, label)
     return thread
 end
 
+-- Runs f(...) every `seconds`, the first time after `seconds`. Returns the thread, which task.cancel stops.
+function task.every(seconds, f, ...)
+    if type(seconds) ~= "number" or not (seconds >= 0) then
+        error("task.every expects the seconds between runs, such as 0.5, got " .. tostring(seconds), 2)
+    end
+    if type(f) ~= "function" then error("task.every expects a function to run, got " .. type(f), 2) end
+    local args = pack(...)
+    local thread = task.delay(seconds, function()
+        local failures = 0
+        while true do
+            local ok, trace = xpcall(f, guard.handler, unpack(args, 1, args.n))
+            failures = ok and 0 or failures + 1
+            if not ok then
+                guard.report(trace, "task.every")
+                if failures >= guard.breaker_errors then
+                    guard.report(("stopped after %d errors in a row"):format(failures), "task.every")
+                    return
+                end
+            end
+            task.wait(seconds)
+        end
+    end)
+    return task.label(thread, "task.every")
+end
+
 -- Signals. Fire runs each handler in a reused coroutine, so a handler may pause like any task.
 local Signal = {}
 Signal.__index = Signal
@@ -336,7 +361,9 @@ local function flush_deferred()
         passes = passes + 1
         if passes > sched.max_defer_passes then
             guard.report(("task.defer chain longer than %d rounds. The rest was dropped"):format(sched.max_defer_passes), "task.defer")
+            local dropped, count = deferred, deferred_n
             deferred, deferred_n = {}, 0
+            for i = 1, count do task.cancel(dropped[i].thread) end
             return
         end
         local batch, n = deferred, deferred_n

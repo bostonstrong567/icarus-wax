@@ -512,7 +512,7 @@ t.test("the list that ships loads: every part has an id, a name and what stops w
         t.ok(entry.classes or entry.structs or entry.enums or entry.tables, entry.id .. " names something")
     end
     for _, id in ipairs({ "crafting", "research", "creatures", "players", "highlight", "tables", "fit", "menu", "clipboard",
-        "tracking", "libraries", "recipe-browser" }) do
+        "tracking", "libraries", "recipe-browser", "workshop-write" }) do
         t.ok(seen[id], "the part " .. id)
     end
 

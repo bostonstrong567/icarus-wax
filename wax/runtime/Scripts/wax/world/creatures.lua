@@ -97,10 +97,15 @@ local function classify(actor, last, entry)
     return setup.kind.Name, setup.Name
 end
 
+local LEFT_BEHIND = "Enum_CurrentAliveState"    -- the global UE4SS makes each time that enum is read
+
 local function is_alive(entry)
     if not entry.has_state then return true end
     local state = entry.object.ActorState
-    return not state:IsValid() or state.CurrentAliveState == 0
+    if not state:IsValid() then return true end
+    local alive = state.CurrentAliveState == 0
+    if rawget(_G, LEFT_BEHIND) ~= nil then rawset(_G, LEFT_BEHIND, nil) end
+    return alive
 end
 
 local function watch_deaths(set)
@@ -298,6 +303,7 @@ function Creatures:Describe(creature)
         local state = actor.ActorState
         if state:IsValid() then
             out.Health, out.MaxHealth, out.IsAlive = state.Health, state.MaxHealth, state.CurrentAliveState == 0
+            if rawget(_G, LEFT_BEHIND) ~= nil then rawset(_G, LEFT_BEHIND, nil) end
         end
     end
     if entry.has_level then out.Level = actor.CurrentLevel end
@@ -326,6 +332,80 @@ function Creatures:Highlight(kind, options)
     end)
 end
 
+local TAMED_CLASS = "IcarusMountCharacter"
+
+-- The kind and variant of a creature: from the list when it is in it, else from the creature's own row.
+local function identify(target, raw)
+    if tracked.tracking then
+        local entry = tracked:entry_of(target)
+        if entry then return entry.kind, entry.variant end
+    end
+    local ok, kind, variant = pcall(classify, raw, true, {})
+    if ok and kind then return kind, variant end
+    return nil
+end
+
+-- The variant a kind is asked about by its own name: the one named like the kind, else its first.
+local function main_variant(record)
+    local key = fold(record.Name)
+    for _, name in ipairs(record.Variants) do
+        if fold(name) == key then return name end
+    end
+    return record.Variants[1]
+end
+
+NAMES[#NAMES + 1] = "GetInfo"
+NAMES[#NAMES + 1] = "GetTamed"
+
+-- What the game's tables say about a variant, or about the main variant of a kind: team, loot, taming rule, orders, saddles.
+function Creatures:GetInfo(kind)
+    local expects = "GetInfo expects a kind such as \"Wolf\", a variant such as \"Conifer_Wolf\" or a creature"
+    local record, variant
+    if instance.is_instance(kind) then
+        if not kind:IsValid() then error("GetInfo was given a creature that no longer exists", 2) end
+        local found, index = pcall(load_kinds)
+        if not found then error(index, 2) end
+        local its_kind, its_variant = identify(kind, kind.Raw)
+        local setup = its_variant and index.setups[fold(its_variant)]
+        record = setup and setup.kind or (its_kind and index.types[fold(its_kind)])
+        if not record then
+            error(("%s, and the game's tables have nothing on this %s"):format(expects, kind.ClassName), 2)
+        end
+        variant = setup and setup.Name or main_variant(record)
+    else
+        if kind == nil then error(expects, 2) end
+        local how, name = resolve(kind, 2)
+        if how == "class" then
+            error(("%s, and '%s' is the name of a class"):format(expects, tostring(kind)), 2)
+        end
+        local index = load_kinds()
+        if how == "variants" then
+            local setup = index.setups[fold(name)]
+            record, variant = setup.kind, setup.Name
+        else
+            record = index.types[fold(name)]
+            variant = main_variant(record)
+        end
+    end
+    local loaded, creature = pcall(Wax.import, "world.creature")
+    if not loaded then
+        error("GetInfo needs world.creature, which did not load: " .. tostring(creature):gsub("%s*[\r\n]+%s*", " "):sub(1, 200), 2)
+    end
+    local ok, info = pcall(creature.info, record, variant)
+    if not ok then error((tostring(info):gsub("^[^\n]-%.lua:%d+: ", "", 1)), 2) end
+    return info
+end
+
+-- The tamed animals among the creatures: mounts, pets and livestock. A kind and the options of GetAll narrow it down.
+function Creatures:GetTamed(kind, options)
+    local found = query(kind, options, 2)
+    local out = {}
+    for i = 1, #found do
+        if found[i]:IsA(TAMED_CLASS) then out[#out + 1] = found[i] end
+    end
+    return out
+end
+
 local SIGNALS = { Added = true, Removed = true, Cleared = true }
 
 setmetatable(Creatures, {
@@ -350,4 +430,9 @@ end
 
 M.api = Creatures
 M.tracked = tracked
+M.identify = identify
+M.fold = fold
+M.kinds = load_kinds
+M.TAMED = TAMED_CLASS
+M.died = Died
 return M

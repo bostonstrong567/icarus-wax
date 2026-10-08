@@ -167,17 +167,40 @@ else {
     $suites = [ordered]@{
         'core'   = @('wax\tests\offline\core_test.lua')
         'gui'    = @('wax\tests\offline\gui_test.lua')
+        'model'  = @('wax\tests\offline\model_test.lua')
         'world'  = @('wax\tests\offline\world_test.lua')
+        'easy'   = @('wax\tests\offline\easy_test.lua')
+        'watch'  = @('wax\tests\offline\watch_test.lua')
+        'hooks'  = @('wax\tests\offline\hooks_test.lua')
+        'handle' = @('wax\tests\offline\handle_test.lua')
+        'character' = @('wax\tests\offline\character_test.lua')
+        'stats'  = @('wax\tests\offline\stats_test.lua')
+        'session' = @('wax\tests\offline\session_test.lua')
+        'items'  = @('wax\tests\offline\items_test.lua')
+        'creature' = @('wax\tests\offline\creature_test.lua')
+        'creature-act' = @('wax\tests\offline\creature_act_test.lua')
+        'assets' = @('wax\tests\offline\assets_test.lua', ("$scratch\assets" -replace '\\', '/'))
+        'blueprints' = @('wax\tests\offline\blueprints_test.lua')
         'research' = @('wax\tests\offline\research_test.lua')
         'needs' = @('wax\tests\offline\needs_test.lua', ("$scratch\needs" -replace '\\', '/'))
         'explorer' = @('wax\tests\offline\explorer_test.lua')
         'data'   = @('wax\tests\offline\data_test.lua')
+        'data-maps' = @('wax\tests\offline\data_maps_test.lua')
+        'journal' = @('wax\tests\offline\journal_test.lua')
+        'patch'  = @('wax\tests\offline\patch_test.lua')
+        'patch-loader' = @('wax\tests\offline\patch_loader_test.lua', ("$scratch\patch-loader" -replace '\\', '/'))
+        'recipes' = @('wax\tests\offline\recipes_test.lua')
+        'workshop' = @('wax\tests\offline\workshop_test.lua')
+        'workshop-write' = @('wax\tests\offline\workshop_write_test.lua')
+        'oversized' = @('wax\tests\offline\oversized_test.lua')
         'recipe-logic' = @('wax\tests\offline\recipe_logic_test.lua', $recipeMod)
         'recipe-model' = @('wax\tests\offline\recipe_model_test.lua', $recipeMod)
         'recipe-unlock' = @('wax\tests\offline\recipe_unlock_test.lua', $recipeMod)
         'recipe-stats' = @('wax\tests\offline\recipe_stats_test.lua', $recipeMod)
         'recipe-tree' = @('wax\tests\offline\recipe_tree_test.lua', $recipeMod)
         'recipe-app' = @('wax\tests\offline\recipe_app_test.lua', $recipeMod)
+        'recipe-creature' = @('wax\tests\offline\recipe_creature_test.lua', $recipeMod)
+        'recipe-creature-page' = @('wax\tests\offline\recipe_creature_page_test.lua', $recipeMod)
         'recipe-layout' = @('wax\tests\offline\recipe_layout_test.lua', $recipeMod)
         'mods'   = @('wax\tests\offline\mods_test.lua', ("$scratch\mods" -replace '\\', '/'))
         'held'   = @('wax\tests\offline\held_test.lua', ("$scratch\held" -replace '\\', '/'))
@@ -199,17 +222,17 @@ else {
                 $out | Where-Object { $_ -match '^FAIL|expected|error' } | Select-Object -First 6 | ForEach-Object { Write-Host "         $_" }
             } else { Report ok "offline suite '$suite': $verdict" }
         }
-        # The game's tables against what Recipe Browser reads from them: this is what says a weekly patch broke it.
+        # The game's tables against what Prospector's Codex reads from them: this is what says a weekly patch broke it.
         $recipeCheck = Join-Path $PSScriptRoot 'recipe_check.py'
         if (-not (Test-Path $recipeCheck) -or -not (Test-Path (Join-Path $Root 'game-data\data'))) {
             Report ok "offline suite 'recipe-data': 0 passed (skipped: scripts\recipe_check.py or game-data is not here)"
         } elseif (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-            Report FAIL "python missing, cannot check the game's tables against the Recipe Browser"
+            Report FAIL "python missing, cannot check the game's tables against Prospector's Codex"
         } else {
             $out = python $recipeCheck --mod $recipeMod 2>&1
             $verdict = "$($out | Where-Object { $_ -match 'passed' } | Select-Object -Last 1)"
             if ($LASTEXITCODE -ne 0) {
-                Report FAIL "recipe-data: the game's tables no longer fit the Recipe Browser ($verdict)"
+                Report FAIL "recipe-data: the game's tables no longer fit Prospector's Codex ($verdict)"
                 $out | Where-Object { $_ -match '^FAIL' } | Select-Object -First 8 | ForEach-Object { Write-Host "         $_" }
             } else {
                 $out = & $lua 'wax\tests\offline\recipe_data_check.lua' $recipeMod 'build/recipe-browser/check' 2>&1
@@ -218,6 +241,40 @@ else {
                     Report FAIL "recipe-data: the mod's model and the check's own join differ ($model)"
                     $out | Where-Object { $_ -match '^DIFF|^\s+\.\.\. and' } | Select-Object -First 8 | ForEach-Object { Write-Host "         $_" }
                 } else { Report ok "offline suite 'recipe-data': $verdict; $model" }
+            }
+        }
+        # The same for the Bestiary. Until its files are in the mod, the staged copy is checked.
+        $creatureCheck = Join-Path $PSScriptRoot 'creature_check.py'
+        $creatureMod = (Test-Path (Join-Path $Root "$recipeMod\creatures.lua")) ? $recipeMod : 'build/creature-work/RecipeBrowser'
+        if (-not (Test-Path $creatureCheck) -or -not (Test-Path (Join-Path $Root 'game-data\data'))) {
+            Report ok "offline suite 'creature-data': 0 passed (skipped: scripts\creature_check.py or game-data is not here)"
+        } elseif (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+            Report FAIL "python missing, cannot check the game's tables against the Bestiary"
+        } else {
+            $out = python $creatureCheck --mod $creatureMod 2>&1
+            $verdict = "$($out | Where-Object { $_ -match 'passed' } | Select-Object -Last 1)"
+            if ($LASTEXITCODE -ne 0) {
+                Report FAIL "creature-data: the game's tables no longer fit the Bestiary ($verdict)"
+                $out | Where-Object { $_ -match '^FAIL' } | Select-Object -First 8 | ForEach-Object { Write-Host "         $_" }
+            } else {
+                $out = & $lua 'wax\tests\offline\recipe_creature_data_check.lua' $creatureMod 'build/creature-browser/check' 2>&1
+                $model = "$($out | Where-Object { $_ -match 'passed' } | Select-Object -Last 1)"
+                if ($LASTEXITCODE -ne 0) {
+                    Report FAIL "creature-data: the mod's model and the check's own join differ ($model)"
+                    $out | Where-Object { $_ -match '^DIFF|^FAIL|^\s+\.\.\. and' } | Select-Object -First 8 | ForEach-Object { Write-Host "         $_" }
+                } else { Report ok "offline suite 'creature-data': $verdict; $model" }
+            }
+        }
+        # The list of creature models against the script that makes it.
+        $modelsTest = Join-Path $PSScriptRoot 'test_creature_models.py'
+        if ((Test-Path $modelsTest) -and (Get-Command python -ErrorAction SilentlyContinue)) {
+            $out = python $modelsTest 2>&1
+            if ($LASTEXITCODE -ne 0) {
+                Report FAIL 'creature model tests failed'
+                $out | Where-Object { "$_" -match '^(FAIL|ERROR):' } | Select-Object -First 6 | ForEach-Object { Write-Host "         $_" }
+            } else {
+                $ran = "$($out | Where-Object { "$_" -match '^Ran \d+ tests' } | Select-Object -Last 1)" -replace '^Ran (\d+).*', '$1'
+                Report ok "creature model tests: $ran passed"
             }
         }
     } finally {

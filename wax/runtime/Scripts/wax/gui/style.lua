@@ -18,7 +18,7 @@ style.Wrapping = { Words = 0, AnyCharacter = 1 }
 
 style.WHITE = { R = 1, G = 1, B = 1, A = 1 }
 style.Stretch = { UserSpecified = 7 }
-style.Cursor = { Default = 1, ResizeLeftRight = 3, ResizeSouthEast = 5, Move = 7, Hand = 9 }
+style.Cursor = { Default = 1, ResizeLeftRight = 3, ResizeUpDown = 4, ResizeSouthEast = 5, ResizeSouthWest = 6, Move = 7, Hand = 9 }
 
 -- Everything Wax draws is multiplied by this (see ui.SetScale).
 style.scale = 1
@@ -27,6 +27,10 @@ style.screen_scale = 1
 -- 9-slice shapes in wax/runtime/assets: white 64x64 images tinted at draw time. Value = corner size / 64.
 local SHAPES = { frame6 = 6 / 64, frame8 = 8 / 64, frame12 = 12 / 64, top6 = 6 / 64, bottom6 = 6 / 64, top8 = 8 / 64,
     glow12 = 20 / 64, glow12_soft = 20 / 64 }
+-- the same glow for the other three corners and the four edges of a window
+for _, part in ipairs({ "sw", "ne", "nw", "n", "s", "e", "w" }) do
+    SHAPES["glow12_" .. part], SHAPES["glow12_" .. part .. "_soft"] = 20 / 64, 20 / 64
+end
 local RADII = { 2, 3, 4, 5, 6, 7, 8, 9, 10, 12 }
 for _, radius in ipairs(RADII) do SHAPES["round" .. radius] = radius / 64 end
 

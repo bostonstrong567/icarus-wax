@@ -23,10 +23,10 @@ local function build()
     style.build(made, function()
         local box = kit.box(style.with_alpha(theme.window, 0.97), "round6", style.margin(9, 6, 9, 7))
         local column = root.new("VerticalBox")
-        made.title = kit.label("", { face = "Bold" })
+        made.title = kit.label("", { face = "Bold", free = true })
         column:AddChild(made.title)
         for index = 1, tip.LINES do
-            local line = kit.label("", { size = theme.small_size, color = theme.dim })
+            local line = kit.label("", { size = theme.small_size, color = theme.dim, free = true })
             kit.slot(column:AddChild(line), { pad = style.margin(0, 2, 0, 0) })
             line:SetVisibility(V.Collapsed)
             made.lines[index] = { label = line, text = "", tone = "dim", shown = false }
@@ -69,7 +69,7 @@ function tip.show(content, options)
     title = tostring(title)
     if title ~= panel.title_text then
         panel.title_text = title
-        panel.title:SetText(kit.text(title))
+        kit.set_text(panel.title, title)
     end
     for index = 1, tip.LINES do
         local line, given = panel.lines[index], lines and lines[index]
@@ -79,7 +79,7 @@ function tip.show(content, options)
             text = tostring(text)
             if text ~= line.text then
                 line.text = text
-                line.label:SetText(kit.text(text))
+                kit.set_text(line.label, text)
             end
             if tone ~= line.tone then
                 line.tone = tone
@@ -105,6 +105,25 @@ end
 function tip.hide()
     if shown and panel then panel.outer:SetVisibility(V.Collapsed) end
     shown, keep = false, nil
+end
+
+-- The same tip with one more line under it, or that line alone: what shows cut is said in full here.
+function tip.plus(content, line)
+    line = tostring(line)
+    if content == nil or content == "" then return line end
+    return function()
+        local inner = content
+        if type(inner) == "function" then inner = inner() end
+        if inner == nil or inner == "" then return line end
+        local title, lines = inner, {}
+        if type(inner) == "table" then
+            title = inner.title or inner[1] or ""
+            for index, given in ipairs(inner.lines or {}) do lines[index] = given end
+        end
+        if #lines >= tip.LINES then lines[tip.LINES] = nil end
+        lines[#lines + 1] = { line, "text" }
+        return { title = tostring(title), lines = lines }
+    end
 end
 
 -- Whether a tip shows, and its first line.

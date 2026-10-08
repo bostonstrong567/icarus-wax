@@ -27,6 +27,20 @@ ui.start()
 Wax.ui = ui
 ui.Theme().animation = 0        -- transitions finish at once, so results can be checked straight away
 
+-- Every text block the library makes in this suite is kept, with where it was made: the last test but one looks at them all.
+local kit_module = Wax.import("gui.kit")
+kit_module.MEASURE = false      -- the stand-in engine gives every widget one size: close cases go by the letters here
+local text_blocks = {}
+do
+    local make = kit_module.label
+    kit_module.label = function(content, options)
+        local widget = make(content, options)
+        local from = debug.getinfo(2, "Sl")
+        text_blocks[#text_blocks + 1] = { info = kit_module.labels()[widget], where = from.short_src:match("[^/\\]+$") .. ":" .. from.currentline }
+        return widget
+    end
+end
+
 local function frames(count)
     for _ = 1, count or 1 do
         sched.step()
@@ -268,6 +282,198 @@ t.test("dragging moves a window, resizes it, and resizes the navigation column",
     dragged:Destroy()
 end)
 
+t.test("a box resized by an edge keeps the edges across from it, its smallest size and the limits it is given", function()
+    local drag = Wax.import("gui.drag")
+    local box = { x = 200, y = 100, width = 500, height = 300 }
+    local function check(from, edges, dx, dy, limits, x, y, width, height)
+        local got = { drag.resize(from, edges, dx, dy, limits) }
+        for index, want in ipairs({ x, y, width, height }) do
+            t.eq(got[index], want, ("%s by %d, %d: value %d"):format(edges, dx, dy, index))
+        end
+    end
+    check(box, "e", 40, 99, nil, 200, 100, 540, 300)
+    check(box, "s", 99, 60, nil, 200, 100, 500, 360)
+    check(box, "w", -30, 99, nil, 170, 100, 530, 300)
+    check(box, "n", 99, -20, nil, 200, 80, 500, 320)
+    check(box, "nw", -30, -20, nil, 170, 80, 530, 320)
+    check(box, "ne", 40, -20, nil, 200, 80, 540, 320)
+    check(box, "sw", -30, 60, nil, 170, 100, 530, 360)
+    check(box, "se", 40, 60, nil, 200, 100, 540, 360)
+    t.eq(box.x, 200, "the box it is given is left as it was")
+    t.eq(box.width, 500)
+
+    local least = { min_width = 240, min_height = 140 }
+    check(box, "e", -1000, 0, least, 200, 100, 240, 300)
+    check(box, "s", 0, -1000, least, 200, 100, 500, 140)
+    check(box, "w", 1000, 0, least, 460, 100, 240, 300)
+    check(box, "n", 0, 1000, least, 200, 260, 500, 140)
+
+    local screen = { min_width = 240, min_height = 140, left = 0, top = 0, right = 1920, bottom = 1080 }
+    check(box, "nw", -5000, -5000, screen, 0, 0, 700, 400)
+    check(box, "se", 5000, 5000, screen, 200, 100, 1720, 980)
+
+    -- an edge that starts past a limit comes back, and goes no further out
+    local beyond = { x = 1600, y = 900, width = 500, height = 300 }
+    check(beyond, "se", 50, 50, screen, 1600, 900, 500, 300)
+    check(beyond, "se", -100, -60, screen, 1600, 900, 400, 240)
+    -- the left and the top edge stop where the rest of the box could no longer be reached
+    screen.reach_x, screen.reach_y = 1840, 1044
+    check(beyond, "nw", 1000, 1000, screen, 1840, 1044, 260, 156)
+end)
+
+t.test("a window is resized by every edge and corner: the edges across from the one held stay, and it is saved once at the end", function()
+    local style, window_module = Wax.import("gui.style"), Wax.import("gui.window")
+    local sized
+    scope.run(owner, function() sized = ui.Window({ title = "Edges", width = 500, height = 300, x = 600, y = 400 }) end)
+    ui.Open()
+    local saves, keep = {}, window_module.remember
+    window_module.remember = function(_, geometry) saves[#saves + 1] = geometry end
+    local C = style.Cursor
+    local cursors = { n = C.ResizeUpDown, s = C.ResizeUpDown, e = C.ResizeLeftRight, w = C.ResizeLeftRight,
+        nw = C.ResizeSouthEast, se = C.ResizeSouthEast, ne = C.ResizeSouthWest, sw = C.ResizeSouthWest }
+    for edges, cursor in pairs(cursors) do
+        t.ok(sized.edge_handles[edges], "no handle for " .. edges)
+        t.eq(fake.last(sized.edge_handles[edges], "SetCursor")[2], cursor, "the cursor over " .. edges)
+    end
+    t.ok(rawequal(sized.edge_handles.se, sized.grip_button), "the grip is the handle of the bottom right corner")
+    t.eq(fake.last(sized.resize_layer, "SetVisibility")[2], style.Visibility.SelfHitTestInvisible, "what lies between the handles is not covered")
+
+    local function pull(edges, dx, dy, held)
+        sized:SetPosition(600, 400)
+        sized:SetSize(500, 300)
+        fake.mouse.X, fake.mouse.Y = 900, 500
+        events.simulate(sized.edge_handles[edges], "OnPressed")
+        fake.pressed = true
+        fake.mouse.X, fake.mouse.Y = 900 + dx, 500 + dy
+        frames(1)
+        if held then held() end
+        fake.pressed = false
+        frames(1)
+    end
+    local function is(what, x, y, width, height)
+        t.eq(sized.x, x, what .. ": x")
+        t.eq(sized.y, y, what .. ": y")
+        t.eq(sized.width, width, what .. ": width")
+        t.eq(sized.height, height, what .. ": height")
+        t.eq(sized.slot:GetPosition().X, x, what .. ": drawn at x")
+        t.eq(sized.slot:GetPosition().Y, y, what .. ": drawn at y")
+        t.eq(sized.slot:GetSize().X, width, what .. ": drawn width")
+        t.eq(sized.slot:GetSize().Y, height, what .. ": drawn height")
+    end
+    local after = {
+        n = { 600, 380, 500, 320 }, s = { 600, 400, 500, 280 }, w = { 570, 400, 530, 300 }, e = { 600, 400, 470, 300 },
+        nw = { 570, 380, 530, 320 }, ne = { 600, 380, 470, 320 }, sw = { 570, 400, 530, 280 }, se = { 600, 400, 470, 280 },
+    }
+    for edges, want in pairs(after) do
+        pull(edges, -30, -20)
+        is(edges, want[1], want[2], want[3], want[4])
+    end
+    t.eq(#saves, 8, "each drag was saved once, when it ended")
+    t.eq(saves[8].width, sized.width)
+    t.eq(saves[8].x, sized.x)
+
+    -- held for several frames it follows the mouse, and nothing is saved meanwhile
+    pull("w", -10, 0, function()
+        for step = 2, 5 do
+            fake.mouse.X = 900 - step * 10
+            frames(1)
+            t.eq(sized.width, 500 + step * 10)
+            t.eq(sized.x + sized.width, 1100, "the right edge stays")
+        end
+        local laid = fake.count(sized.sizer, "SetWidthOverride")
+        frames(3)
+        t.eq(fake.count(sized.sizer, "SetWidthOverride"), laid, "while the mouse rests the window is not laid out again")
+        t.eq(#saves, 8)
+        t.eq(sized.lights.w.level, 1, "the piece of the outline by the held edge glows")
+        t.eq(sized.lights.e.level, 0, "and no other piece does")
+    end)
+    t.eq(#saves, 9)
+    t.eq(sized.lights.w.level, 0, "let go, the glow is gone")
+    t.ok(math.abs(fake.last(sized.outline, "SetColorAndOpacity")[2].B - style.theme.outline.B) < 1e-9, "the outline as a whole was never lit")
+
+    -- never smaller than the window may be: the edge stops, and the one across from it has not moved
+    pull("w", 5000, 0)
+    is("left edge to the right", 860, 400, 240, 300)
+    pull("n", 0, 5000)
+    is("top edge down", 600, 560, 500, 140)
+    pull("se", -5000, -5000)
+    is("grip to the top left", 600, 400, 240, 140)
+    -- and no edge leaves the screen
+    pull("nw", -5000, -5000)
+    is("top left corner off the screen", 0, 0, 1100, 700)
+    pull("se", 5000, 5000)
+    is("grip off the screen", 600, 400, 1320, 680)
+    pull("ne", 5000, -5000)
+    is("top right corner off the screen", 600, 0, 1320, 700)
+
+    -- at double scale the mouse goes twice as far for the same change, and the window is taken from where it is drawn
+    t.eq(ui.SetScale(2), 2)
+    pull("w", -40, 0)
+    t.eq(sized.width, 520)
+    t.eq(sized.x, 560)
+    t.eq(sized.slot:GetPosition().X + sized.slot:GetSize().X, 1600, "the right edge stays where it was drawn")
+    pull("n", 0, 5000)
+    t.eq(sized.height, 140)
+    t.eq(sized.y, 400 + (300 - 140) * 2)
+    ui.SetScale(1)
+
+    -- minimised it is only its title bar: the handles are gone with the grip, and a press that came anyway does nothing
+    sized:SetPosition(600, 400)
+    sized:SetSize(500, 300)
+    sized:SetMinimized(true)
+    t.eq(fake.last(sized.resize_layer, "SetVisibility")[2], style.Visibility.Collapsed)
+    t.eq(fake.last(sized.grip, "SetVisibility")[2], style.Visibility.Collapsed)
+    events.simulate(sized.edge_handles.n, "OnPressed")
+    t.eq(sized.drag, nil)
+    sized:SetMinimized(false)
+    t.eq(fake.last(sized.resize_layer, "SetVisibility")[2], style.Visibility.SelfHitTestInvisible)
+
+    window_module.remember = keep
+    ui.Close()
+    sized:Destroy()
+end)
+
+t.test("a window made with resizable = false has no grip and no handles, and is the size its mod gave it", function()
+    local window_module = Wax.import("gui.window")
+    local recall = window_module.recall
+    window_module.recall = function(key)
+        if key == "gui-test/Fixed" then return { x = 300, y = 200, width = 900, height = 700 } end
+        return recall(key)
+    end
+    local fixed, loose
+    scope.run(owner, function()
+        fixed = ui.Window({ title = "Fixed", width = 400, height = 300, resizable = false })
+        loose = ui.Window({ title = "Loose", width = 400, height = 300 })
+    end)
+    window_module.recall = recall
+    t.eq(fixed.edge_handles, nil)
+    t.eq(fixed.resize_layer, nil)
+    t.eq(fixed.grip, nil)
+    t.eq(fixed.grip_button, nil)
+    t.eq(#fixed.chrome.disconnects + 24, #loose.chrome.disconnects, "eight presses and each handle's two hovers are not listened for")
+    t.eq(fixed.width, 400, "a size saved while it could be resized is not used")
+    t.eq(fixed.height, 300)
+    t.eq(fixed.x, 300, "its saved place is")
+    t.eq(fixed.y, 200)
+    fixed:SetSize(450, 320)
+    t.eq(fixed.width, 450, "its mod can still give it another size")
+    fixed:SetMinimized(true)
+    fixed:SetMinimized(false)
+    ui.Open()
+    fake.mouse.X, fake.mouse.Y = 400, 210
+    events.simulate(fixed.bar, "OnPressed")
+    fake.pressed = true
+    fake.mouse.X, fake.mouse.Y = 425, 215
+    frames(1)
+    fake.pressed = false
+    frames(1)
+    ui.Close()
+    t.eq(fixed.x, 325, "and the title bar still moves it")
+    t.eq(fixed.width, 450)
+    fixed:Destroy()
+    loose:Destroy()
+end)
+
 t.test("the interface scale applies to windows and never drops below what the screen can show sharply", function()
     t.eq(ui.GetScale(), 1)
     t.eq(ui.SetScale(2), 2)
@@ -419,16 +625,16 @@ t.test("the debug panel builds, lists mods, shows the log and takes pages from m
     panel.stop()
 end)
 
-t.test("the Mods page has the updater's switch and button, and offers an update on a mod's card", function()
+t.test("the Mods page has the updater's button, a switch on the card of each mod from the catalogue, and offers an update there", function()
     local panel = Wax.import("gui.debug")
     t.eq(panel.updates, nil, "without the updater the page has none of this")
-    local state = { available = {}, installing = {}, checking = false, last = 0, auto = true }
+    local state = { available = {}, installing = {}, checking = false, last = 0, auto = true, mods = { Hello = { version = "0.1.0", auto = true } } }
     local asked, put, switched = 0, {}, {}
     Wax.update = {
         state = function() return state end,
-        set_auto = function(on)
-            switched[#switched + 1] = on
-            state.auto = on
+        set_auto = function(id, on)
+            switched[#switched + 1] = tostring(id) .. "=" .. tostring(on)
+            state.mods[id].auto = on
         end,
         check_now = function()
             asked = asked + 1
@@ -440,10 +646,8 @@ t.test("the Mods page has the updater's switch and button, and offers an update 
             return true
         end,
     }
-    local function text_of(control)
-        local last = fake.last(control.widget, "SetText")
-        return last and rawget(last[2], "__text") or nil
-    end
+    -- what a label was given to say, whether or not all of it shows
+    local function text_of(control) return Wax.import("gui.kit").said(control.widget) end
     local function refresh()
         local started = os.clock()
         while os.clock() - started < 0.55 do end
@@ -453,18 +657,22 @@ t.test("the Mods page has the updater's switch and button, and offers an update 
     panel.start()
     ui.SetPreview(true)
     local shown = panel.updates
-    t.ok(shown and shown.switch and shown.check and shown.line and shown.note, "the controls are there")
-    t.eq(shown.switch:Get(), true)
+    t.ok(shown and shown.check and shown.line and shown.note, "the controls are there")
+    t.eq(shown.switch, nil, "there is no one switch for every mod any more")
     t.eq(text_of(shown.line), "Not checked yet.")
     refresh()
     t.eq(next(shown.buttons), nil, "no update button while nothing newer is known")
 
-    click(shown.switch.source)
+    local card = panel.card("Hello")
+    t.ok(card and card.auto, "the mod came from the catalogue, so its card has an Auto Update switch")
+    t.eq(card.auto:Get(), true)
+    click(card.auto.source)
     frames(1)
-    t.eq(switched[1], false, "the switch tells the updater")
-    state.auto = true
+    t.eq(switched[1], "Hello=false", "the switch tells the updater which mod, and what")
+    state.mods.Hello.auto = true
     refresh()
-    t.eq(shown.switch:Get(), true, "and follows it when the setting is changed elsewhere")
+    t.eq(card.auto:Get(), true, "and follows it when the setting is changed elsewhere")
+    t.ok(rawequal(panel.card("Hello"), card), "without the card being built again")
 
     click(shown.check.source)
     frames(1)
@@ -475,10 +683,12 @@ t.test("the Mods page has the updater's switch and button, and offers an update 
     t.eq(text_of(shown.line), "Try again in 42 seconds.", "asked again too soon, it says how long to wait")
 
     shown.hold = 0
+    state.mods.Hello.auto = false
     state.available.Hello, state.last = "0.2.0", os.time() - 600
     refresh()
     t.eq(text_of(shown.line), "Last checked 10 minutes ago.")
-    t.ok(shown.buttons.Hello, "a mod with a newer version gets a button on its card")
+    t.ok(shown.buttons.Hello, "a mod with a newer version gets a button on its card, also with its switch off")
+    t.eq(panel.card("Hello").auto:Get(), false)
     click(shown.buttons.Hello.source)
     frames(1)
     t.eq(put[1], "Hello")
@@ -498,7 +708,11 @@ t.test("the Mods page has the updater's switch and button, and offers an update 
     state.stopped = true
     refresh()
     t.eq(fake.last(shown.check.widget, "SetIsEnabled")[2], false, "without the helper the button is disabled")
-    t.eq(fake.last(shown.switch.widget, "SetIsEnabled")[2], false, "and so is the switch")
+    t.eq(fake.last(panel.card("Hello").auto.widget, "SetIsEnabled")[2], false, "and so is the mod's switch")
+    -- a mod that did not come from the catalogue has no switch
+    state.mods = {}
+    refresh()
+    t.eq(panel.card("Hello").auto, nil)
 
     ui.SetPreview(false)
     panel.stop()
@@ -511,13 +725,15 @@ t.test("the Mods page has the updater's switch and button, and offers an update 
     t.eq(fake.dead_touches, touches, fake.dead_where)
 end)
 
-t.test("the Mods page has one switch for looking for updates: off, the two controls under it are greyed", function()
+t.test("the Mods page has one switch for looking for updates: off, Check now and every mod's Auto Update are greyed", function()
     local panel = Wax.import("gui.debug")
-    local state = { available = {}, installing = {}, checking = false, last = 0, look = true, auto = true }
+    local state = { available = {}, installing = {}, checking = false, last = 0, look = true, auto = true,
+        mods = { Hello = { version = "0.1.0", auto = true } } }
     local looked = {}
+    local function auto() return panel.card("Hello").auto end
     Wax.update = {
         state = function() return state end,
-        set_auto = function(on) state.auto = on end,
+        set_auto = function(id, on) state.mods[id].auto = on end,
         set_looking = function(on)
             looked[#looked + 1] = on
             state.look = on
@@ -525,10 +741,8 @@ t.test("the Mods page has one switch for looking for updates: off, the two contr
         check_now = function() return true end,
         install = function() return true end,
     }
-    local function text_of(control)
-        local last = fake.last(control.widget, "SetText")
-        return last and rawget(last[2], "__text") or nil
-    end
+    -- what a label was given to say, whether or not all of it shows
+    local function text_of(control) return Wax.import("gui.kit").said(control.widget) end
     local function refresh()
         local started = os.clock()
         while os.clock() - started < 0.55 do end
@@ -540,14 +754,14 @@ t.test("the Mods page has one switch for looking for updates: off, the two contr
     t.ok(shown.look, "the switch is there")
     t.eq(shown.look:Get(), true, "and on, as the setting is")
     refresh()
-    t.eq(fake.count(shown.switch.widget, "SetIsEnabled"), 0, "while it is on nothing is greyed")
+    t.eq(fake.count(auto().widget, "SetIsEnabled"), 0, "while it is on nothing is greyed")
     t.eq(text_of(shown.line), "Not checked yet.")
 
     click(shown.look.source)
     frames(1)
     t.eq(looked[1], false, "the switch tells the updater")
     refresh()
-    t.eq(fake.last(shown.switch.widget, "SetIsEnabled")[2], false, "Auto Update is greyed")
+    t.eq(fake.last(auto().widget, "SetIsEnabled")[2], false, "the mod's Auto Update is greyed")
     t.eq(fake.last(shown.check.widget, "SetIsEnabled")[2], false, "and so is Check now")
     t.eq(fake.count(shown.look.widget, "SetIsEnabled"), 0, "the switch itself stays in reach")
     t.eq(text_of(shown.line), "Not looking for updates. Nothing is asked of the catalogue.")
@@ -555,7 +769,7 @@ t.test("the Mods page has one switch for looking for updates: off, the two contr
     state.look = true
     refresh()
     t.eq(shown.look:Get(), true, "it follows the setting when that is changed elsewhere")
-    t.eq(fake.last(shown.switch.widget, "SetIsEnabled")[2], true)
+    t.eq(fake.last(auto().widget, "SetIsEnabled")[2], true)
     t.eq(fake.last(shown.check.widget, "SetIsEnabled")[2], true)
     t.eq(text_of(shown.line), "Not checked yet.")
 
@@ -569,7 +783,8 @@ t.test("the Mods page has one switch for looking for updates: off, the two contr
     Wax.update = nil
 
     -- a page that starts with the setting off shows it off, with the rest greyed from the first look
-    state = { available = {}, installing = {}, checking = false, last = 0, look = false, auto = true }
+    state = { available = {}, installing = {}, checking = false, last = 0, look = false, auto = true,
+        mods = { Hello = { version = "0.1.0", auto = true } } }
     Wax.update = { state = function() return state end, set_auto = function() end, set_looking = function() end,
         check_now = function() return false end, install = function() return false end }
     panel.start()
@@ -577,8 +792,12 @@ t.test("the Mods page has one switch for looking for updates: off, the two contr
     shown = panel.updates
     t.eq(shown.look:Get(), false)
     refresh()
-    t.eq(fake.last(shown.switch.widget, "SetIsEnabled")[2], false)
+    t.eq(fake.last(auto().widget, "SetIsEnabled")[2], false)
     t.eq(fake.last(shown.check.widget, "SetIsEnabled")[2], false)
+    -- a card that is built again while nothing is looked for starts greyed too
+    state.available.Hello = "0.2.0"
+    refresh()
+    t.eq(fake.last(auto().widget, "SetIsEnabled")[2], false)
     ui.SetPreview(false)
     panel.stop()
     Wax.update = nil
@@ -1191,7 +1410,12 @@ t.test("text is cut to a width from its start or its end, and text that fits is 
     local kit = Wax.import("gui.kit")
     t.eq(kit.text_width("abcd", 10, "mono"), 32, "every letter of the fixed-width font is 0.8 of the size")
     t.ok(kit.text_width("illi") < kit.text_width("mwmw"), "narrow letters take less than wide ones")
-    t.eq(kit.text_width("abc", 22), kit.text_width("abc", 11) * 2)
+    -- twice the size is twice the letters; what a text block is wider than its letters does not grow
+    t.ok(math.abs((kit.text_width("abc", 22) - 0.8) - 2 * (kit.text_width("abc", 11) - 0.8)) < 0.001)
+    t.ok(math.abs(kit.text_width("5-10", 11) - 31.77) < 1, "as the game measured it: 31.77")
+    t.ok(math.abs(kit.text_width("100-200", 11) - 59.38) < 1, "59.38")
+    t.ok(math.abs(kit.text_width("More Cargo Slots!  0.1.0", 11) - 163.51) < 1, "163.51")
+    t.ok(kit.text_width("aaaa", 11, nil, "Bold") > kit.text_width("aaaa", 11), "the bold face is wider")
     local text, cut = kit.shorten("Hello", 500)
     t.eq(text, "Hello")
     t.eq(cut, false)
@@ -1543,11 +1767,2360 @@ t.test("a list line has one shape behind it, under the mouse or selected: its ar
     host:Destroy()
 end)
 
+t.test("text put in a box by code is not the user doing something: an open list stays open, and typing still closes it", function()
+    local host = ui.Window({ title = "Quiet" })
+    local pick = host:Dropdown("Pick", { "A", "B", "C" }, "B")
+    local box = host:Input("Name", {})
+    local typed = {}
+    box.Typed:Connect(function(text) typed[#typed + 1] = text end)
+    -- the engine reports text put in a box as a change of its text, in the middle of the call that put it there
+    local real = fake.react.SetText
+    fake.react.SetText = function(self, text)
+        if rawequal(self, box.source) then events.simulate(box.source, "OnTextChanged", text:ToString()) end
+    end
+    ui.Open()
+    click(pick.source)
+    t.ok(pick.parts.open)
+    for count = 1, 5 do
+        box:Set("value " .. count)
+        frames(1)
+    end
+    t.eq(typed[#typed], "value 5", "whoever listens to the box still hears of it")
+    t.ok(pick.parts.open, "the list is still open")
+    -- a setter that fails leaves the next real event counting again
+    t.raises(function() events.quietly(error, "on purpose") end, "on purpose")
+    t.eq(events.quietly(function(a, b) return a + b end, 2, 3), 5)
+    events.simulate(box.source, "OnTextChanged", "typed by hand")
+    t.ok(not pick.parts.open, "typing in the box closes it, as it always did")
+    fake.react.SetText = real
+    ui.Close()
+    host:Destroy()
+end)
+
+-- Mods as the loader has them, for the tests of who owns a window.
+local loaded = {}
+Wax.mods.get = function(id) return loaded[id] end
+local function mod(id, name)
+    local record = { id = id, scope = scope.new(id), manifest = { name = name } }
+    loaded[id] = record
+    return record
+end
+local function press(key)
+    fake.key_pressed = key
+    frames(1)
+    fake.key_pressed = nil
+end
+local function owner_entry(id)
+    for _, entry in ipairs(ui.Keys.Owners()) do
+        if entry.id == id then return entry end
+    end
+    return nil
+end
+
+t.test("every window has an owner with a key of its own: Wax's panel, and each mod", function()
+    Wax.game = { LocalPlayer = { Raw = fake.new_object("PlayerController") } }
+    local garage, radar = mod("Garage", "Garage Tools"), mod("Radar")
+    local own = ui.Window({ title = "Own" })
+    local garage_window, radar_window
+    scope.run(garage.scope, function() garage_window = ui.Window({ title = "Garage" }) end)
+    scope.run(radar.scope, function() radar_window = ui.Window({ title = "Radar", key = "K" }) end)
+    local list = ui.Keys.Owners()
+    t.eq(#list, 3)
+    t.eq(list[1].id, "Wax", "Wax comes first")
+    t.eq(list[2].id, "Garage")
+    t.eq(list[2].name, "Garage Tools", "a mod is named as its mod.lua names it")
+    t.eq(list[3].name, "Radar", "or by its id")
+    t.eq(ui.Keys.Get("Wax"), "F8")
+    t.eq(ui.GetToggleKey(), "F8")
+    t.eq(ui.Keys.Get("Garage"), "F6", "a mod that asked for no key is given the first of the default ones")
+    t.eq(ui.Keys.Get("Radar"), "K", "a mod gets the key it asked for")
+    t.eq(scope.run(radar.scope, ui.Keys.Get), "K", "asked without a name, it is the asking mod's own")
+    t.eq(ui.Keys.Get("Nobody"), nil)
+
+    -- a key shows and hides its owner's windows and nobody else's
+    local opened, closed = 0, 0
+    local on_open, on_close = ui.Opened:Connect(function() opened = opened + 1 end), ui.Closed:Connect(function() closed = closed + 1 end)
+    press("F6")
+    t.ok(ui.IsOpen(), "the mouse is free")
+    t.ok(garage_window:IsShowing())
+    t.ok(not radar_window:IsShowing() and not own:IsShowing(), "the others stay away")
+    t.ok(radar_window:IsVisible(), "a window that is not up is still a shown window: it comes with its own key")
+    t.eq(owner_entry("Garage").open, true)
+    t.eq(owner_entry("Radar").open, false)
+    local style = Wax.import("gui.style")
+    t.eq(fake.last(radar_window.outer, "SetVisibility")[2], style.Visibility.Collapsed)
+    t.eq(fake.last(garage_window.outer, "SetVisibility")[2], style.Visibility.Visible)
+    press("K")
+    t.ok(garage_window:IsShowing() and radar_window:IsShowing(), "several owners can be up at once")
+    press("F8")
+    t.ok(own:IsShowing())
+    press("F6")
+    t.ok(not garage_window:IsShowing() and radar_window:IsShowing() and own:IsShowing())
+    t.ok(ui.IsOpen(), "the menu stays open for the others")
+    press("K")
+    press("F8")
+    t.ok(not ui.IsOpen(), "hiding the last one closes the menu")
+    t.eq(opened, 1, "the menu opened once")
+    t.eq(closed, 1, "and closed once")
+
+    -- Escape hides everything
+    press("F6")
+    press("K")
+    press("Escape")
+    t.ok(not ui.IsOpen())
+    t.ok(not garage_window:IsShowing() and not radar_window:IsShowing())
+    t.eq(closed, 2)
+
+    -- ui.Open, ui.Close and ui.Toggle are about the caller's own windows
+    scope.run(garage.scope, ui.Open)
+    t.ok(garage_window:IsShowing() and not own:IsShowing() and not radar_window:IsShowing())
+    ui.Open()
+    t.ok(own:IsShowing(), "called by Wax, it is Wax's panel")
+    scope.run(radar.scope, ui.Close)
+    t.ok(ui.IsOpen() and garage_window:IsShowing(), "a mod that closes what is not open closes nothing")
+    scope.run(garage.scope, ui.Close)
+    t.ok(not garage_window:IsShowing() and own:IsShowing() and ui.IsOpen())
+    scope.run(radar.scope, ui.Toggle)
+    t.ok(radar_window:IsShowing())
+    scope.run(radar.scope, ui.Toggle)
+    t.ok(not radar_window:IsShowing())
+    ui.Close()
+    t.ok(not ui.IsOpen())
+
+    -- preview shows every window, whoever owns it
+    ui.SetPreview(true)
+    t.ok(own:IsShowing() and garage_window:IsShowing() and radar_window:IsShowing())
+    t.ok(not ui.IsOpen())
+    ui.SetPreview(false)
+    t.ok(not own:IsShowing() and not garage_window:IsShowing())
+
+    -- a window closed with its cross takes its owner down, and the last owner the menu
+    press("F6")
+    press("K")
+    click(garage_window.close_button)
+    t.ok(ui.IsOpen() and radar_window:IsShowing())
+    t.eq(owner_entry("Garage").open, false)
+    click(radar_window.close_button)
+    t.ok(not ui.IsOpen())
+    press("F6")
+    t.ok(garage_window:IsShowing(), "its key brings back the window the player closed")
+    t.ok(not radar_window:IsVisible(), "and not another owner's")
+    press("F6")
+    radar_window:Show()
+    t.ok(not radar_window:IsShowing(), "a window shown while the menu is closed waits for its key")
+    -- a window its mod shows while the menu is open comes up there and then
+    radar_window:Hide()
+    press("F8")
+    radar_window:Show()
+    t.ok(radar_window:IsShowing())
+    t.eq(owner_entry("Radar").open, true)
+    press("Escape")
+
+    on_open:Disconnect()
+    on_close:Disconnect()
+    own:Destroy()
+    t.eq(owner_entry("Wax"), nil, "an owner with no window is not listed")
+    garage.scope:destroy()
+    radar.scope:destroy()
+    t.eq(#ui.Keys.Owners(), 0)
+    Wax.game = nil
+end)
+
+t.test("a key is chosen for an owner with ui.Keys.Set: one that is taken is refused and says who has it", function()
+    Wax.game = { LocalPlayer = { Raw = fake.new_object("PlayerController") } }
+    ui.Notifications.Clear()
+    local garage, radar, scout = mod("Garage", "Garage Tools"), mod("Radar"), mod("Scout")
+    local own = ui.Window({ title = "Own" })
+    local garage_window, radar_window
+    scope.run(garage.scope, function() garage_window = ui.Window({ title = "Garage" }) end)
+    scope.run(radar.scope, function()
+        radar_window = ui.Window({ title = "Radar", key = "K" })
+        ui.Hotkey("J", function() end)
+    end)
+    t.eq(ui.Keys.Get("Garage"), "F6", "the default it was given is remembered")
+    local told = {}
+    local listening = ui.Keys.Changed:Connect(function(id, key) told[#told + 1] = id .. "=" .. tostring(key) end)
+    local wax_told = {}
+    local wax_listening = ui.KeyChanged:Connect(function(key) wax_told[#wax_told + 1] = tostring(key) end)
+
+    local ok, who = ui.Keys.Set("Garage", "K")
+    t.eq(ok, false)
+    t.eq(who, "Radar", "the owner that has it")
+    t.eq(ui.Keys.Get("Garage"), "F6", "the key stays what it was")
+    t.eq(ui.Notifications.Count(), 1, "and a notice says so")
+    ok, who = ui.Keys.Set("Garage", "F8")
+    t.eq(who, "Wax")
+    ok, who = ui.Keys.Set("Garage", "J")
+    t.eq(ok, false)
+    t.eq(who, "Radar", "a key another mod uses as a hotkey is taken too")
+    ok, who = ui.Keys.Set("Wax", "F6")
+    t.eq(ok, false)
+    t.eq(who, "Garage Tools")
+    t.eq(ui.SetToggleKey("K"), false, "the old name for Wax's key answers the same")
+    t.eq(ui.GetToggleKey(), "F8")
+    t.eq(#told, 0, "a refused key is no change")
+    ui.Notifications.Clear()
+
+    t.eq(ui.Keys.Set("Garage", "Ctrl+Shift+G"), true)
+    t.eq(ui.Keys.Get("Garage"), "Ctrl+Shift+G")
+    t.eq(told[1], "Garage=Ctrl+Shift+G")
+    ok, who = ui.Keys.Set("Radar", "shift+ctrl+G")
+    t.eq(ok, false, "the same key spelt another way is the same key")
+    t.eq(ui.Keys.Set("Garage", "F6"), true)
+    t.eq(ui.Keys.Set("Radar", "K"), true, "an owner can be given the key it has")
+    t.eq(ui.Keys.Set("Wax", "F7"), true)
+    t.eq(ui.GetToggleKey(), "F7")
+    t.eq(wax_told[1], "F7", "ui.KeyChanged still tells of Wax's own key")
+    t.eq(#wax_told, 1, "and of no other")
+    press("F7")
+    t.ok(own:IsShowing(), "the new key works")
+    press("F8")
+    t.ok(own:IsShowing(), "and the old one does nothing")
+    press("F7")
+    t.eq(ui.Keys.Set("Wax", "F8"), true)
+    t.raises(function() ui.Keys.Set("Garage", "Meta+K") end, "key name")
+    t.raises(function() ui.Keys.Set(nil, "K") end, "an owner")
+    t.raises(function() ui.Keys:Set("Garage", "K") end, "with a dot")
+    t.raises(function() scope.run(scout.scope, function() ui.Window({ title = "Scout", key = "Meta+K" }) end) end, "key name")
+
+    -- what the player chose stays through a reload of the mod, whatever the mod asks for
+    t.eq(ui.Keys.Set("Radar", "L"), true)
+    radar.scope:destroy()
+    radar.scope = scope.new("Radar")
+    scope.run(radar.scope, function() radar_window = ui.Window({ title = "Radar", key = "K" }) end)
+    t.eq(ui.Keys.Get("Radar"), "L")
+    -- a mod that asks for a key somebody has gets a default one, and so does one that asks for nothing
+    ui.Notifications.Clear()
+    local scout_window
+    scope.run(scout.scope, function() scout_window = ui.Window({ title = "Scout", key = "L" }) end)
+    t.eq(ui.Keys.Get("Scout"), "F9", "F6 is Garage's, so the next of the default keys")
+    t.eq(ui.Notifications.Count(), 0, "it is not said while the mod is still loading: a hotkey it makes may move it")
+    frames(1)
+    t.eq(ui.Notifications.Count(), 1, "a key that was given is said once")
+    ui.Notifications.Clear()
+    scout.scope:destroy()
+    scout.scope = scope.new("Scout")
+    scope.run(scout.scope, function() scout_window = ui.Window({ title = "Scout" }) end)
+    t.eq(ui.Keys.Get("Scout"), "F9", "and it is the same one the next time")
+    frames(1)
+    t.eq(ui.Notifications.Count(), 0, "said once, not every time")
+    -- no key at all
+    t.eq(ui.Keys.Set("Scout", nil), true)
+    t.eq(ui.Keys.Get("Scout"), nil)
+    press("F9")
+    t.ok(not ui.IsOpen())
+    t.eq(owner_entry("Scout").key, nil)
+
+    -- a plain key gives way when the same key with Ctrl is another owner's
+    t.eq(ui.Keys.Set("Scout", "Ctrl+K"), true)
+    t.eq(ui.Keys.Set("Radar", "K"), true)
+    fake.react.IsInputKeyDown = function(_, key) return key.KeyName == "LeftControl" end
+    press("K")
+    t.ok(scout_window:IsShowing(), "Ctrl+K is Scout's")
+    t.ok(not radar_window:IsShowing(), "and K alone, with Ctrl held, is not pressed")
+    fake.react.IsInputKeyDown = nil
+    press("K")
+    t.ok(radar_window:IsShowing())
+    press("Escape")
+
+    -- a letter key is not taken while a text box has the keyboard
+    local box = own:Input("Name", {})
+    fake.focused = box.source
+    press("K")
+    t.ok(not ui.IsOpen(), "typing a k in a box opens nothing")
+    fake.focused = nil
+
+    listening:Disconnect()
+    wax_listening:Disconnect()
+    own:Destroy()
+    for _, record in ipairs({ garage, radar, scout }) do record.scope:destroy() end
+    ui.Notifications.Clear()
+    Wax.game = nil
+end)
+
+t.test("a mod's own hotkey and the key of its windows never both act on one press", function()
+    Wax.game = { LocalPlayer = { Raw = fake.new_object("PlayerController") } }
+    ui.Notifications.Clear()
+    local tools, sonar, lamp, bench = mod("Tools", "Tool Box"), mod("Sonar"), mod("Lamp"), mod("Bench")
+    local own = ui.Window({ title = "Own" })
+
+    -- a window that starts hidden and the mod's own key to show it, as the guide writes it
+    local tools_window
+    scope.run(tools.scope, function()
+        tools_window = ui.Window({ title = "Tools", visible = false })
+        t.eq(ui.Keys.Get(), "F6", "the first default, while nothing else is on it")
+        ui.Hotkey("F6", function()
+            tools_window:Show()
+            ui.Open()
+        end)
+    end)
+    t.eq(ui.Keys.Get("Tools"), "F9", "the default steps aside for the mod's own hotkey")
+    frames(1)
+    t.eq(ui.Notifications.Count(), 0, "and is not announced while the mod keeps its window hidden")
+    press("F9")
+    t.ok(not ui.IsOpen(), "a key with nothing to show opens nothing")
+    press("F6")
+    t.ok(ui.IsOpen() and tools_window:IsShowing(), "the mod's hotkey shows its window, and it stays up")
+    press("F9")
+    t.ok(not ui.IsOpen(), "the key Wax gave hides it")
+    press("F9")
+    t.ok(tools_window:IsShowing(), "and shows it again")
+    press("F9")
+
+    -- a mod that asks for the key its own hotkey is on: the hotkey acts when it runs, the key at other times
+    local sonar_window
+    scope.run(sonar.scope, function()
+        sonar_window = ui.Window({ title = "Sonar", key = "K", visible = false })
+        ui.Hotkey("K", function()
+            sonar_window:Show()
+            ui.Open()
+        end)
+    end)
+    t.eq(ui.Keys.Get("Sonar"), "K", "a key the mod asked for stays")
+    press("K")
+    t.ok(ui.IsOpen() and sonar_window:IsShowing(), "one press opens it and does not close it again")
+    press("K")
+    t.ok(not ui.IsOpen(), "with the menu open the hotkey rests and the key hides the window")
+    press("K")
+    t.ok(sonar_window:IsShowing())
+    press("K")
+    t.ok(not ui.IsOpen())
+
+    -- a hotkey that also works in the menu does the whole job itself
+    local lamp_window
+    scope.run(lamp.scope, function()
+        lamp_window = ui.Window({ title = "Lamp", key = "L" })
+        ui.Hotkey("L", function() ui.Toggle() end, { in_menu = true })
+    end)
+    press("L")
+    t.ok(ui.IsOpen() and lamp_window:IsShowing())
+    press("L")
+    t.ok(not ui.IsOpen() and not lamp_window:IsShowing())
+
+    -- a hotkey another mod makes later takes a default key from the mod that had it, and the player is told
+    local bench_window
+    scope.run(bench.scope, function() bench_window = ui.Window({ title = "Bench" }) end)
+    local given = ui.Keys.Get("Bench")
+    t.ok(given ~= nil and given ~= "F6" and given ~= "F9", "F6 is a hotkey and F9 another mod's key")
+    frames(1)
+    t.eq(ui.Notifications.Count(), 1, "a mod with a window to show is told its key")
+    ui.Notifications.Clear()
+    local told = {}
+    local listening = ui.Keys.Changed:Connect(function(id, key) told[#told + 1] = id .. "=" .. tostring(key) end)
+    local hotkey
+    scope.run(lamp.scope, function() hotkey = ui.Hotkey("J", function() end) end)
+    t.eq(ui.Keys.Get("Bench"), given, "a hotkey on another key changes nothing")
+    hotkey:SetKey(given)
+    local moved = ui.Keys.Get("Bench")
+    t.ok(moved ~= nil and moved ~= given, "the default moved on")
+    t.eq(told[1], "Bench=" .. tostring(moved))
+    frames(1)
+    t.eq(ui.Notifications.Count(), 1, "the new key is said")
+    press(moved)
+    t.ok(bench_window:IsShowing(), "and it works")
+    press(moved)
+    bench.scope:destroy()
+    bench.scope = scope.new("Bench")
+    scope.run(bench.scope, function() bench_window = ui.Window({ title = "Bench" }) end)
+    t.eq(ui.Keys.Get("Bench"), moved, "the key it moved to is the one remembered")
+
+    -- what the player chose is theirs: it stays when a hotkey comes on the same key
+    t.eq(ui.Keys.Set("Bench", "F3"), true)
+    scope.run(lamp.scope, function() ui.Hotkey("F3", function() end) end)
+    t.eq(ui.Keys.Get("Bench"), "F3")
+    t.eq(#told, 2, "one move and one choice were told of")
+
+    listening:Disconnect()
+    own:Destroy()
+    for _, record in ipairs({ tools, sonar, lamp, bench }) do record.scope:destroy() end
+    ui.Notifications.Clear()
+    Wax.game = nil
+end)
+
+t.test("a mod that opens the menu without windows keeps the mouse free until it closes it again", function()
+    Wax.game = { LocalPlayer = { Raw = fake.new_object("PlayerController") } }
+    local browser, garage = mod("Browser"), mod("Garage")
+    local own = ui.Window({ title = "Own" })
+    local garage_window
+    scope.run(garage.scope, function() garage_window = ui.Window({ title = "Garage" }) end)
+    local heard = { browser = 0, garage = 0, wax = 0 }
+    scope.run(browser.scope, function() ui.Closed:Connect(function() heard.browser = heard.browser + 1 end) end)
+    scope.run(garage.scope, function() ui.Closed:Connect(function() heard.garage = heard.garage + 1 end) end)
+    local listening = ui.Closed:Connect(function() heard.wax = heard.wax + 1 end)
+
+    scope.run(browser.scope, function() ui.Open({ windows = false }) end)
+    t.ok(ui.IsOpen())
+    t.ok(not own:IsShowing() and not garage_window:IsShowing(), "no window comes with it")
+    scope.run(browser.scope, ui.Close)
+    t.ok(not ui.IsOpen())
+    t.eq(heard.browser, 1)
+    t.eq(heard.wax, 1)
+
+    -- with another owner's windows up as well, each ends on its own
+    scope.run(browser.scope, function() ui.Open({ windows = false }) end)
+    press("F8")
+    t.ok(own:IsShowing())
+    press("F8")
+    t.ok(ui.IsOpen(), "Wax's key hides Wax's panel: the mod still has the mouse free")
+    press("F8")
+    scope.run(browser.scope, ui.Close)
+    t.ok(ui.IsOpen() and own:IsShowing(), "the mod gave up its part: the panel stays")
+    t.eq(heard.browser, 2, "and the mod is told that its menu is over")
+    t.eq(heard.wax, 1, "nobody else is: the menu is still open")
+    t.eq(heard.garage, 1)
+    press("F8")
+    t.ok(not ui.IsOpen())
+    t.eq(heard.wax, 2)
+    t.eq(heard.browser, 3)
+
+    -- a mod with no window that asks for the menu gets the mouse, as it always did
+    scope.run(browser.scope, ui.Open)
+    t.ok(ui.IsOpen())
+    scope.run(browser.scope, ui.Toggle)
+    t.ok(not ui.IsOpen())
+    -- a key of an owner with nothing to show opens nothing
+    garage_window:Hide()
+    press("F6")
+    t.ok(not ui.IsOpen())
+    garage_window:Show()
+
+    -- a mod that is switched off while it has the menu open this way does not leave it open
+    scope.run(browser.scope, function() ui.Open({ windows = false }) end)
+    t.ok(ui.IsOpen())
+    browser.scope:destroy()
+    t.ok(not ui.IsOpen(), "the menu closes with the mod that opened it")
+    browser.scope = scope.new("Browser")
+    scope.run(browser.scope, function() ui.Open({ windows = false }) end)
+    press("F8")
+    browser.scope:destroy()
+    t.ok(ui.IsOpen() and own:IsShowing(), "Wax's panel is still up")
+    press("F8")
+    t.ok(not ui.IsOpen(), "and nothing of the mod that is gone holds the menu open after it")
+
+    listening:Disconnect()
+    own:Destroy()
+    browser.scope:destroy()
+    garage.scope:destroy()
+    Wax.game = nil
+end)
+
+t.test("a mod that loads again while its window is up has its new window up at once", function()
+    Wax.game = { LocalPlayer = { Raw = fake.new_object("PlayerController") } }
+    local garage = mod("Garage")
+    local own = ui.Window({ title = "Own" })
+    local window
+    scope.run(garage.scope, function() window = ui.Window({ title = "Garage" }) end)
+    press("F6")
+    t.ok(window:IsShowing())
+    -- the loader destroys what the mod made and runs it again, in one frame or a few frames apart
+    garage.scope:destroy()
+    t.ok(ui.IsOpen(), "the menu does not close under a mod that is loading again")
+    frames(5)
+    garage.scope = scope.new("Garage")
+    scope.run(garage.scope, function() window = ui.Window({ title = "Garage" }) end)
+    t.ok(window:IsShowing(), "the new window shows without its key being pressed")
+    frames(60)
+    t.ok(ui.IsOpen() and window:IsShowing())
+    -- a mod that is switched off does not come back: its place is given up after a moment
+    garage.scope:destroy()
+    frames(20)
+    t.ok(ui.IsOpen())
+    frames(20)
+    t.ok(not ui.IsOpen(), "with nothing left to show the menu closes")
+    -- and with another owner up, only that mod goes
+    garage.scope = scope.new("Garage")
+    scope.run(garage.scope, function() window = ui.Window({ title = "Garage" }) end)
+    press("F6")
+    press("F8")
+    garage.scope:destroy()
+    frames(40)
+    t.ok(ui.IsOpen() and own:IsShowing())
+    garage.scope = scope.new("Garage")
+    scope.run(garage.scope, function() window = ui.Window({ title = "Garage" }) end)
+    t.ok(not window:IsShowing(), "a window made later waits for its key")
+    press("Escape")
+    own:Destroy()
+    garage.scope:destroy()
+    Wax.game = nil
+end)
+
+t.test("the game takes the mouse back when a screen of its own closes: the open menu puts it there again", function()
+    local player = fake.new_object("PlayerController")
+    Wax.game = { LocalPlayer = { Raw = player } }
+    -- the game's own stack of menus, as PushUIInput, PopUIInput and ClearUIInput keep it
+    local stack, pops = 0, 0
+    local function show(self) rawget(self, "__members").bShowMouseCursor = stack > 0 end
+    local reacts = {
+        IsA = function() return true end,
+        PushUIInput = function(self)
+            stack = stack + 1
+            show(self)
+        end,
+        PopUIInput = function(self)
+            pops = pops + 1
+            stack = math.max(0, stack - 1)
+            show(self)
+        end,
+        ClearUIInput = function(self)
+            stack = 0
+            show(self)
+        end,
+    }
+    for name, react in pairs(reacts) do fake.react[name] = react end
+    show(player)
+    local host = ui.Window({ title = "Cursor" })
+    ui.Open()
+    t.eq(stack, 1, "opening the menu asks the game for the mouse")
+    frames(5)
+    t.eq(stack, 1, "once")
+    -- Alt+Tab: the game puts its escape menu up, and closing that empties the game's whole stack
+    player:PushUIInput()
+    t.eq(stack, 2)
+    player:ClearUIInput()
+    t.eq(player.bShowMouseCursor, false)
+    t.ok(ui.IsOpen(), "the menu is still open, and has no mouse")
+    frames(1)
+    t.eq(stack, 1, "the next frame it has it again")
+    t.eq(player.bShowMouseCursor, true)
+    frames(5)
+    t.eq(stack, 1)
+    t.eq(ui.stats().cursor, true)
+    ui.Close()
+    t.eq(stack, 0, "closing the menu gives the mouse back")
+    t.eq(pops, 1)
+    -- emptied and closed in the same frame: nothing of the menu's is left to take off
+    ui.Open()
+    player:ClearUIInput()
+    ui.Close()
+    t.eq(pops, 1, "nothing is popped from a stack the game has emptied")
+    t.eq(stack, 0)
+    -- a screen of the game's own opens while the menu is up: the game empties its stack and puts its own entry there
+    local screen = nil
+    local real_screen = input.screen
+    input.screen = function() return screen end
+    ui.Open()
+    t.eq(stack, 1)
+    player:ClearUIInput()
+    player:PushUIInput()
+    screen = "UMG_MainMenu 1"
+    frames(3)
+    t.eq(stack, 1, "the game's entry shows the mouse, so the menu asks for nothing")
+    ui.Close()
+    t.eq(stack, 1, "the entry on top is the game's now: closing the menu leaves it where it is")
+    t.eq(player.bShowMouseCursor, true, "and the game's screen keeps its mouse")
+    t.eq(pops, 1)
+    -- opened over a screen that was there already, the menu's entry is the top one and comes off again
+    ui.Open()
+    t.eq(stack, 2)
+    frames(3)
+    ui.Close()
+    t.eq(stack, 1)
+    t.eq(pops, 2)
+    -- the game's screen closes while the menu is up, and the menu is closed afterwards
+    ui.Open()
+    player:ClearUIInput()
+    screen = nil
+    frames(1)
+    t.eq(stack, 1, "the mouse is taken again")
+    ui.Close()
+    t.eq(stack, 0, "and given back: that entry was the menu's")
+    input.screen = real_screen
+    -- the same for a menu a mod opened without windows
+    local browser = mod("Browser")
+    scope.run(browser.scope, function() ui.Open({ windows = false }) end)
+    t.eq(stack, 1)
+    player:ClearUIInput()
+    frames(1)
+    t.eq(stack, 1)
+    scope.run(browser.scope, ui.Close)
+    t.eq(stack, 0)
+    for name in pairs(reacts) do fake.react[name] = nil end
+    browser.scope:destroy()
+    host:Destroy()
+    Wax.game = nil
+end)
+
+t.test("a game that takes the mouse back every frame is asked for it a few times, not for ever", function()
+    local player = fake.new_object("PlayerController")
+    Wax.game = { LocalPlayer = { Raw = player } }
+    local pushes = 0
+    local reacts = {
+        IsA = function() return true end,
+        PushUIInput = function(self)
+            pushes = pushes + 1
+            rawget(self, "__members").bShowMouseCursor = true
+        end,
+        PopUIInput = function(self) rawget(self, "__members").bShowMouseCursor = false end,
+    }
+    for name, react in pairs(reacts) do fake.react[name] = react end
+    rawget(player, "__members").bShowMouseCursor = false
+    local host = ui.Window({ title = "Fight" })
+    ui.Open()
+    t.eq(pushes, 1)
+    for _ = 1, 600 do
+        rawget(player, "__members").bShowMouseCursor = false
+        frames(1)
+    end
+    t.eq(pushes, 6, "the first time, then five more tries a while apart")
+    -- closing and opening the menu starts afresh
+    ui.Close()
+    ui.Open()
+    t.eq(pushes, 7)
+    rawget(player, "__members").bShowMouseCursor = false
+    frames(1)
+    t.eq(pushes, 8)
+    -- a mouse that is kept for a while and then lost once more is taken again at once
+    frames(200)
+    rawget(player, "__members").bShowMouseCursor = false
+    frames(1)
+    t.eq(pushes, 9)
+    ui.Close()
+    for name in pairs(reacts) do fake.react[name] = nil end
+    host:Destroy()
+    Wax.game = nil
+end)
+
+t.test("the Mods page: a mod from the catalogue has its own Auto Update on its card, and a mod with a window its Open key", function()
+    local panel = Wax.import("gui.debug")
+    local player = fake.new_object("PlayerController")
+    Wax.game = { LocalPlayer = { Raw = player } }
+    ui.Notifications.Clear()
+    local hello = mod("Hello", "Hello")
+    local state = { available = {}, installing = {}, checking = false, last = 0, look = true, auto = true, mods = {} }
+    local switched = {}
+    Wax.update = {
+        state = function() return state end,
+        set_auto = function(id, on)
+            switched[#switched + 1] = tostring(id) .. "=" .. tostring(on)
+            if state.mods[id] then state.mods[id].auto = on end
+        end,
+        set_looking = function(on) state.look = on end,
+        check_now = function() return true end,
+        install = function() return true end,
+    }
+    local refresh = panel.refresh       -- what the panel does by itself every half second
+    local before = fake.mark()
+    panel.start()
+    ui.SetPreview(true)
+    refresh()
+    local shown = panel.updates
+    t.eq(shown.switch, nil, "the one switch for every mod is gone")
+    t.ok(shown.look and shown.check and shown.line, "looking for updates and asking now are still there")
+    local card = panel.card("Hello")
+    t.ok(card, "the mod has its card")
+    t.eq(card.auto, nil, "a mod that did not come from the catalogue has no such switch")
+    t.eq(card.keybind, nil, "and a mod without a window has no key")
+
+    -- the updater learns that the mod came from the catalogue
+    state.mods.Hello = { version = "0.1.0", auto = true }
+    refresh()
+    card = panel.card("Hello")
+    t.ok(card.auto, "now its card has the switch")
+    t.eq(card.auto:Get(), true)
+    click(card.auto.source)
+    frames(1)
+    t.eq(switched[1], "Hello=false", "the switch tells the updater which mod, and what")
+    state.mods.Hello.auto = true
+    refresh()
+    t.eq(panel.card("Hello").auto:Get(), true, "and follows it when it is changed elsewhere")
+    state.mods.Hello.auto = false
+    state.available.Hello = "0.2.0"
+    refresh()
+    t.ok(shown.buttons.Hello, "with its switch off a newer version is still offered, with its button")
+    t.eq(panel.card("Hello").auto:Get(), false)
+    -- while nothing is looked for the switch does nothing, and says so by being greyed
+    state.look = false
+    refresh()
+    card = panel.card("Hello")
+    t.eq(fake.last(card.auto.widget, "SetIsEnabled")[2], false)
+    t.eq(fake.last(shown.check.widget, "SetIsEnabled")[2], false)
+    state.look = true
+    refresh()
+    t.eq(fake.last(card.auto.widget, "SetIsEnabled")[2], true)
+    -- a card that is built while nothing is looked for starts greyed
+    state.look = false
+    refresh()
+    state.available.Hello = nil
+    refresh()
+    t.eq(fake.last(panel.card("Hello").auto.widget, "SetIsEnabled")[2], false)
+    state.look = true
+    refresh()
+
+    -- the mod makes a window: its card gets the key
+    local hello_window
+    scope.run(hello.scope, function() hello_window = ui.Window({ title = "Hello window" }) end)
+    refresh()
+    card = panel.card("Hello")
+    t.ok(card.keybind, "now its card has the key")
+    t.eq(card.keybind:Get(), ui.Keys.Get("Hello"))
+    t.ok(card.auto, "and still its switch")
+    click(card.keybind.source)
+    t.ok(input.capturing())
+    fake.key_pressed = "K"
+    frames(1)
+    fake.key_pressed = nil
+    frames(3)
+    t.eq(ui.Keys.Get("Hello"), "K", "the key that was pressed is the mod's key now")
+    t.eq(card.keybind:Get(), "K")
+    -- a key somebody has: refused, said, and the control shows the key the mod still has
+    ui.Notifications.Clear()
+    click(card.keybind.source)
+    fake.key_pressed = "F8"
+    frames(1)
+    fake.key_pressed = nil
+    frames(3)
+    t.eq(ui.Keys.Get("Hello"), "K")
+    t.eq(card.keybind:Get(), "K")
+    t.eq(ui.Notifications.Count(), 1)
+    -- changed elsewhere, the card follows
+    t.eq(ui.Keys.Set("Hello", "L"), true)
+    refresh()
+    t.eq(panel.card("Hello").keybind:Get(), "L")
+    t.ok(rawequal(panel.card("Hello"), card), "without the card being built again")
+
+    -- the Settings page says whose key it is
+    local labelled = false
+    for _, object in ipairs(fake.made(before)) do
+        if rawget(object, "__text") == "Wax panel key" then labelled = true end
+        t.ok(rawget(object, "__text") ~= "Menu key", "the old name is gone")
+    end
+    t.ok(labelled, "the key on the Settings page is named as the key of Wax's panel")
+
+    -- a mod that asks for the panel gets the panel
+    ui.SetPreview(false)
+    scope.run(hello.scope, panel.Show)
+    t.ok(panel.Window():IsShowing(), "the panel is up")
+    t.ok(not hello_window:IsShowing(), "and the mod's own window is not")
+    ui.Close()
+
+    panel.stop()
+    Wax.update = nil
+    hello.scope:destroy()
+    ui.Notifications.Clear()
+    Wax.game = nil
+end)
+
+local function header_of(dropdown) return fake.last(dropdown.parts.label, "SetText")[2]:ToString() end
+local function scale_of(box) return fake.last(box, "SetUserSpecifiedScale")[2] end
+
+t.test("the game's window changes size: what Wax draws follows at once, and mods are told once, when it has stopped", function()
+    local real_clock, now = sched.clock, sched.clock()
+    sched.clock = function() return now end
+    local function pass(seconds, count)
+        count = count or 1
+        for _ = 1, count do
+            now = now + seconds / count
+            frames(1)
+        end
+    end
+    fake.set_screen(1920, 1080, 1)
+    pass(1, 4)
+    local gui_root = Wax.import("gui.root")
+    local host_scope = scope.new("resize")
+    local window, panel, plain, sizes
+    local asked, resized = 0, {}
+    scope.run(host_scope, function()
+        window = ui.Window({ title = "Resize", x = 1500, y = 600, width = 300, height = 200 })
+        ui.AddSettings(window)
+        sizes = window.controls[#window.controls]
+        -- a panel that spans the room beside a column 300 wide, and is drawn smaller on a lower screen
+        panel = ui.Panel({ anchor = "top-left", width = 1, place = function(wide, high)
+            asked = asked + 1
+            return { x = 2, y = 3, width = wide - 300, height = 100, zoom = high / 1080 }
+        end })
+        panel.Resized:Connect(function(wide, high) resized[#resized + 1] = { wide, high } end)
+        plain = ui.Overlay({ anchor = "top-left", width = 200 })
+    end)
+    t.eq(asked, 1, "the place function is asked when the panel is made")
+    t.eq(panel.width, 1620)
+    t.eq(panel.x, 2)
+    local told = {}
+    local listening = ui.ScreenChanged:Connect(function(width, height) told[#told + 1] = { width, height } end)
+    t.eq(window.slot:GetPosition().X, 1500)
+    t.eq(header_of(sizes), "100%")
+
+    -- dragged narrower, a little each frame: 40 steps from 1920 wide to 1440
+    fake.set_screen(1908, 1080, 1)
+    pass(2 / 60, 2)
+    for step = 2, 40 do
+        local width = 1920 - step * 12
+        fake.set_screen(width, 1080, 1)
+        pass(1 / 60)
+        if window.slot:GetPosition().X ~= math.min(1500, width - 80) then
+            error(("at %d wide the window is drawn at %s"):format(width, tostring(window.slot:GetPosition().X)))
+        end
+        if panel.width ~= width - 300 or fake.last(panel.sizers[1], "SetWidthOverride")[2] ~= width - 300 then
+            error(("at %d wide the placed panel is %s wide"):format(width, tostring(panel.width)))
+        end
+    end
+    t.eq(window.slot:GetPosition().X, 1360, "the window stayed on the screen in every frame")
+    t.eq(window.x, 1500, "and its own place is kept")
+    t.eq(window.slot:GetSize().X, 300, "at the size it had")
+    t.eq(asked, 41, "the place function was asked once for every size, and at no other time")
+    t.eq(#resized, 40, "and the panel said its new size each time")
+    t.eq(resized[40][1], 1140)
+    t.eq(#told, 0, "nobody is told while the size is changing")
+    pass(0.3, 6)
+    t.eq(#told, 0, "nor straight after")
+    pass(0.2, 6)
+    t.eq(#told, 1, "once it has stayed as it is for a moment, mods are told")
+    t.eq(told[1][1], 1440)
+    t.eq(told[1][2], 1080)
+    pass(2, 20)
+    t.eq(#told, 1, "once")
+
+    -- wider again: the window goes back to where the player had it
+    fake.set_screen(1920, 1080, 1)
+    pass(2 / 60, 2)
+    t.eq(window.slot:GetPosition().X, 1500)
+    pass(0.5, 6)
+    t.eq(#told, 2)
+
+    -- smaller with the same shape: below what text can be read at, the interface size goes up, at once and not in steps
+    fake.set_screen(960, 540, 0.5)
+    pass(2 / 60, 2)
+    t.eq(ui.GetScale(), 1.8)
+    t.eq(window.slot:GetSize().X, 540, "the window is drawn at the new size")
+    t.eq(scale_of(plain.outer), 1.8, "and so is an overlay")
+    t.ok(math.abs(scale_of(panel.outer) - 1) < 1e-9, "a placed panel is asked again: here it stays as large on the screen as it was")
+    fake.set_screen(1280, 720, 2 / 3)
+    pass(1 / 60)
+    t.ok(math.abs(ui.GetScale() - 1.35) < 1e-9, "every size on the way is followed")
+    fake.set_screen(960, 540, 0.5)
+    pass(1 / 60)
+    t.eq(#told, 2)
+    pass(0.5, 6)
+    t.eq(#told, 3, "the screen is another size in the units mods lay out in, so they are told")
+    t.eq(header_of(sizes), "200%", "the Settings page shows the size in use, from the sizes this screen can show")
+    t.eq(sizes:Get(), "200%")
+
+    -- a window with no real size (minimised, or a sliver) changes nothing
+    fake.set_screen(160, 28, 0.444)
+    pass(1, 40)
+    t.eq(ui.GetScale(), 1.8)
+    t.eq(#told, 3)
+    fake.set_screen(1920, 1080, 1)
+    pass(1, 40)
+    t.eq(ui.GetScale(), 1)
+    t.eq(header_of(sizes), "100%")
+    t.eq(#told, 4)
+
+    -- the interface size changed by the player is told the same way
+    click(sizes.source)
+    click(sizes.items["125%"])
+    t.eq(ui.GetScale(), 1.25)
+    t.eq(header_of(sizes), "125%")
+    t.eq(#told, 4)
+    pass(0.5, 6)
+    t.eq(#told, 5)
+    t.eq(told[5][1], 1536)
+    ui.SetScale(1)
+    t.eq(header_of(sizes), "100%", "a size set from code shows on the Settings page too")
+    pass(0.5, 6)
+    t.eq(#told, 6)
+
+    -- a mod that asked for the size in the middle of a change is told when the change ends, even where it ends where it began
+    fake.set_screen(1600, 1080, 1)
+    pass(2 / 60, 2)
+    t.eq(ui.ScreenSize(), 1600)
+    fake.set_screen(1920, 1080, 1)
+    pass(0.5, 6)
+    t.eq(#told, 7)
+    t.eq(told[7][1], 1920)
+
+    listening:Disconnect()
+    host_scope:destroy()
+    sched.clock = real_clock
+end)
+
+t.test("a text block that is given a room shows its text whole, in smaller letters, or cut with dots, and never wider than its room", function()
+    local kit = Wax.import("gui.kit")
+    local label = kit.label("5-10", { size = 10 })
+    local info = kit.labels()[label]
+    t.eq(kit.rule(info), nil, "a text block nobody has given a rule has none")
+    t.eq(kit.fit(label, 33, { sizes = { 10, 9, 8 } }), false)
+    t.eq(kit.rule(info), "fitted")
+    t.eq(info.shown, "5-10")
+    t.eq(info.drawn, 10)
+    t.eq(kit.set_text(label, "10-20"), false)
+    t.eq(info.shown, "10-20")
+    t.eq(info.drawn, 8, "a longer text is drawn smaller before it is cut")
+    t.eq(fake.last(label, "SetFont")[2].Size, 8)
+    t.eq(kit.set_text(label, "100-200"), true, "one too long for the smallest size is cut")
+    t.eq(info.shown:sub(-3), "...")
+    t.ok(kit.text_width(info.shown, info.drawn) <= 33, info.shown)
+    t.eq(kit.whole(label), "100-200", "and its whole text is there for a tip")
+    t.eq(kit.said(label), "100-200")
+    t.eq(kit.set_text(label, "7"), false)
+    t.eq(info.drawn, 10, "a short text is back at the full size")
+    t.eq(kit.whole(label), nil)
+    -- every line of a text of several lines is cut on its own
+    local lines = kit.label("Health\nThe longest name a thing could have\nJog")
+    t.eq(kit.fit(lines, 70), true)
+    local shown = {}
+    for line in (kit.labels()[lines].shown .. "\n"):gmatch("([^\n]*)\n") do shown[#shown + 1] = line end
+    t.eq(shown[1], "Health")
+    t.eq(shown[2]:sub(-3), "...")
+    t.eq(shown[3], "Jog")
+    -- more room, and the text is whole again
+    t.eq(kit.fit(lines, 400), false)
+    t.eq(kit.labels()[lines].shown, "Health\nThe longest name a thing could have\nJog")
+    -- no room given: it is as wide as its text, and says so
+    kit.fit(lines, nil)
+    t.eq(kit.rule(kit.labels()[lines]), "free")
+    t.eq(kit.rule(kit.labels()[kit.label("x", { wrap = true })]), "wraps")
+    -- the two that mods can ask
+    t.eq(ui.TextWidth("5-10"), kit.text_width("5-10"))
+    local cut_text, was_cut = ui.Shorten("A very long name of a thing", 60)
+    t.eq(was_cut, true)
+    t.ok(ui.TextWidth(cut_text) <= 60, cut_text)
+end)
+
+t.test("a pair of labels in a row, names at the left and figures at the right, several lines each: what fits is whole, and a line too long is the only one cut", function()
+    local kit = Wax.import("gui.kit")
+    local host
+    local host_scope = scope.new("pairs")
+    scope.run(host_scope, function() host = ui.Panel({ anchor = "top-left", width = 224, padding = 6, when = "always" }) end)
+    local function lines_of(text)
+        local out = {}
+        for line in (text .. "\n"):gmatch("([^\n]*)\n") do out[#out + 1] = line end
+        return out
+    end
+    for _, split in ipairs({ { 3, 2 }, { 1, 1 }, { 2, 3 } }) do
+        local before = #text_blocks
+        local pair = host:Row()
+        local names = pair:Label("", { weight = split[1] })
+        local values = pair:Label("", { align = "right", weight = split[2] })
+        local left, right = text_blocks[before + 1].info, text_blocks[before + 2].info
+        -- the creature page as the owner had it: eight lines, every one with room to spare
+        local said_names = "Health\nWalk\nJog\nRun\nSprint\nAttacking\nSight\nHearing"
+        local said_values = "325\n2.2 m/s\n4.4 m/s\n6.6 m/s\n12 m/s\n4.4 m/s\n50 m\n25 m"
+        names:Set(said_names)
+        values:Set(said_values)
+        t.eq(left.shown, said_names, "every name is whole")
+        t.eq(right.shown, said_values, "and every figure")
+        t.eq(left.cut, false)
+        t.eq(right.cut, false)
+        t.eq(kit.rule(left), "fitted")
+        -- one name too long for its share: that line ends in dots, the others are as they were, and no line is lost
+        names:Set("Health\nMovement speed while sprinting downhill in the rain\nJog")
+        values:Set("325\n12.5 m/s\n4.4 m/s")
+        local shown = lines_of(left.shown)
+        t.eq(#shown, 3, "the names keep their three lines, so each figure stays beside its name")
+        t.eq(shown[1], "Health")
+        t.eq(shown[2]:sub(-3), "...")
+        t.eq(shown[3], "Jog")
+        t.eq(right.shown, "325\n12.5 m/s\n4.4 m/s")
+        t.eq(#lines_of(right.shown), 3)
+        -- and whole again when the long one is gone
+        names:Set("Health\nWalk\nJog")
+        t.eq(left.shown, "Health\nWalk\nJog")
+        t.eq(left.cut, false)
+    end
+    host_scope:destroy()
+end)
+
+t.test("a text that is close to its room is decided by the game's own measure of it: what fits is never cut, and what does not is never left whole", function()
+    local kit = Wax.import("gui.kit")
+    local label = kit.label("Bestiary")
+    local worked_out = kit.text_width("Bestiary")
+    local says, asked = nil, 0
+    local real = fake.react.GetDesiredSize
+    fake.react.GetDesiredSize = function(self)
+        if rawequal(self, label) then
+            asked = asked + 1
+            return { X = says, Y = 19 }
+        end
+        return { X = 120, Y = 48 }
+    end
+    kit.MEASURE = true
+    -- plenty of room, and far too little: the letters say so, and the game is not asked
+    t.eq(kit.fit(label, worked_out * 2), false)
+    t.eq(kit.fit(label, worked_out * 0.5), true)
+    t.eq(asked, 0)
+    -- a room two percent under what the letters add up to: the game says the text is narrower than that, so it is whole
+    says = worked_out * 0.97
+    t.eq(kit.fit(label, worked_out * 0.98), false, "it fits, so it is not cut")
+    t.eq(kit.labels()[label].shown, "Bestiary")
+    t.eq(asked, 1)
+    -- a room two percent over: the game says the text is wider still, so it is cut with dots
+    says = worked_out * 1.04
+    t.eq(kit.fit(label, worked_out * 1.02), true, "it does not fit, so it is not left to be cut mid-letter")
+    t.eq(kit.labels()[label].shown:sub(-3), "...")
+    t.eq(asked, 2)
+    -- a text block that is not built yet cannot be measured: the letters decide
+    says = 0
+    t.eq(kit.fit(label, worked_out * 1.02), false)
+    t.eq(kit.fit(label, worked_out * 0.98), true)
+    kit.MEASURE = false
+    fake.react.GetDesiredSize = real
+end)
+
+t.test("a slot's count stays in its cell: smaller letters for a long one, dots for one too long, and the whole count beside the mouse", function()
+    local kit = Wax.import("gui.kit")
+    local slots = Wax.import("gui.slots")
+    local tip = Wax.import("gui.tip")
+    local host
+    local host_scope = scope.new("counts")
+    scope.run(host_scope, function() host = ui.Panel({ anchor = "top-left", width = 400, when = "always" }) end)
+    local before = #text_blocks
+    local row = host:Slots({ columns = 4, rows = 1, size = 36, gap = 2 })
+    frames(3)
+    row:Set({ { icon = "home", count = "5-10", value = 1 }, { icon = "home", count = "10-20", value = 2 },
+        { icon = "home", count = "100-200", value = 3, tip = "Stone" }, { icon = "home", count = "x1000", value = 4 } })
+    local counts = {}
+    for index = before + 1, #text_blocks do counts[text_blocks[index].info.text] = text_blocks[index].info end
+    local room = 36 - slots.COUNT_EDGE
+    for _, text in ipairs({ "5-10", "10-20", "100-200", "x1000" }) do
+        local info = counts[text]
+        t.ok(info, "the count " .. text .. " is a text block")
+        t.eq(kit.rule(info), "fitted")
+        t.ok(kit.text_width(info.shown, info.drawn) <= room, text .. " shows as " .. info.shown .. " at size " .. info.drawn)
+    end
+    t.eq(counts["5-10"].shown, "5-10")
+    t.eq(counts["5-10"].drawn, 10)
+    t.eq(counts["10-20"].shown, "10-20")
+    t.ok(counts["10-20"].drawn < 10, "the longer count is drawn smaller")
+    t.eq(counts["x1000"].shown, "x1000")
+    t.eq(counts["100-200"].cut, true, "seven letters do not fit a cell of 36")
+    t.eq(counts["100-200"].shown:sub(-3), "...")
+    -- a larger cell: the same counts again, whole where they now fit
+    row:SetLayout(4, 60)
+    t.eq(counts["100-200"].shown, "100-200")
+    t.eq(counts["100-200"].cut, false)
+    t.eq(counts["10-20"].drawn, 10)
+    row:SetLayout(4, 36)
+    t.eq(counts["100-200"].cut, true)
+    -- the whole count goes under a slot's own tip, or stands alone
+    t.eq(tip.plus(nil, "100-200"), "100-200")
+    local both = tip.plus("Stone", "100-200")()
+    t.eq(both.title, "Stone")
+    t.eq(both.lines[1][1], "100-200")
+    local more = tip.plus(function() return { title = "Stone", lines = { "a rock" } } end, "100-200")()
+    t.eq(#more.lines, 2)
+    t.eq(more.lines[2][1], "100-200")
+    host_scope:destroy()
+end)
+
+t.test("one-line text in a control has the room the control has: a caption, a label in a row and a dropdown's header are cut with dots, never mid-letter", function()
+    local kit = Wax.import("gui.kit")
+    local host
+    local host_scope = scope.new("room")
+    scope.run(host_scope, function() host = ui.Window({ title = "A window with a very long title that cannot fit its bar", width = 340, height = 300 }) end)
+    local before = #text_blocks
+    local long = "A caption that is much too long for the button it is on in this window"
+    local button, label, natural, tab
+    scope.run(host_scope, function()
+        button = host:Button(long, function() end)
+        local row = host:Row()
+        natural = row:Button("Check now", function() end, { icon = "refresh-cw", stretch = false })
+        label = row:Label("Last checked a very long time ago, longer than this row is wide")
+        local tabs = host:Row()
+        tab = tabs:Button("About", function() end, { tab = true })
+        tabs:Button("Drops", function() end, { tab = true })
+    end)
+    local by_text = {}
+    for index = before + 1, #text_blocks do by_text[text_blocks[index].info.text] = text_blocks[index].info end
+    local caption = by_text[long]
+    t.eq(caption.cut, true)
+    t.eq(caption.shown:sub(-3), "...")
+    t.ok(kit.text_width(caption.shown) <= 340 - 26 - 32, caption.shown)
+    t.eq(by_text["Check now"].cut, false, "a button that keeps its own width shows its caption whole")
+    local said = by_text["Last checked a very long time ago, longer than this row is wide"]
+    t.eq(said.cut, true, "the label beside it has what the button leaves")
+    t.eq(by_text["About"].cut, false)
+    -- the title of the window is one line in its bar
+    local title = kit.labels()[host.title_label]
+    t.eq(title.cut, true)
+    t.eq(title.shown:sub(-3), "...")
+    -- a wider window: everything is whole again, and a new caption is fitted like the first
+    host:SetSize(900, 300)
+    t.eq(caption.cut, false)
+    t.eq(caption.shown, long)
+    t.eq(said.cut, false)
+    t.eq(title.cut, false)
+    button:SetCaption("Short")
+    t.eq(caption.shown, "Short")
+    host:SetSize(340, 300)
+    button:SetCaption(long)
+    t.eq(caption.cut, true)
+    host_scope:destroy()
+end)
+
+t.test("a row of slots can be set out again with another number of cells and another cell size: no cell is made twice", function()
+    local host
+    local host_scope = scope.new("reflow")
+    scope.run(host_scope, function() host = ui.Panel({ anchor = "top-left", width = 400, when = "always" }) end)
+    local row = host:Slots({ columns = 4, rows = 1, size = 30, gap = 2 })
+    frames(3)
+    t.ok(row:Ready())
+    row:Set({ { icon = "home", value = 1 }, { icon = "home", value = 2 }, { icon = "home", value = 3 }, { icon = "home", value = 4 } })
+    local made = fake.objects
+    row:SetLayout(3, 34)
+    t.eq(row:Capacity(), 3)
+    t.eq(row:GetLook(4), nil, "what no longer has a cell is not kept")
+    t.eq(row:GetLook(3).value, 3)
+    t.eq(fake.last(row.widget, "SetWidthOverride")[2], 3 * 34 + 2 * 2, "the row is as wide as its cells")
+    row:SetLayout(6, 32)
+    t.eq(row:Capacity(), 6)
+    t.ok(not row:Ready(), "the cells that are missing are made over the next frames")
+    frames(3)
+    t.ok(row:Ready())
+    row:SetLayout(6, 32)
+    row:SetLayout(4, 30)
+    t.eq(row:Capacity(), 4)
+    t.eq(fake.dead_touches, 0)
+    host_scope:destroy()
+    t.ok(made > 0)
+end)
+
+t.test("a held row passes another once its leading edge is over that row's middle, and the rows between give way by its height", function()
+    local drag = Wax.import("gui.drag")
+    local heights = { 40, 40, 100, 40 }
+    t.eq(drag.target(heights, 8, 1, 0), 1)
+    t.eq(drag.target(heights, 8, 1, 28), 1, "the gap and half of the next row: not past it yet")
+    t.eq(drag.target(heights, 8, 1, 29), 2)
+    t.eq(drag.target(heights, 8, 1, 106), 2, "a tall row is passed at its own middle")
+    t.eq(drag.target(heights, 8, 1, 107), 3)
+    t.eq(drag.target(heights, 8, 1, 5000), 4, "never past the end")
+    t.eq(drag.target(heights, 8, 4, -58), 4)
+    t.eq(drag.target(heights, 8, 4, -59), 3)
+    t.eq(drag.target(heights, 8, 4, -5000), 1)
+    local offset, give = drag.landing(heights, 8, 1, 3)
+    t.eq(offset, 156, "it lands below the two rows it passed")
+    t.eq(give, -48, "and each of them moves up by its height and the gap")
+    offset, give = drag.landing(heights, 8, 4, 2)
+    t.eq(offset, -156)
+    t.eq(give, 48)
+    offset, give = drag.landing(heights, 8, 2, 2)
+    t.eq(offset, 0)
+    t.eq(give, 0)
+end)
+
+t.test("a slot that is held and moved is dragged: its picture follows the mouse, and letting go is not a click", function()
+    local slots, layer = Wax.import("gui.slots"), Wax.import("gui.root").layer("toasts")
+    local host
+    local host_scope = scope.new("shelf")
+    scope.run(host_scope, function() host = ui.Panel({ anchor = "top-left", width = 400, when = "always" }) end)
+    local row = host:Slots({ columns = 4, rows = 1, size = 30, gap = 2, drag = true })
+    frames(3)
+    row:Set({ { icon = "home", value = "a" }, { icon = "home", value = "b" } })
+    local seen = { moved = 0, clicks = 0 }
+    row.DragStarted:Connect(function(value, index) seen.started = value .. index end)
+    row.DragMoved:Connect(function(dx, dy) seen.moved, seen.dx, seen.dy = seen.moved + 1, dx, dy end)
+    row.DragEnded:Connect(function(dx, dy) seen.ended = { dx, dy } end)
+    row.Activated:Connect(function() seen.clicks = seen.clicks + 1 end)
+    local floats = fake.count(layer, "AddChild")
+    local function drag_once()
+        fake.hovered, fake.mouse.X, fake.mouse.Y = true, 100, 100
+        frames(1)
+        fake.pressed = true
+        frames(1)
+        fake.mouse.X = 100 + slots.DRAG_AFTER
+        frames(1)
+        t.eq(slots.dragging(), false, "not further than the threshold: still a press")
+        fake.mouse.X = 120
+        frames(1)
+        t.eq(slots.dragging(), true)
+        fake.mouse.X, fake.mouse.Y = 130, 110
+        frames(1)
+        fake.pressed = false
+        frames(2)
+    end
+    drag_once()
+    t.eq(seen.started, "a1", "the cell under the mouse, with its value and its place")
+    t.ok(seen.moved >= 1)
+    t.eq(seen.dx, 30, "how far the mouse is from where the button went down")
+    t.eq(seen.dy, 10)
+    t.eq(seen.ended[1], 30)
+    t.eq(seen.ended[2], 10)
+    t.eq(seen.clicks, 0, "letting go after a drag is not a click")
+    t.eq(slots.dragging(), false)
+    t.eq(fake.count(layer, "AddChild"), floats + 1, "the picture under the mouse is one widget over everything else")
+    seen.started = nil
+    drag_once()
+    t.eq(seen.started, "a1")
+    t.eq(fake.count(layer, "AddChild"), floats + 1, "and the same one the next time")
+    -- held and let go without moving is a click, as before
+    fake.pressed = true
+    frames(1)
+    fake.pressed = false
+    frames(1)
+    t.eq(seen.clicks, 1)
+    fake.hovered = nil
+    frames(1)
+    host_scope:destroy()
+    t.eq(fake.dead_touches, 0)
+end)
+
+do
+    local style, drag, kit = Wax.import("gui.style"), Wax.import("gui.drag"), Wax.import("gui.kit")
+    local names = { Axx = "Alpha", Byy = "Beta", Axz = "Gamma" }
+    local order, moves, extra, real_list
+    local panel, mods_window, before
+
+    -- The Mods page over a list the test holds: three mods, moved one place at a time as the loader does.
+    local function open_mods(ids)
+        panel = Wax.import("gui.debug")
+        order, moves, extra, real_list = ids or { "Axx", "Byy", "Axz" }, {}, {}, Wax.mods.list
+        Wax.mods.list = function()
+            local list = {}
+            for index, id in ipairs(order) do
+                list[index] = { id = id, name = names[id], version = "1.0.0", status = "loaded", generation = extra[id] or 1 }
+            end
+            return list
+        end
+        Wax.mods.move = function(id, by)
+            for index, other in ipairs(order) do
+                if other == id and order[index + by] then
+                    order[index], order[index + by] = order[index + by], order[index]
+                    moves[#moves + 1] = id .. (by > 0 and "+" or "-")
+                    return true
+                end
+            end
+            return false
+        end
+        before = fake.mark()
+        panel.start()
+        ui.SetPreview(true)
+        panel.refresh()
+        mods_window = panel.Window()
+        t.eq(style.scale, 1)
+    end
+    local function close_mods()
+        fake.pressed = false
+        ui.SetPreview(false)
+        panel.stop()
+        Wax.mods.list, Wax.mods.move = real_list, nil
+        -- everything the page made is freed with the window, and nothing of it is used afterwards
+        fake.free(before, fake.mark())
+        local touches = fake.dead_touches
+        frames(3)
+        panel.step()
+        t.eq(fake.dead_touches, touches, fake.dead_where)
+    end
+    -- The grip of a card goes down with the mouse at x, y, and the mouse then goes to each place given, a frame at a time.
+    local function pick_up(id, x, y, ...)
+        fake.mouse.X, fake.mouse.Y = x, y
+        events.simulate(panel.card(id).grip, "OnPressed")
+        fake.pressed = true
+        panel.step()
+        for _, to in ipairs({ ... }) do
+            fake.mouse.X, fake.mouse.Y = to[1], to[2]
+            panel.step()
+            panel.step()
+        end
+        return drag.sorting()
+    end
+    local function let_go()
+        fake.pressed = false
+        panel.step()
+    end
+    local function shift_of(id)
+        local last = fake.last(panel.card(id).control.widget, "SetRenderTranslation")
+        return last and last[2].Y or 0
+    end
+    local function opacity_of(id)
+        local last = fake.last(panel.card(id).control.widget, "SetRenderOpacity")
+        return last and last[2] or 1
+    end
+    local real_icon, real_perf = kit.icon, Wax.perf
+    -- One test of the Mods page. A test that fails still takes its page down, so the next one starts clean.
+    local function mods_test(name, body)
+        t.test(name, function()
+            local ok, problem = xpcall(body, debug.traceback)
+            if ok then return end
+            kit.icon, Wax.perf = real_icon, real_perf
+            fake.react.SetScrollOffset, fake.react.GetDesiredSize, fake.scroll_offset, fake.scroll_end = nil, nil, nil, nil
+            pcall(close_mods)
+            error(problem, 0)
+        end)
+    end
+
+    mods_test("a mod's card is dragged by the grip at the left of its title: the others give way, and where it is let go is saved", function()
+        local icons = {}
+        kit.icon = function(name, ...)
+            icons[name] = (icons[name] or 0) + 1
+            return real_icon(name, ...)
+        end
+        open_mods()
+        kit.icon = real_icon
+        t.eq(icons["wax-dots"], 3, "every card has a grip: six dots")
+        t.eq(icons["grip-vertical"], nil)
+        t.eq(icons["arrow-up"], nil, "and the two arrows are gone")
+        t.eq(icons["arrow-down"], nil)
+        local first = panel.card("Axx")
+        t.eq(fake.last(first.grip, "SetCursor")[2], style.Cursor.Move)
+        t.eq(fake.last(first.section.parts.chevron.Slot, "SetPadding")[2].Left, 12, "the arrow and the title make room for it")
+        t.eq(fake.last(first.grip, "SetVisibility")[2], style.Visibility.Visible)
+
+        -- a press without a move does nothing
+        t.eq(pick_up("Axx", 230, 200), nil)
+        t.eq(pick_up("Axx", 230, 200, { 233, 204 }), nil, "a few units are not a drag")
+        let_go()
+        t.eq(#moves, 0)
+        t.eq(fake.count(first.control.widget, "SetRenderOpacity"), 0, "the card was never touched")
+
+        -- 40 down is past the middle of the next card (the gap of 8 and half of 48)
+        local held = pick_up("Axx", 230, 200, { 230, 240 })
+        t.ok(held, "held and moved, the card is being dragged")
+        t.eq(held.at, 2)
+        t.eq(opacity_of("Axx"), 0, "the card itself is not drawn while it is held")
+        t.eq(shift_of("Byy"), -56, "the card it passed moves up by one card and one gap")
+        t.eq(shift_of("Axz"), 0)
+        local place = held.float.slot:GetPosition()
+        t.eq(place.X, mods_window.at_x + mods_window.nav_width + style.theme.padding, "what is drawn for it stands in the cards' own column")
+        t.eq(place.Y, 200 - 24 + 40, "and has gone as far as the mouse")
+        t.eq(fake.last(held.float.outer, "SetVisibility")[2], style.Visibility.HitTestInvisible)
+        t.eq(rawget(fake.last(held.float.title, "SetText")[2], "__text"), "Alpha  1.0.0", "it shows the card's title")
+        -- back up again: the card that gave way goes home
+        fake.mouse.Y = 205
+        panel.step()
+        t.eq(held.at, 1)
+        t.eq(shift_of("Byy"), 0)
+        -- past both
+        fake.mouse.Y = 300
+        panel.step()
+        t.eq(held.at, 3)
+        t.eq(shift_of("Byy"), -56)
+        t.eq(shift_of("Axz"), -56)
+        -- the list is not built again under a card that is held
+        local second = panel.card("Byy")
+        extra.Byy = 2
+        panel.refresh()
+        t.ok(rawequal(panel.card("Byy"), second), "a mod that reloaded meanwhile waits for the drag to end")
+        t.eq(#moves, 0, "nothing is saved before it is let go")
+        let_go()
+        t.eq(table.concat(moves, " "), "Axx+ Axx+", "let go at the end of the list: two places down")
+        t.eq(table.concat(order, " "), "Byy Axz Axx")
+        t.eq(drag.sorting(), nil)
+        t.eq(first.control.destroyed, true, "the cards are built again in the new order")
+        t.ok(not rawequal(panel.card("Byy"), second))
+        t.eq(fake.last(held.float.outer, "SetVisibility")[2], style.Visibility.Collapsed, "and what was drawn for the held one is gone")
+        t.eq(opacity_of("Axx"), 1)
+
+        -- and back up to the top, from where it stands now
+        pick_up("Axx", 230, 300, { 230, 180 })
+        let_go()
+        t.eq(table.concat(moves, " "), "Axx+ Axx+ Axx- Axx-")
+        t.eq(table.concat(order, " "), "Axx Byy Axz")
+        close_mods()
+    end)
+
+    mods_test("a card that is held goes back where it was: asked to, let go outside the list, or kept there by the loader", function()
+        open_mods()
+        local card = panel.card("Axx")
+        local held = pick_up("Axx", 230, 200, { 230, 240 })
+        t.eq(held.at, 2)
+        t.eq(drag.cancel(), true, "the Escape key asks this: true says the key has done its work")
+        panel.step()
+        t.eq(drag.sorting(), nil)
+        t.eq(drag.cancel(), false, "with nothing held the key is free for the menu")
+        t.eq(#moves, 0)
+        t.eq(opacity_of("Axx"), 1)
+        t.eq(shift_of("Byy"), 0)
+        t.ok(rawequal(panel.card("Axx"), card), "no card was built again")
+        -- the button is still down: nothing follows it any more
+        fake.mouse.Y = 320
+        panel.step()
+        t.eq(drag.sorting(), nil)
+        let_go()
+
+        -- let go to the left of the list, over the page names
+        held = pick_up("Axx", 230, 200, { 230, 240 }, { mods_window.at_x + 20, 240 })
+        t.eq(held.at, 2, "the mouse may leave the list while the button is down")
+        let_go()
+        t.eq(drag.sorting(), nil)
+        t.eq(#moves, 0)
+        t.eq(opacity_of("Axx"), 1)
+
+        -- the loader keeps a mod after the ones it needs: the card goes back, and the player is told why
+        ui.Notifications.Clear()
+        Wax.mods.move = function(id, by)
+            moves[#moves + 1] = id .. (by > 0 and "+" or "-")
+            return true
+        end
+        pick_up("Axx", 230, 200, { 230, 240 })
+        let_go()
+        t.eq(table.concat(moves, " "), "Axx+")
+        t.eq(ui.Notifications.Count(), 1)
+        ui.Notifications.Clear()
+        frames(2)
+        t.ok(rawequal(panel.card("Axx"), card), "the list is as it was, so no card is built again")
+        t.eq(opacity_of("Axx"), 1)
+        t.eq(shift_of("Byy"), 0)
+
+        -- the menu closes under a held card
+        held = pick_up("Axx", 230, 200, { 230, 240 })
+        t.ok(held)
+        ui.SetPreview(false)
+        panel.step()
+        t.eq(drag.sorting(), nil)
+        t.eq(opacity_of("Axx"), 1)
+        t.eq(shift_of("Byy"), 0)
+        ui.SetPreview(true)
+        close_mods()
+    end)
+
+    mods_test("an open card is folded to its title while it is held, and is open again where it is put down", function()
+        open_mods()
+        local card = panel.card("Byy")
+        click(card.control.source)
+        t.eq(card.section:IsOpen(), true)
+        local held = pick_up("Byy", 230, 200, { 230, 150 })
+        t.eq(held.at, 1)
+        t.eq(card.section:IsOpen(), false, "folded while it is held")
+        drag.cancel()
+        panel.step()
+        t.eq(card.section:IsOpen(), true, "put back, it is open as it was")
+        pick_up("Byy", 230, 200, { 230, 150 })
+        let_go()
+        t.eq(table.concat(order, " "), "Byy Axx Axz")
+        t.eq(panel.card("Byy").section:IsOpen(), true, "put down, its new card is built open")
+        t.eq(panel.card("Axx").section:IsOpen(), false)
+        close_mods()
+    end)
+
+    mods_test("holding a card at the edge of a list longer than the page scrolls it, and what scrolls into view is measured again", function()
+        open_mods()
+        local clock, scrolls = 100, 0
+        Wax.perf = { now = function() return clock end }
+        fake.react.SetScrollOffset = function(_, value)
+            scrolls = scrolls + 1
+            fake.scroll_offset = value
+        end
+        fake.scroll_offset, fake.scroll_end = 0, 300
+        local bottom = mods_window.at_y + mods_window.height - 48
+        local held = pick_up("Axx", 230, 200, { 230, 240 })
+        t.eq(scrolls, 0, "in the middle of the page nothing scrolls")
+        fake.mouse.Y = bottom - 14
+        clock = clock + 0.02
+        panel.step()
+        t.eq(scrolls, 1, "near the bottom edge the list goes down")
+        t.ok(math.abs(fake.scroll_offset - 0.5 * drag.SPEED * 0.02) < 1e-6, "half way into the edge, at half the speed")
+        fake.mouse.Y = bottom + 200
+        clock = clock + 1
+        panel.step()
+        t.ok(math.abs(fake.scroll_offset - (4.8 + drag.SPEED * 0.05)) < 1e-6, "a long frame scrolls as far as a short one")
+        t.ok(math.abs(held.float.slot:GetPosition().Y - (200 - 24 + 2 * 56 - fake.scroll_offset)) < 1e-6,
+            "what is drawn for the card goes no lower than the list's last place")
+        t.eq(held.at, 3)
+        let_go()
+        t.eq(#moves, 0, "let go that far below the list, it goes back")
+        -- a card above the held one turns out taller once it is seen: the held one's own place is that much lower
+        held = pick_up("Axz", 230, 400, { 230, 360 })
+        t.eq(held.at, 2)
+        fake.react.GetDesiredSize = function(self)
+            return { X = 120, Y = rawequal(self, panel.card("Axx").control.widget) and 68 or 48 }
+        end
+        fake.scroll_offset = fake.scroll_offset + 5
+        clock = clock + 0.02
+        panel.step()
+        t.eq(held.pushed, 20)
+        t.eq(held.at, 2)
+        fake.react.GetDesiredSize = nil
+        let_go()
+        t.eq(table.concat(order, " "), "Axx Axz Byy")
+        -- at the end of the list there is nowhere to scroll to
+        fake.scroll_offset, scrolls = 300, 0
+        pick_up("Axx", 230, 200, { 230, bottom - 2 })
+        clock = clock + 0.02
+        panel.step()
+        t.eq(scrolls, 0)
+        let_go()
+        fake.react.SetScrollOffset, fake.scroll_offset, fake.scroll_end, Wax.perf = nil, nil, nil, real_perf
+        close_mods()
+    end)
+
+    mods_test("with a search typed the cards that show can still be put in order, and one card alone cannot be dragged", function()
+        open_mods()
+        local search
+        for _, control in ipairs(mods_window.controls) do
+            if control.Typed then
+                search = control
+                break
+            end
+        end
+        search.Typed:Fire("ax")
+        t.eq(fake.last(panel.card("Byy").control.widget, "SetVisibility")[2], style.Visibility.Collapsed)
+        local held = pick_up("Axx", 230, 200, { 230, 240 })
+        t.eq(#held.rows, 2, "only the cards that show take part")
+        let_go()
+        t.eq(table.concat(order, " "), "Byy Axz Axx", "it goes where the card it passed stands in the whole list")
+        -- typing ends a drag at once
+        held = pick_up("Axz", 230, 200, { 230, 240 })
+        t.ok(held)
+        search.Typed:Fire("axx")
+        t.eq(drag.sorting(), nil)
+        t.eq(opacity_of("Axz"), 1)
+        t.eq(fake.last(panel.card("Axx").grip, "SetVisibility")[2], style.Visibility.HitTestInvisible, "one card: its grip takes no press")
+        search.Typed:Fire("")
+        t.eq(fake.last(panel.card("Axx").grip, "SetVisibility")[2], style.Visibility.Visible)
+        -- the page goes away under a held card: nothing of it is used again
+        t.ok(pick_up("Axz", 230, 200, { 230, 240 }))
+        close_mods()
+        t.eq(drag.sorting(), nil)
+    end)
+
+    mods_test("a held card stays in its list and is drawn where the mouse is from its first frame, and cards do not flip at a boundary", function()
+        open_mods()
+        -- the second card, with the mouse 30 below where the button went down by the time it counts as a drag
+        fake.mouse.X, fake.mouse.Y = 230, 200
+        events.simulate(panel.card("Byy").grip, "OnPressed")
+        fake.pressed = true
+        panel.step()
+        fake.mouse.Y = 230
+        panel.step()
+        local held = drag.sorting()
+        t.ok(held)
+        t.eq(held.float.slot:GetPosition().Y, 200 - 24 + 30, "it is drawn where the mouse took it at once, with no jump a frame later")
+        -- far above the list: no higher than the first card's place, so it never lies over what stands above the cards
+        fake.mouse.Y = -400
+        panel.step()
+        t.eq(held.float.slot:GetPosition().Y, 200 - 24 - 56, "no higher than the place of the first card")
+        t.eq(held.at, 1)
+        -- far below: no lower than the last card's place
+        fake.mouse.Y = 5000
+        panel.step()
+        t.eq(held.float.slot:GetPosition().Y, 200 - 24 + 56, "no lower than the place of the last card")
+        t.eq(held.at, 3)
+        let_go()
+        t.eq(#moves, 0, "let go that far from the list, it goes back")
+
+        -- a mouse that rests where two cards change places does not send them back and forth
+        held = pick_up("Axx", 230, 200, { 230, 200 + 32 + drag.SLACK + 1 })
+        t.eq(held.at, 2)
+        fake.mouse.Y = 200 + 32 - drag.SLACK + 1
+        panel.step()
+        t.eq(held.at, 2, "a little back over the point leaves them as they are")
+        fake.mouse.Y = 200 + 32 - drag.SLACK - 1
+        panel.step()
+        t.eq(held.at, 1, "further back, the card it had passed comes home")
+        fake.mouse.Y = 200 + 32 + drag.SLACK - 1
+        panel.step()
+        t.eq(held.at, 1, "and a little past the point again does not move it")
+        drag.cancel()
+        panel.step()
+        close_mods()
+    end)
+
+    mods_test("putting a card down builds nothing again: the cards that are there change places on the page", function()
+        open_mods()
+        local cards = { Axx = panel.card("Axx"), Byy = panel.card("Byy"), Axz = panel.card("Axz") }
+        local box = cards.Axx.control.container.box
+        local added = fake.count(box, "AddChild")
+        pick_up("Axx", 230, 200, { 230, 300 })
+        let_go()
+        t.eq(table.concat(order, " "), "Byy Axz Axx")
+        for id, card in pairs(cards) do
+            t.ok(rawequal(panel.card(id), card), id .. " is the card it was")
+            t.ok(not card.control.destroyed, id .. " was not made again")
+        end
+        t.eq(fake.count(box, "AddChild"), added + 3, "from the first card that changed place on, they were put back on the page in order")
+        t.ok(rawequal(fake.last(box, "AddChild")[2], cards.Axx.control.widget), "the card that was put down stands last")
+        t.eq(opacity_of("Axx"), 1)
+        t.eq(shift_of("Byy"), 0)
+        t.eq(shift_of("Axz"), 0)
+        -- the next drag starts from the order that shows
+        pick_up("Byy", 230, 200, { 230, 240 })
+        let_go()
+        t.eq(table.concat(order, " "), "Axz Byy Axx")
+        t.eq(fake.count(box, "AddChild"), added + 6)
+        panel.refresh()
+        t.ok(rawequal(panel.card("Axx"), cards.Axx), "and a later look at the mods finds nothing to build")
+        close_mods()
+    end)
+
+    mods_test("a card's title keeps to one line beside its grip, and the mods folder is looked at when the page comes up and every ten seconds", function()
+        names.Axx = "A mod with a name that is much too long to fit on one line of its card"
+        open_mods()
+        names.Axx = "Alpha"
+        local card = panel.card("Axx")
+        local shown = card.section.parts.shown
+        t.ok(shown:sub(-3) == "..." and #shown < #card.title, "cut with dots: " .. shown)
+        t.eq(card.section.parts.before, 12, "the room is what is left beside the grip")
+        t.eq(panel.card("Byy").section.parts.shown, "Beta  1.0.0")
+        local held = pick_up("Axx", 230, 200, { 230, 240 })
+        t.eq(rawget(fake.last(held.float.title, "SetText")[2], "__text"), shown, "what is drawn for it while held shows the same line")
+        drag.cancel()
+        panel.step()
+        -- the folder: not at every look at the page, which was a stutter every two seconds
+        local looked = syncs
+        for _ = 1, 19 do panel.refresh() end
+        t.ok(syncs - looked <= 1)
+        looked = syncs
+        for _ = 1, 20 do panel.refresh() end
+        t.eq(syncs - looked, 1, "once in twenty looks, which is ten seconds")
+        mods_window:SelectPage("Log")
+        looked = syncs
+        for _ = 1, 40 do panel.refresh() end
+        t.eq(syncs, looked, "never while another page shows")
+        mods_window:SelectPage("Mods")
+        t.eq(syncs, looked + 1, "and at once when the Mods page is turned to")
+
+        -- the Performance page's own figures, its moving bar among them, are only written while it shows
+        local perf_module, page, bar = Wax.import("core.perf"), nil, nil
+        for _, other in ipairs(mods_window.pages) do
+            if other.name == "Performance" then page = other end
+        end
+        for _, control in ipairs(mods_window.controls) do
+            if control.container == page and control.Get and control.Set then bar = control end
+        end
+        t.ok(bar, "the bar of the Performance page")
+        local totals, count = perf_module.totals, 0
+        perf_module.totals = function()
+            count = count + 100
+            return { frames = count, seconds = count * 0.01, sections = { gui = count * 0.001 } }
+        end
+        panel.refresh()
+        panel.refresh()
+        t.eq(bar:Get(), 0, "not written while the Mods page shows")
+        mods_window:SelectPage("Performance")
+        panel.refresh()
+        t.ok(math.abs(bar:Get() - 0.1) < 1e-6, "written once its page shows: " .. bar:Get())
+        perf_module.totals = totals
+        close_mods()
+    end)
+end
+
+do
+    local slots, style, fit = Wax.import("gui.slots"), Wax.import("gui.style"), Wax.import("gui.fit")
+    local gui_root, overlay_module = Wax.import("gui.root"), Wax.import("gui.overlay")
+
+    -- Every time the game is asked `name` from here on: { object, arguments ... }. The second result ends the watch.
+    local function watch(name)
+        local default, asked = fake.new_object("probe")[name], {}
+        fake.react[name] = function(self, ...)
+            asked[#asked + 1] = { self, ... }
+            return default(self, ...)
+        end
+        return asked, function() fake.react[name] = nil end
+    end
+    -- The objects made since `mark` whose name is that of a widget of this kind.
+    local function made_of(mark, kind)
+        local out = {}
+        for _, object in ipairs(fake.made(mark)) do
+            if tostring(rawget(object, "__name")):match("^/Script/UMG%." .. kind .. ":Wax_" .. kind .. "_%d+$") then out[#out + 1] = object end
+        end
+        return out
+    end
+
+    t.test("while no key goes down the game is asked one question about keys a frame, not one for every key", function()
+        Wax.game = { LocalPlayer = { Raw = fake.new_object("PlayerController") } }
+        local host_scope, ran = scope.new("keys"), 0
+        scope.run(host_scope, function()
+            ui.Hotkey("R", function() ran = ran + 1 end, { in_menu = true })
+            ui.Hotkey("U", function() end, { in_menu = true })
+            ui.Hotkey("Ctrl+Three", function() end, { in_menu = true })
+        end)
+        local asked, stop = watch("WasInputKeyJustPressed")
+        frames(3)
+        t.eq(#asked, 3, "one question a frame")
+        for _, call in ipairs(asked) do t.eq(call[2].KeyName, "AnyKey") end
+        fake.keys.R = true
+        frames(1)
+        fake.keys.R = nil
+        t.eq(ran, 1, "the frame a key goes down the keys are asked for by name, and the hotkey runs")
+        local named = false
+        for _, call in ipairs(asked) do named = named or call[2].KeyName == "R" end
+        t.ok(named)
+        local count = #asked
+        frames(1)
+        t.eq(#asked, count + 1, "and the frame after it is one question again")
+        stop()
+        host_scope:destroy()
+        Wax.game = nil
+    end)
+
+    t.test("slots: nothing is asked about the mouse while it is over no panel, a row is found before its cells, and a hidden block is not asked", function()
+        Wax.game = { LocalPlayer = { Raw = fake.new_object("PlayerController") } }
+        local host, host_scope = nil, scope.new("hover")
+        scope.run(host_scope, function() host = ui.Panel({ anchor = "top-left", width = 400, when = "always" }) end)
+        local mark = fake.mark()
+        local grid = host:Slots({ columns = 5, rows = 4, size = 30, gap = 2 })
+        local lines = made_of(mark, "HorizontalBox")
+        t.eq(#lines, 4)
+        mark = fake.mark()
+        frames(12)
+        t.ok(grid:Ready())
+        local buttons = made_of(mark, "Button")
+        t.eq(#buttons, 20)
+        local looks = {}
+        for index = 1, 20 do looks[index] = { icon = "home", value = index } end
+        grid:Set(looks)
+        local seen = { hovered = 0, right = {} }
+        grid.Hovered:Connect(function() seen.hovered = seen.hovered + 1 end)
+        grid.RightClicked:Connect(function(value) seen.right[#seen.right + 1] = value end)
+
+        local keep = slots.GRACE
+        slots.GRACE = -1
+        local asked, over = {}, {}
+        fake.react.IsHovered = function(self)
+            asked[#asked + 1] = self
+            return over[self] == true
+        end
+        local function count(list)
+            local found = 0
+            for _, object in ipairs(asked) do
+                for _, wanted in ipairs(list) do
+                    if rawequal(object, wanted) then found = found + 1 end
+                end
+            end
+            return found
+        end
+        local released, stop = watch("WasInputKeyJustReleased")
+        frames(2)
+        t.eq(count({ gui_root.layer("hud") }), 2, "one question a frame: is the mouse over any panel")
+        t.eq(count({ host.holder, grid.widget }) + count(lines) + count(buttons), 0, "and nothing else of the panel is asked")
+        t.eq(#released, 0, "nor is the game asked about the mouse buttons")
+
+        -- the mouse comes to the 13th cell, in the third row
+        over = { [gui_root.layer("hud")] = true, [host.holder] = true, [grid.widget] = true, [lines[3]] = true, [buttons[13]] = true }
+        asked = {}
+        frames(1)
+        t.eq(ui.Hovered(), 13)
+        t.eq(seen.hovered, 1)
+        t.eq(count(lines), 3, "the rows are asked until the one under the mouse")
+        t.eq(count(buttons), 3, "and then that row's cells, not the ten cells before it")
+        -- while it rests there, the cell itself is asked first and nothing is looked for
+        asked = {}
+        frames(1)
+        t.eq(count(lines), 0)
+        t.eq(count(buttons), 1)
+        t.eq(#released, 2, "over a cell the game is asked whether a button came up: one question while none did")
+        t.eq(released[1][2].KeyName, "AnyKey")
+        fake.released.RightMouseButton = true
+        frames(1)
+        fake.released.RightMouseButton = nil
+        t.eq(seen.right[1], 13, "a right click is the button coming up over the cell")
+
+        -- hidden, the block is not asked, whatever the mouse is over
+        grid:SetVisible(false)
+        over = setmetatable({}, { __index = function() return true end })
+        asked = {}
+        frames(1)
+        t.eq(ui.Hovered(), nil)
+        t.eq(count({ grid.widget }) + count(lines) + count(buttons), 0)
+        grid:SetVisible(true)
+        frames(1)
+        t.eq(ui.Hovered(), 1, "shown again, it is")
+
+        slots.GRACE = keep
+        stop()
+        fake.react.IsHovered = nil
+        host_scope:destroy()
+        frames(1)
+        Wax.game = nil
+    end)
+
+    t.test("a faint slot fades its icon as well as its picture, and a block that is switched off takes no mouse and shows no hand", function()
+        Wax.game = { LocalPlayer = { Raw = fake.new_object("PlayerController") } }
+        local host, host_scope = nil, scope.new("faint")
+        scope.run(host_scope, function() host = ui.Panel({ anchor = "top-left", width = 400, when = "always" }) end)
+        local first = fake.mark()
+        local row = host:Slots({ columns = 3, rows = 1, size = 30, gap = 2 })
+        local line = made_of(first, "HorizontalBox")[1]
+        local mark = fake.mark()
+        frames(12)
+        t.ok(row:Ready())
+        local buttons = made_of(mark, "Button")
+        t.eq(#buttons, 3)
+        local function faint()
+            local found = 0
+            for _, image in ipairs(made_of(first, "Image")) do
+                local last = fake.last(image, "SetRenderOpacity")
+                if last and last[2] == 0.35 then found = found + 1 end
+            end
+            return found
+        end
+        row:Set({ { icon = "home", value = 1, dim = true }, { icon = "star", value = 2 } })
+        t.eq(faint(), 2, "the picture and the icon of the faint cell")
+        row:SetLook(2, { icon = "star", value = 2, dim = true })
+        t.eq(faint(), 4)
+        row:SetLook(1, { icon = "home", value = 1 })
+        t.eq(faint(), 2, "and both are whole again")
+        -- a cell that is faint before it has an icon: the icon is faint from the moment it is made
+        row:SetLook(3, { value = 3, dim = true })
+        t.eq(faint(), 3)
+        row:SetLook(3, { icon = "axe", value = 3, dim = true })
+        t.eq(faint(), 4)
+
+        local over, right = {}, {}
+        fake.react.IsHovered = function(self) return over[self] == true end
+        row.RightClicked:Connect(function(value) right[#right + 1] = value end)
+        over = { [gui_root.layer("hud")] = true, [host.holder] = true, [row.widget] = true, [line] = true, [buttons[2]] = true }
+        frames(1)
+        t.eq(ui.Hovered(), 2)
+        row:SetEnabled(false)
+        for _, button in ipairs(buttons) do t.eq(fake.last(button, "SetCursor")[2], style.Cursor.Default, "no hand over a cell that cannot be pressed") end
+        frames(1)
+        t.eq(ui.Hovered(), nil, "switched off, no cell is under the mouse")
+        fake.released.RightMouseButton = true
+        frames(1)
+        fake.released.RightMouseButton = nil
+        t.eq(#right, 0, "and a right click is nobody's, though the mouse was over a cell a moment ago")
+        row:SetEnabled(true)
+        t.eq(fake.last(buttons[1], "SetCursor")[2], style.Cursor.Hand)
+        frames(1)
+        t.eq(ui.Hovered(), 2, "switched on again, it is")
+
+        -- cells that are made after their block was switched off have no hand either
+        mark = fake.mark()
+        local late = host:Slots({ columns = 2, rows = 1, size = 30 })
+        late:SetEnabled(false)
+        frames(12)
+        t.ok(late:Ready())
+        local made = made_of(mark, "Button")
+        t.eq(#made, 2)
+        for _, button in ipairs(made) do t.eq(fake.last(button, "SetCursor")[2], style.Cursor.Default) end
+
+        fake.react.IsHovered = nil
+        host_scope:destroy()
+        frames(1)
+        Wax.game = nil
+    end)
+
+    t.test("with slots.FOLLOW_HELD on, the cell under the mouse is worked out from where the mouse is while the middle button is held", function()
+        Wax.game = { LocalPlayer = { Raw = fake.new_object("PlayerController") } }
+        local host, host_scope = nil, scope.new("follow")
+        scope.run(host_scope, function() host = ui.Panel({ anchor = "top-left", width = 400, when = "always" }) end)
+        local mark = fake.mark()
+        local grid = host:Slots({ columns = 5, rows = 2, size = 30, gap = 2 })
+        local lines = made_of(mark, "HorizontalBox")
+        mark = fake.mark()
+        frames(12)
+        t.ok(grid:Ready())
+        local buttons = made_of(mark, "Button")
+        local looks = {}
+        for index = 1, 9 do looks[index] = { icon = "home", value = index } end
+        grid:Set(looks)
+        local middle = {}
+        grid.MiddleClicked:Connect(function(value) middle[#middle + 1] = value end)
+        local over, held, asked = {}, {}, 0
+        fake.react.IsHovered = function(self) return over[self] == true end
+        fake.react.IsInputKeyDown = function(_, key)
+            asked = asked + 1
+            return held[key.KeyName] == true
+        end
+        -- where the block's top left corner is on the screen. A cell is 30 and the gap after it 2.
+        local left, top, pitch = 100, 50, 32
+        local function at(index, dx, dy)
+            fake.mouse.X, fake.mouse.Y = left + (index - 1) % 5 * pitch + dx, top + (index - 1) // 5 * pitch + dy
+        end
+        -- the mouse comes to a place in a cell, and the cell says so
+        local function point(index, dx, dy)
+            at(index, dx, dy)
+            over = { [gui_root.layer("hud")] = true, [host.holder] = true, [grid.widget] = true, [lines[(index - 1) // 5 + 1]] = true,
+                [buttons[index]] = true }
+            frames(1)
+        end
+        -- the same with a button held: the game has the mouse, and nothing says the mouse is over it
+        local function fly(index, dx, dy)
+            at(index, dx, dy)
+            over = {}
+            frames(1)
+        end
+
+        -- it comes switched on. Switched off, no cell is under the mouse while the button is held, and the click goes to the cell it left
+        t.eq(slots.FOLLOW_HELD, true)
+        slots.FOLLOW_HELD = false
+        point(2, 15, 15)
+        t.eq(ui.Hovered(), 2)
+        held.MiddleMouseButton = true
+        fly(3, 15, 15)
+        t.eq(ui.Hovered(), nil)
+        t.eq(asked, 0, "and the game is not asked which buttons are held")
+        held.MiddleMouseButton = nil
+        fake.released.MiddleMouseButton = true
+        frames(1)
+        fake.released.MiddleMouseButton = nil
+        t.eq(middle[1], 2)
+
+        slots.FOLLOW_HELD = true
+        -- every cell the mouse is seen over says where the block must be: three looks near the edges of cells pin it down
+        point(2, 2, 3)
+        point(3, 1, 28)
+        point(1, 29, 1)
+        t.eq(ui.Hovered(), 1)
+        held.MiddleMouseButton = true
+        fly(4, 15, 15)
+        t.eq(ui.Hovered(), 4, "held and moved along the row")
+        fly(9, 15, 15)
+        t.eq(ui.Hovered(), 9, "and down to the next row")
+        fly(9, 31, 15)
+        t.eq(ui.Hovered(), nil, "between two cells there is no cell")
+        fly(10, 15, 15)
+        t.eq(ui.Hovered(), nil, "nor is an empty cell one")
+        fake.mouse.X, fake.mouse.Y = 900, 700
+        frames(3)
+        t.eq(ui.Hovered(), nil, "nor is there one off the block")
+        fly(7, 10, 10)
+        t.eq(ui.Hovered(), 7, "back over it while still held")
+        held.MiddleMouseButton = nil
+        fake.released.MiddleMouseButton = true
+        frames(1)
+        fake.released.MiddleMouseButton = nil
+        t.eq(middle[2], 7, "the click is the cell the mouse was let go over")
+        t.eq(ui.Hovered(), nil, "and with the button up a cell has to say so itself again")
+
+        -- a block that does not show is not found this way either
+        point(7, 10, 10)
+        grid:SetVisible(false)
+        held.MiddleMouseButton = true
+        fly(8, 15, 15)
+        t.eq(ui.Hovered(), nil)
+        held.MiddleMouseButton = nil
+        grid:SetVisible(true)
+
+        -- the block is somewhere else now (its panel moved): the first look that cannot be true of the old place starts again
+        left = 300
+        point(1, 15, 15)
+        held.MiddleMouseButton = true
+        fly(2, 15, 15)
+        t.eq(ui.Hovered(), 2)
+        -- set out anew, where its cells are has to be seen again
+        held.MiddleMouseButton = nil
+        point(1, 15, 15)
+        grid:SetLayout(4, 30)
+        held.MiddleMouseButton = true
+        fly(2, 15, 15)
+        t.eq(ui.Hovered(), nil)
+        held.MiddleMouseButton = nil
+        frames(1)
+
+        -- a panel drawn twice as large: a cell and its gap are 64 on the screen
+        local large = nil
+        scope.run(host_scope, function() large = ui.Panel({ anchor = "top-left", width = 400, when = "always", zoom = 2 }) end)
+        mark = fake.mark()
+        local big = large:Slots({ columns = 4, rows = 1, size = 30, gap = 2 })
+        local big_line = made_of(mark, "HorizontalBox")[1]
+        mark = fake.mark()
+        frames(12)
+        local big_buttons = made_of(mark, "Button")
+        big:Set({ { icon = "home", value = "a" }, { icon = "home", value = "b" }, { icon = "home", value = "c" } })
+        fake.mouse.X, fake.mouse.Y = 500 + 64 + 30, 200 + 30
+        over = { [gui_root.layer("hud")] = true, [large.holder] = true, [big.widget] = true, [big_line] = true, [big_buttons[2]] = true }
+        frames(1)
+        t.eq(ui.Hovered(), "b")
+        held.RightMouseButton = true
+        fake.mouse.X = 500 + 128 + 30
+        over = {}
+        frames(1)
+        t.eq(ui.Hovered(), "c", "the right button held counts the same")
+        held.RightMouseButton = nil
+        frames(1)
+
+        slots.FOLLOW_HELD = false
+        fake.react.IsHovered, fake.react.IsInputKeyDown = nil, nil
+        host_scope:destroy()
+        frames(1)
+        Wax.game = nil
+    end)
+
+    t.test("an icon button can be a square of a given side, for a line that is lower than a button", function()
+        local host, host_scope = nil, scope.new("compact")
+        scope.run(host_scope, function() host = ui.Window({ title = "Compact", width = 300, height = 300 }) end)
+        local clicks = 0
+        local small = host:Button(nil, function() clicks = clicks + 1 end, { icon = "chevron-left", size = 24 })
+        t.ok(not rawequal(small.widget, small.source), "the button sits in a box of that size")
+        t.eq(fake.last(small.widget, "SetWidthOverride")[2], 24)
+        t.eq(fake.last(small.widget, "SetHeightOverride")[2], 24)
+        click(small.source)
+        t.eq(clicks, 1)
+        small:SetIcon("chevron-right")
+        small:SetEnabled(false)
+        t.eq(fake.last(small.source, "SetCursor")[2], style.Cursor.Default)
+        t.eq(fake.last(small.widget, "SetIsEnabled")[2], false)
+        local plain = host:Button(nil, function() end, { icon = "chevron-left" })
+        t.ok(rawequal(plain.widget, plain.source), "without a size it is the button it always was")
+        local worded = host:Button("Go", function() end, { icon = "play", size = 24 })
+        t.ok(rawequal(worded.widget, worded.source), "and a button with a caption keeps its own size")
+        host_scope:destroy()
+    end)
+
+    t.test("a panel's wheel is only read while the mouse is over the panel, and once more in the frame it leaves", function()
+        local host, host_scope = nil, scope.new("wheel")
+        scope.run(host_scope, function() host = ui.Panel({ anchor = "top-left", width = 200, when = "always" }) end)
+        local turned = {}
+        host.Scrolled:Connect(function(by) turned[#turned + 1] = by end)
+        fake.scroll_offset, fake.hovered = overlay_module.WHEEL_ROOM, true
+        frames(2)
+        local read, stop = watch("GetScrollOffset")
+        local function reads()
+            local found = 0
+            for _, call in ipairs(read) do
+                if rawequal(call[1], host.catcher) then found = found + 1 end
+            end
+            return found
+        end
+        frames(2)
+        t.eq(reads(), 2, "read every frame under the mouse")
+        fake.hovered = false
+        frames(1)
+        t.eq(reads(), 3, "and once more in the frame the mouse leaves")
+        frames(5)
+        t.eq(reads(), 3, "then not at all")
+        fake.hovered, fake.scroll_offset = true, overlay_module.WHEEL_ROOM + 30
+        frames(1)
+        t.eq(turned[1], 1, "the wheel turned down over the panel")
+        fake.scroll_offset = overlay_module.WHEEL_ROOM
+        stop()
+        fake.hovered, fake.scroll_offset = nil, nil
+        host_scope:destroy()
+    end)
+
+    t.test("the game's screen is read once a frame however often it is asked for, and whoever listens is told when it changes", function()
+        Wax.game = { LocalPlayer = { Raw = fake.new_object("PlayerController") } }
+        local screen, tab = fake.new_object("UMG_MainMenu"), 1
+        fake.props.bShowMouseCursor = true
+        fake.react.GetChildrenCount = function() return 1 end
+        fake.react.GetChildAt = function() return screen end
+        fake.react.GetVisibility = function() return 0 end
+        fake.react.GetFullName = function() return "UMG_MainMenu_C /Engine/Transient.Interface:WidgetTree.UMG_MainMenu" end
+        fake.react.GetActiveWidgetIndex = function() return tab end
+        frames(1)
+        local name, at = ui.GameScreen()
+        t.eq(name, "UMG_MainMenu")
+        t.eq(at, 1)
+        local touches = fake.touches
+        ui.GameScreen()
+        ui.GameScreen()
+        t.eq(fake.touches, touches, "asked again in the same frame, nothing of the game is read")
+
+        local told = {}
+        local listening = ui.GameScreenChanged:Connect(function(which, number) told[#told + 1] = tostring(which) .. " " .. tostring(number) end)
+        frames(1)
+        t.eq(told[1], "UMG_MainMenu 1", "whoever starts to listen is told what shows")
+        frames(12)
+        t.eq(#told, 1, "and nothing more while it stays")
+        tab = 2
+        frames(fit.LOOK + 1)
+        t.eq(told[2], "UMG_MainMenu 2", "another tab of the game's menu")
+        fake.props.bShowMouseCursor = false
+        frames(1)
+        t.eq(told[3], "nil nil", "in the frame the game takes the mouse back there is no screen any more")
+        fake.props.bShowMouseCursor = true
+        frames(1)
+        t.eq(told[4], "UMG_MainMenu 2", "and in the frame it frees it again the screen is looked at straight away")
+        listening:Disconnect()
+        -- with nobody listening the game is not looked at for this
+        fake.props.bShowMouseCursor = false
+        frames(2)
+        t.eq(#told, 4)
+        for _, answer in ipairs({ "GetChildrenCount", "GetChildAt", "GetVisibility", "GetFullName", "GetActiveWidgetIndex" }) do fake.react[answer] = nil end
+        fake.props.bShowMouseCursor = nil
+        Wax.game = nil
+    end)
+
+    t.test("each edge and corner of a window lights its own piece of the outline: under the mouse, and brighter while it is held", function()
+        local sized, host_scope = nil, scope.new("lights")
+        scope.run(host_scope, function() sized = ui.Window({ title = "Lights", width = 500, height = 300, x = 600, y = 400 }) end)
+        ui.Open()
+        local handles = 0
+        for edges, handle in pairs(sized.edge_handles) do
+            handles = handles + 1
+            local part = sized.lights[edges]
+            t.eq(part.glow, nil, edges .. ": nothing is made for a handle before it first lights up")
+            events.simulate(handle, "OnHovered")
+            t.eq(part.level, 0.5, edges .. " under the mouse")
+            t.ok(part.glow and part.soft, edges .. ": its two pictures are there now")
+            fake.mouse.X, fake.mouse.Y = 900, 500
+            events.simulate(handle, "OnPressed")
+            fake.pressed = true
+            frames(1)
+            t.eq(part.level, 1, edges .. " held")
+            t.ok(fake.last(part.soft, "SetColorAndOpacity")[2].A > 0, edges .. ": the soft glow shows only while it is held")
+            for other, light in pairs(sized.lights) do
+                if other ~= edges then t.eq(light.level, 0, "while " .. edges .. " is held, " .. other .. " is dark") end
+            end
+            fake.pressed = false
+            frames(1)
+            t.eq(part.level, 0.5, edges .. " let go with the mouse still on it")
+            t.eq(fake.last(part.soft, "SetColorAndOpacity")[2].A, 0)
+            events.simulate(handle, "OnUnhovered")
+            t.eq(part.level, 0, edges .. " left")
+            t.eq(fake.last(part.glow, "SetColorAndOpacity")[2].A, 0)
+        end
+        t.eq(handles, 8)
+        t.ok(math.abs(fake.last(sized.outline, "SetColorAndOpacity")[2].B - style.theme.outline.B) < 1e-9,
+            "the outline as a whole is not lit by a resize")
+        -- the grip's own icon: accent under the mouse, the muted colour again when the mouse leaves
+        events.simulate(sized.grip_button, "OnHovered")
+        t.ok(math.abs(fake.last(sized.grip_icon, "SetColorAndOpacity")[2].B - style.theme.accent.B) < 1e-9)
+        events.simulate(sized.grip_button, "OnUnhovered")
+        t.ok(math.abs(fake.last(sized.grip_icon, "SetColorAndOpacity")[2].A - 0.55) < 1e-9)
+        -- moving the window by its bar still lights the whole outline, as before
+        events.simulate(sized.bar, "OnPressed")
+        t.ok(math.abs(fake.last(sized.outline, "SetColorAndOpacity")[2].B - style.theme.accent.B) < 1e-9)
+        fake.pressed = false
+        frames(1)
+        sized:SetMinimized(true)
+        t.eq(fake.last(sized.glow_layer, "SetVisibility")[2], style.Visibility.Collapsed, "minimised, nothing glows")
+        ui.Close()
+        host_scope:destroy()
+    end)
+
+    t.test("a section made with fit = true keeps its title on one line: one too long is cut with dots and follows the room it has", function()
+        local host, host_scope = nil, scope.new("fit")
+        scope.run(host_scope, function() host = ui.Window({ title = "Fit", width = 300, height = 300 }) end)
+        local long = "A title that is far too long for a card this narrow to show on one line"
+        local section = host:Section(long, { fit = true })
+        local narrow = section.parts.shown
+        t.ok(#narrow < #long and narrow:sub(-3) == "...", narrow)
+        t.eq(section.parts.title, long, "the whole title is kept, for the tip")
+        t.eq(host:Section("Short", { fit = true }).parts.shown, "Short", "one that fits is left as it is")
+        host:SetSize(600, 300)
+        local wide = section.parts.shown
+        t.ok(#wide > #narrow, "with more room more of it shows")
+        section.parts.before = 150
+        section.parts.fit()
+        t.ok(#section.parts.shown < #wide, "what its maker puts before the title takes from the room")
+        t.eq(host:Section("Plain").parts.fit, nil, "without the option a title wraps as before")
+        host_scope:destroy()
+    end)
+
+    t.test("the root is still found alive, and its loss still seen at once, with the game instance's list kept between looks", function()
+        local least, most = math.huge, 0
+        for _ = 1, 70 do
+            local reads = fake.touches
+            t.eq(gui_root.check(), true)
+            least, most = math.min(least, fake.touches - reads), math.max(most, fake.touches - reads)
+        end
+        t.ok(least <= 4, "a check with the list kept asks the game little: " .. least)
+        t.ok(most > least, "and now and then the list is reached anew")
+        ui.check()
+    end)
+end
+
+t.test("a control never shows the word nil: what is missing shows as nothing", function()
+    local host
+    local host_scope = scope.new("nothing")
+    scope.run(host_scope, function() host = ui.Window({ title = "Nothing" }) end)
+    local function text_of(widget) return fake.last(widget, "SetText")[2]:ToString() end
+    local empty = host:Dropdown("Empty", {}, nil)
+    t.eq(empty:Get(), nil)
+    t.eq(header_of(empty), "", "a dropdown with nothing to choose from has an empty header")
+    local pick = host:Dropdown("Pick", { "A", "B" }, nil)
+    t.eq(header_of(pick), "A")
+    pick:Set(nil)
+    t.eq(header_of(pick), "")
+    pick.offer({ "B" })
+    t.eq(pick:Get(), nil, "what is offered does not change the value")
+    pick:Set("B")
+    t.eq(header_of(pick), "B")
+    local label = host:Label(nil)
+    t.eq(text_of(label.widget), "")
+    label:Set(nil)
+    t.eq(text_of(label.widget), "")
+    host:SetTitle(nil)
+    t.eq(host.title, "")
+    local note = ui.Notify(nil)
+    t.eq(note.text, "")
+    note:Close()
+    host_scope:destroy()
+end)
+
+t.test("the keys looked at in one frame share one read of the player's controller, and it is not kept after the frame", function()
+    local reads, player = 0, fake.new_object("PlayerController")
+    Wax.game = setmetatable({}, { __index = function(_, key)
+        if key ~= "LocalPlayer" then return nil end
+        reads = reads + 1
+        return { Raw = player }
+    end })
+    local host_scope = scope.new("keys")
+    scope.run(host_scope, function()
+        ui.Window({ title = "Keys" })
+        ui.Hotkey("F1", function() end)
+        ui.Hotkey("F2", function() end)
+        ui.Hotkey("F3", function() end)
+    end)
+    reads = 0
+    frames(1)
+    t.eq(reads, 1, "three hotkeys and the key of the panel were looked at with one read")
+    input.controller()
+    input.controller()
+    t.eq(reads, 3, "outside the frame step every look is a new read")
+    -- a step that fails half way leaves nothing held
+    local tween = Wax.import("gui.tween")
+    local real = tween.step
+    tween.step = function() error("this step fails") end
+    local ok, problem = pcall(frames, 1)
+    tween.step = real
+    t.ok(not ok and tostring(problem):find("this step fails", 1, true), "the error is passed on as it was")
+    reads = 0
+    input.controller()
+    t.eq(reads, 1)
+    host_scope:destroy()
+    Wax.game = nil
+end)
+
+t.test("ui.IsKeyDown says whether a key is held, counts Ctrl, Shift and Alt exactly, and asks the game only when it is called", function()
+    t.eq(ui.IsKeyDown("A"), false, "with no local player nothing is held")
+    Wax.game = { LocalPlayer = { Raw = fake.new_object("PlayerController") } }
+    local held, asked = {}, 0
+    fake.react.IsInputKeyDown = function(_, key)
+        asked = asked + 1
+        return held[key.KeyName] == true
+    end
+    t.eq(ui.IsKeyDown("A"), false)
+    held.A = true
+    t.eq(ui.IsKeyDown("A"), true)
+    t.eq(ui.IsKeyDown("MiddleMouseButton"), false, "another key is not held")
+    held.LeftShift = true
+    t.eq(ui.IsKeyDown("A"), true, "a plain key counts whatever else is held")
+    t.eq(ui.IsKeyDown("Shift+A"), true)
+    t.eq(ui.IsKeyDown("shift+A"), true, "however the word is spelt")
+    t.eq(ui.IsKeyDown("Ctrl+A"), false, "Ctrl is not held")
+    t.eq(ui.IsKeyDown("Ctrl+Shift+A"), false)
+    held.LeftShift, held.RightControl = nil, true
+    t.eq(ui.IsKeyDown("Ctrl+A"), true, "either Ctrl key is Ctrl")
+    t.eq(ui.IsKeyDown("Shift+A"), false, "Shift came up and Ctrl is held instead")
+    held.A = nil
+    t.eq(ui.IsKeyDown("Ctrl+A"), false, "the key itself came up")
+    t.eq(ui.IsKeyDown("NoSuchKey"), false, "a name the game does not know is never held")
+    held = {}
+    asked = 0
+    frames(3)
+    t.eq(asked, 0, "no frame asks the game whether a key is held")
+    ui.IsKeyDown("A")
+    t.eq(asked, 1, "a plain key is one question")
+    t.raises(function() ui.IsKeyDown(nil) end, "key name")
+    t.raises(function() ui.IsKeyDown("") end, "key name")
+    t.raises(function() ui.IsKeyDown(ui, "A") end, "key name")
+    t.raises(function() ui.IsKeyDown("Meta+A") end, "key name")
+    fake.react.IsInputKeyDown = nil
+    Wax.game = nil
+end)
+
 t.test("stopping the GUI leaves nothing behind", function()
     scope.run(scope.new("late"), function() ui.Window({ title = "Late" }) end)
     ui.stop()
     t.eq(ui.stats().windows, 0)
     t.raises(function() ui.Window({}) end, "not running")
+end)
+
+-- The game starting: every GUI module from nothing, with a screen that has no size for the first frames.
+t.test("no text block is made without a rule: each one wraps, is fitted to a room, or is free where what holds it is as wide as its text", function()
+    local kit = Wax.import("gui.kit")
+    local without, counted = {}, { wraps = 0, fitted = 0, free = 0 }
+    for _, made in ipairs(text_blocks) do
+        local rule = made.info and kit.rule(made.info)
+        if rule then
+            counted[rule] = counted[rule] + 1
+        elseif made.info and not made.where:find("gui_test", 1, true) then
+            without[made.where] = (without[made.where] or 0) + 1
+        end
+    end
+    local list = {}
+    for where, count in pairs(without) do list[#list + 1] = where .. " (" .. count .. ")" end
+    table.sort(list)
+    t.eq(table.concat(list, ", "), "", "text blocks made with no rule")
+    t.ok(counted.wraps > 0 and counted.fitted > 0 and counted.free > 0 and counted.wraps + counted.fitted + counted.free > 100,
+        ("%d wrap, %d are fitted, %d are free"):format(counted.wraps, counted.fitted, counted.free))
+end)
+
+t.test("a cold start: nothing is worked out from a screen that is not there yet", function()
+    local storage = Wax.import("core.storage")
+    local real_load, real_clock, now = storage.load, sched.clock, sched.clock()
+    sched.clock = function() return now end
+    local function cold_start(places)
+        for name in pairs(Wax.modules) do
+            if name:find("^gui%.") then Wax.modules[name] = nil end
+        end
+        fake.set_screen(1, 1, 0.444)
+        storage.load = function(owner, name, defaults)
+            local out = real_load(owner, name, defaults)
+            if owner == "wax" and name == "interface" then out.windows = places end
+            return out
+        end
+        local fresh = Wax.import("gui.init")
+        fresh.start()
+        Wax.ui = fresh
+        return fresh
+    end
+    local function run(fresh, seconds, count)
+        for _ = 1, count do
+            now = now + seconds / count
+            sched.step()
+            fresh.step()
+        end
+    end
+
+    -- a 2560 by 1440 screen, which comes to 1920 by 1080 in the units of the interface
+    local cold = cold_start({ ["early/Tools"] = { x = 1500, y = 700 } })
+    run(cold, 0.2, 12)
+    t.eq(cold.GetScale(), 1, "the interface is not made larger for a screen that is not there")
+    t.eq(cold.MinScale(), 0.7)
+    local early, told = scope.new("early"), {}
+    local tools, sizes
+    scope.run(early, function()
+        -- a mod that loads while the game is starting asks for the size and lays itself out
+        local width, height = cold.ScreenSize()
+        t.eq(width, 1920)
+        t.eq(height, 1080)
+        cold.ScreenChanged:Connect(function(wide, high) told[#told + 1] = { wide, high } end)
+        tools = cold.Window({ title = "Tools", width = 320, height = 260 })
+        cold.AddSettings(tools)
+        sizes = tools.controls[#tools.controls]
+    end)
+    t.ok(sizes.items["100%"] ~= nil, "the last control of the settings is the interface size")
+    t.eq(header_of(sizes), "100%", "the Settings page shows a size, not the word nil")
+    t.eq(tools.slot:GetPosition().X, 1500, "a window is where its saved place says")
+    t.eq(tools.slot:GetPosition().Y, 700)
+    fake.set_screen(2560, 1440, 1.333)
+    run(cold, 0.2, 12)
+    t.eq(cold.GetScale(), 1)
+    t.ok(math.abs(cold.MinScale() - 0.7) < 1e-9)
+    t.eq(header_of(sizes), "100%")
+    t.eq(sizes:Get(), "100%")
+    t.eq(tools.slot:GetPosition().X, 1500)
+    t.eq(tools.slot:GetPosition().Y, 700)
+    run(cold, 2, 20)
+    t.eq(#told, 0, "1920 by 1080 was the right answer for this screen, so there is nothing to tell")
+    early:destroy()
+    cold.stop()
+
+    -- a wider screen: the mod that asked too early is told the real size, once, and a place beyond 1920 is kept
+    cold = cold_start({ ["early/Tools"] = { x = 2300, y = 700 } })
+    early, told = scope.new("early"), {}
+    scope.run(early, function()
+        t.eq(cold.ScreenSize(), 1920)
+        cold.ScreenChanged:Connect(function(wide, high) told[#told + 1] = { wide, high } end)
+        tools = cold.Window({ title = "Tools", width = 320, height = 260 })
+    end)
+    run(cold, 0.2, 12)
+    t.eq(tools.slot:GetPosition().X, 2300, "a saved place is not pulled in to fit a screen that is only assumed")
+    fake.set_screen(3440, 1440, 4 / 3)
+    run(cold, 0.2, 12)
+    t.eq(#told, 0, "not while the screen has only just appeared")
+    t.eq(tools.slot:GetPosition().X, 2300)
+    run(cold, 0.5, 10)
+    t.eq(#told, 1)
+    t.ok(math.abs(told[1][1] - 2580) < 0.01 and math.abs(told[1][2] - 1080) < 0.01, "got " .. told[1][1] .. " by " .. told[1][2])
+    t.ok(math.abs(cold.ScreenSize() - 2580) < 0.01)
+    run(cold, 2, 20)
+    t.eq(#told, 1, "once")
+
+    -- a small screen, where text needs a larger interface to be read: the Settings page offers and shows a size that fits
+    early:destroy()
+    cold.stop()
+    cold = cold_start({})
+    early = scope.new("early")
+    scope.run(early, function()
+        tools = cold.Window({ title = "Tools", width = 320, height = 260 })
+        cold.AddSettings(tools)
+        sizes = tools.controls[#tools.controls]
+    end)
+    fake.set_screen(1280, 720, 2 / 3)
+    run(cold, 1, 20)
+    t.ok(math.abs(cold.GetScale() - 1.35) < 1e-9)
+    t.eq(header_of(sizes), "150%")
+
+    early:destroy()
+    cold.stop()
+    storage.load, sched.clock = real_load, real_clock
+    fake.set_screen(1920, 1080, 1)
+    Wax.ui = ui
 end)
 
 t.finish("gui")

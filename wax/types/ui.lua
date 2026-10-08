@@ -112,10 +112,12 @@
 ---@field x? number
 ---@field y? number
 ---@field closable? boolean False leaves out the close button.
+---@field resizable? boolean False makes a window the player cannot resize: it has no grip, its edges and corners do nothing, and it is always the size your mod gives it. SetSize still works.
 ---@field visible? boolean False creates the window hidden.
 ---@field nav? WaxNav Gives the window pages, listed down the side or along the top.
 ---@field nav_width? number Width of the side navigation column.
 ---@field remember? boolean False stops Wax remembering the window's position and size between sessions.
+---@field key? string The key that shows and hides your mod's windows, such as "F6" or "Ctrl+K". The first window a mod makes decides. Without it Wax gives the mod a key, and the player can choose another on the mod's card of the Mods page.
 
 ---@class WaxPageOptions: WaxOptions
 ---@field icon? string Icon name shown before the page's name. The menu's Icons page lists the names.
@@ -127,6 +129,8 @@
 ---@field NearEnd WaxSignal<fun()> Fires while the end of the page is in view: when the user scrolls close to the bottom, and a few times a second while the page is not full. Add more content in the handler, or do nothing when there is no more.
 
 ---A window in the menu. Controls added to it go into its body, or into a first page called "Main" when it has pages.
+---The player moves it by its title bar and resizes it by any edge or corner; the bottom right corner shows a grip. Resizing stops at the window's minimum size and at the edges of the screen.
+---A mod's windows come up together, with that mod's key (see ui.Keys), and other mods' windows stay as they are.
 ---@class WaxWindow: WaxContainer
 ---@field Opened WaxSignal<fun()> Fires when the window is shown.
 ---@field Closed WaxSignal<fun()> Fires when the window is hidden.
@@ -151,19 +155,23 @@ function Window:SetSize(width, height) end
 ---@param width number
 function Window:SetNavWidth(width) end
 
----Shows the window, in front of the others.
+---Shows the window, in front of the others. While the menu is open it comes up at once, with your mod's other windows. While the menu is closed it waits for your mod's key or for ui.Open().
 function Window:Show() end
 
----Hides the window. Hiding the last one closes the menu.
+---Hides the window. Hiding the last window that is up closes the menu.
 function Window:Hide() end
 
 ---Shows or hides the window.
 ---@param shown boolean
 function Window:SetVisible(shown) end
 
----True while the window is shown.
+---True while the window is shown. A shown window is on screen only while its mod's windows are up: IsShowing tells you that.
 ---@return boolean
 function Window:IsVisible() end
+
+---True while the window is really on screen: it is shown, and its mod's windows are up (or every window is, in preview).
+---@return boolean
+function Window:IsShowing() end
 
 ---Minimises the window to its title bar, or restores it.
 ---@param minimized boolean
@@ -235,6 +243,7 @@ function StatusBar:Clear() end
 ---A panel pinned to the screen that stays up during play and never takes the mouse.
 ---@class WaxOverlay: WaxContainer
 ---@field Scrolled WaxSignal<fun(steps: integer)> On a panel made with ui.Panel: the wheel was turned over it, 1 for down and -1 for up. The game does not see the wheel while the mouse is over a panel.
+---@field Resized WaxSignal<fun(width: number, height: number?)> On a panel made with a place function: it was given another size, in its own units. Fires in the frame the screen changed.
 local Overlay = {}
 
 ---Shows or hides the overlay.
@@ -271,6 +280,15 @@ function Overlay:IsShowing() end
 ---@field opacity? number How solid its background is, 0 to 1. 0.96 when omitted.
 ---@field visible? boolean False makes it hidden until SetVisible(true).
 ---@field on_press? fun() Runs when the panel is pressed where it has no control.
+---@field place? fun(screen_width: number, screen_height: number): WaxPanelPlace Where the panel goes on a screen of this size. It is asked when the panel is made and again, in the same frame, whenever the game's window changes size: the panel that exists is moved, sized and zoomed, and nothing is built again. The size is the real screen in the units the game lays its own menus out in, and the zoom is used as it is, so such a panel keeps its size beside the game's menus whatever the interface size is.
+
+---What a panel's place function answers. What is left out stays as it is.
+---@class WaxPanelPlace
+---@field x? number
+---@field y? number
+---@field width? number
+---@field height? number
+---@field zoom? number
 
 ---@class WaxFitOptions: WaxOptions
 ---@field scale? number How large the game's menus are drawn, 0.5 to 1. 0.85 when omitted.
@@ -283,17 +301,22 @@ function Overlay:IsShowing() end
 ---@class WaxFit
 local Fit = {}
 
+---Changes how large the game's menus are drawn, and how far they are moved when x or y is given.
+---The numbers mean what the `scale`, `x` and `y` options mean.
 ---@param scale number
 ---@param x? number Keeps its value when omitted.
 ---@param y? number Keeps its value when omitted.
 function Fit:Set(scale, x, y) end
 
+---Switches the request on or off. While it is off the game's menus have their own size, unless another request is on.
 ---@param on boolean
 function Fit:SetEnabled(on) end
 
 ---Gives the game's menus their own size back.
 function Fit:Remove() end
 
+---The game's own pictures, such as item icons, which a cell of a Slots control shows by their path.
+---Loading them is given a few milliseconds a frame, so a picture can show a moment after it was asked for.
 ---@class WaxPictures
 local Pictures = {}
 
@@ -313,6 +336,7 @@ function Pictures.Stats() end
 ---@field seconds? number Time on screen. Default 4, and 0 keeps it until closed.
 ---@field progress? number 0..1. Shows progress in place of the countdown and keeps the notification until closed.
 
+---One message in a corner of the screen, as ui.Notify returns it. Once it has closed, its functions do nothing.
 ---@class WaxNotification
 local Notification = {}
 
@@ -331,6 +355,7 @@ function Notification:SetProgress(amount) end
 ---Closes the notification.
 function Notification:Close() end
 
+---What all notifications share: the corner they show in and how many show at once. It also counts them and closes them all.
 ---@class WaxNotifications
 local Notifications = {}
 
@@ -387,41 +412,94 @@ function Debug.Page(name, options) end
 ---@return WaxWindow?
 function Debug.Window() end
 
----Shows the debug panel and opens the menu.
+---Shows the Wax panel and frees the mouse, whichever mod calls it. Your own windows stay as they are.
 function Debug.Show() end
+
+---One owner of windows, as ui.Keys.Owners lists it.
+---@class WaxKeyOwner
+---@field id string "Wax" for Wax's own panel, else the id of a mod.
+---@field name string The name to show: "Wax", or the mod's name.
+---@field key string? Its key, or nil when it has none.
+---@field open boolean True while its windows are up.
+
+---The keys that show and hide windows. Wax's own panel has one, and so has every mod that made a window: a key shows
+---and hides its owner's windows and nobody else's. A mod's key is the one the player chose on the mod's card of the
+---Mods page, else the one the mod asked for with ui.Window({ key = "F6" }), else a key Wax gives it once and remembers:
+---one that no window and no hotkey of any mod uses. A press that your mod's own ui.Hotkey takes is not also taken as
+---the key of its windows.
+---@class WaxKeys
+---@field Changed WaxSignal<fun(owner: string, key: string?)> Fires with the owner and its new key when a key is changed.
+local Keys = {}
+
+---The key of an owner: "Wax" or a mod's id. Left out, it is the mod that asks.
+---@param owner? string
+---@return string?
+function Keys.Get(owner) end
+
+---Gives an owner another key, or none with nil. A key that another owner has, or that another mod uses as a hotkey, is refused: the key stays what it was, a notification says who has it, and you get false and that name.
+---@param owner string "Wax" or a mod's id.
+---@param key string? An engine key name such as "F6". It can be held with Ctrl, Shift or Alt: "Ctrl+K".
+---@return boolean changed
+---@return string? taken_by
+function Keys.Set(owner, key) end
+
+---Every owner that has a window, Wax first.
+---@return WaxKeyOwner[]
+function Keys.Owners() end
 
 ---The GUI library: the menu (windows you click), overlays (panels you only read) and notifications.
 ---@class WaxUI
----@field Opened WaxSignal<fun()> Fires when the menu opens.
----@field Closed WaxSignal<fun()> Fires when the menu closes.
----@field KeyChanged WaxSignal<fun(key: string?)> Fires with the new menu key.
+---@field Opened WaxSignal<fun()> Fires when the menu opens: somebody's windows come up and the mouse is freed.
+---@field Closed WaxSignal<fun()> Fires when the menu closes: nobody's windows are up any more and the game has the mouse back. A mod that opened the menu with `windows = false` also hears it when its own ui.Close() leaves the menu open for others.
+---@field KeyChanged WaxSignal<fun(key: string?)> Fires with the new key of Wax's own panel. For any owner's key, use ui.Keys.Changed.
 ---@field ThemeChanged WaxSignal<fun(name: string)> Fires with the theme's name after SetTheme or ResetTheme.
----@field ScreenChanged WaxSignal<fun(width: number, height: number)> Fires when ScreenSize gives another answer: a new resolution or interface scale.
+---@field ScreenChanged WaxSignal<fun(width: number, height: number)> Fires once with the new size when ScreenSize gives another answer: after the game's window or the interface size has stopped changing for a moment, never while it is still being resized.
+---@field GameScreenChanged WaxSignal<fun(name: string?, tab: integer?)> Fires with what GameScreen answers, in the frame the game shows another of its menu screens, another tab of its main menu, or none any more (nil). Connect to it in place of asking GameScreen every frame: the game is only looked at while somebody listens.
 ---@field Icons WaxIcons
 ---@field Notifications WaxNotifications
 ---@field Debug WaxDebugPanel
 ---@field Pictures WaxPictures
+---@field Keys WaxKeys
 ui = {}
 
----Opens the menu: windows appear and the mouse is freed to use them.
----@param options? { windows: boolean? } `windows = false` frees the mouse for panels only and leaves the windows hidden.
+---Shows your mod's windows and frees the mouse to use them. Other mods' windows and the Wax panel stay as they are. In the command bar it is the Wax panel that comes up.
+---@param options? { windows: boolean? } `windows = false` frees the mouse for panels only and brings no window up.
 function ui.Open(options) end
 
----Closes the menu and gives the mouse back to the game.
+---Hides your mod's windows again. The menu closes, and the game has the mouse back, once nobody's windows are up.
 function ui.Close() end
 
----Opens the menu when it is closed, and closes it when it is open.
+---Shows your mod's windows when they are away, and hides them when they are up.
 function ui.Toggle() end
 
 ---Puts text on the clipboard, for pasting anywhere.
 ---@param text any
 function ui.Copy(text) end
 
----True while the menu is open.
+---@class WaxTextOptions
+---@field size? number The font size. The interface's own when omitted.
+---@field face? string "Bold", "Book" or "Medium" (the default).
+---@field family? string "mono" for the fixed-width font.
+
+---How wide a line of text is drawn, in the units controls and panels are sized in. It is worked out from the letters, to within a few percent.
+---@param text any
+---@param options? WaxTextOptions
+---@return number width
+function ui.TextWidth(text, options) end
+
+---The text if it fits in a width, else its start with "..." after it. A little room is kept spare, as the library does for its own text.
+---@param text any
+---@param width number
+---@param options? WaxTextOptions
+---@return string shown
+---@return boolean cut True when the text did not fit.
+function ui.Shorten(text, width, options) end
+
+---True while the menu is open: the mouse is free, because somebody's windows are up.
 ---@return boolean
 function ui.IsOpen() end
 
----Shows the windows without taking the mouse (for screenshots and for looking while you play).
+---Shows every window without taking the mouse (for screenshots and for looking while you play).
 ---@param on boolean
 function ui.SetPreview(on) end
 
@@ -429,11 +507,13 @@ function ui.SetPreview(on) end
 ---@return boolean
 function ui.IsPreview() end
 
----Sets the key that opens and closes the menu, by the engine's key name ("F8"). nil leaves the menu without a key.
+---Sets the key that shows and hides Wax's own panel, by the engine's key name ("F8"). nil leaves the panel without a key. A key that somebody has is refused, as with ui.Keys.Set. Every mod has a key of its own: see ui.Keys.
 ---@param key string?
+---@return boolean changed
+---@return string? taken_by
 function ui.SetToggleKey(key) end
 
----The key that opens and closes the menu.
+---The key that shows and hides Wax's own panel.
 ---@return string?
 function ui.GetToggleKey() end
 
@@ -462,8 +542,9 @@ function ui.Hovered() end
 ---@return boolean
 function ui.IsTyping() end
 
----The size of the screen in the units windows and panels are laid out in. While the game is starting and has no
----screen yet, the answer is 1920 by 1080; ScreenChanged fires if the real one turns out different.
+---The size of the screen in the units windows and panels are laid out in. It changes with the shape of the game's
+---window and with the interface size. While the game is starting and has no screen yet, the answer is 1920 by 1080;
+---ScreenChanged fires if the real one turns out different.
 ---@return number width
 ---@return number height
 function ui.ScreenSize() end
@@ -493,12 +574,15 @@ function ui.GameScreen() end
 ---@field Instance WaxInstance? What the tag is on. nil for a tag on a spot.
 local Tag = {}
 
+---Replaces the text.
 ---@param text string
 function Tag:Set(text) end
 
+---Changes the colour of the text.
 ---@param color WaxColor|string
 function Tag:SetColor(color) end
 
+---Sets how near the thing has to be for the tag to show, in metres.
 ---@param metres number
 function Tag:SetRange(metres) end
 
@@ -528,6 +612,7 @@ function ui.Windows() end
 ---@field typing? boolean Also reacts while a text box has the keyboard (for a key meant for the box, such as Tab).
 ---@field hover? boolean Makes it a key for the slot under the mouse: it only reacts while a slot is under it.
 
+---A key that runs a function when it is pressed, as ui.Hotkey returns it.
 ---@class WaxHotkey
 local Hotkey = {}
 
@@ -545,7 +630,18 @@ function Hotkey:SetKey(key) end
 ---@return WaxHotkey
 function ui.Hotkey(key, callback, options) end
 
----The smallest scale that still draws text at a readable size on this screen.
+---True while the key is held down, as the game's own input reports it for the local player. It takes the key names
+---ui.Hotkey takes. A name with Ctrl, Shift or Alt ("Ctrl+K") is true only while the key is down with exactly those
+---held; a plain name is true whatever else is held. It is false while the game has no local player, and for a name
+---the game does not know. It does not look at whether the menu is open or a text box has the keyboard (see
+---ui.IsTyping). Every call asks the game, so use it in a loop that runs while something is held, such as one a
+---ui.Hotkey started, and not in every frame of the game. It raises an error for a key that is not text, for empty
+---text, and for a word before the key that is not Ctrl, Shift or Alt.
+---@param key string An engine key name such as "A", "LeftShift" or "MiddleMouseButton".
+---@return boolean
+function ui.IsKeyDown(key) end
+
+---The smallest interface size that still draws text at a readable size on this screen. It follows the size of the game's window.
 ---@return number
 function ui.MinScale() end
 
@@ -588,6 +684,106 @@ function ui.Color(hex, alpha) end
 ---@return WaxTheme
 function ui.Theme() end
 
----Adds the menu's own settings (key, theme, accent, animation, size) to a container, such as a "Settings" page.
+---Adds Wax's own settings (the key of its panel, theme, accent, animation, size) to a container, such as a "Settings" page.
 ---@param container WaxContainer
 function ui.AddSettings(container) end
+
+---The fur of a model: a second mesh that hair grows from. game.Creatures:GetModel fills it in from the creature's own data.
+---@class WaxModelFur
+---@field mesh string The game path of the mesh the fur grows from.
+---@field splines? string The game path of the fur's splines.
+---@field layers? integer How many layers the fur is drawn in, 1 to 64.
+---@field length? number
+---@field min_length? number
+---@field bias? number
+---@field noise? number
+---@field hair_bias? number
+---@field uniformity? number
+---@field bare? boolean True leaves out the faces that have no splines.
+---@field materials? table<integer, string> Game paths of materials by slot, 1 first.
+---@field mask? string The game path of a texture that says where no fur grows, as the game puts one on a mount's fur under some saddles. It goes on a copy of the fur's first material, so it only works when materials names that one.
+
+---One more mesh of a model, such as a piece of armour or a saddle. With nothing but a mesh it takes the pose of the first mesh, bone by bone.
+---With a blueprint or a socket it is put on as the game puts a saddle on its mount: attached to the first mesh, and posed by its own blueprint.
+---@class WaxModelPart
+---@field mesh string The game path of a skeletal mesh.
+---@field materials? table<integer, string> Game paths of materials by slot, 1 first.
+---@field blueprint? string The game path of the part's own animation blueprint, one that copies the pose of another mesh, as every saddle of the game has. The part is attached to the first mesh and the blueprint is given that mesh to copy. When it cannot be loaded the part takes the first mesh's pose bone by bone instead.
+---@field socket? string A socket or a bone of the first mesh the part sits on, such as "RaptorSaddle". Left out, it sits on the mesh itself. A part on a socket is not counted when the model is fitted to its box.
+
+---What a Model control shows. Every path is a game path such as "/Game/ASS/CRE/Deer/SK_CRE_PAS_Deer"; a path with no dot gets its last part again.
+---game.Creatures:GetModel gives one of these for a creature.
+---@class WaxModelLook
+---@field mesh string The game path of a skeletal mesh.
+---@field materials? table<integer, string> Game paths of materials to put on the mesh, by slot, 1 first.
+---@field parts? WaxModelPart[] More meshes that move with the first: pieces on the same skeleton, or what the model wears.
+---@field fur? WaxModelFur|WaxModelFur[]
+---@field walk? string The game path of the animation "walk" plays.
+---@field idle? string The game path of the animation "idle" plays.
+---@field loop? string The game path of an animation for a model with no walk and no idle, such as flying.
+---@field animation? "walk"|"idle"|"blueprint"|string|false What plays, in a loop. "walk" (the default) plays walk, or idle or loop when there is none. "idle" plays idle, or loop when there is no walk either. "blueprint" runs the mesh's own animation blueprint. A game path plays that animation. false stands still.
+---@field blueprint? string The game path of the mesh's own animation blueprint. Only used with animation = "blueprint".
+---@field speed? number What an animation blueprint is told the creature moves at: 0 stands, 150 (the default) walks. Only blueprints of the game's creature kind listen to it.
+---@field facing? number The way the mesh faces as its creature's class turns it, in degrees. Default -90. The view starts in front of the model by it.
+---@field scale? number How much larger the game draws the creature than its mesh. The view fits every model to its box, so it changes nothing there.
+---@field walks? boolean True when there is a walk to play. game.Creatures:GetModel sets it; the view does not read it.
+---@field against? WaxModelLook Another model to be seen beside, such as a young animal's adult. This one is then as much smaller in its box as it is smaller than that one in the game, by the two meshes' sizes and their scale. It never fills less than four tenths of the box, and a model larger than the other fills the box as it would alone. Only mesh and scale of the other are read.
+
+---@class WaxModelOptions: WaxModelLook, WaxOptions
+---@field mesh? string Nothing shows until Show is called when this is left out.
+---@field width? number Default 240.
+---@field height? number As tall as it is wide when left out.
+---@field size? number The side of a square view, in place of width and height.
+---@field align? "left"|"center"|"right" Where the view sits in its line. Default "center".
+---@field backdrop? WaxColor|boolean A colour behind the model, or true for the theme's card colour. See-through when left out.
+---@field spin? number|false Degrees a second it turns by itself until the player touches it. Default 12.
+---@field turn? boolean False: the player cannot turn it.
+---@field zoom? boolean False: the wheel is left to the page.
+---@field reset? boolean False leaves out the small button that puts the view back.
+---@field light? number How bright the three lights are: 1 as designed, up to 4. At 0 the model is a dark shape.
+---@field yaw? number Where the view starts, in degrees round the model: 0 looks at its front, 90 at its right side. Default -40.
+---@field pitch? number How many degrees above the model the view starts. Default 10. Kept between -20 and 75.
+---@field distance? number How far away the view starts: 1 fits the model in the box. Default 1. Kept between 0.45 and 1.6.
+
+---A creature or any other skeletal mesh of the game, drawn in 3D. It turns slowly by itself until the player touches it.
+---The model follows the mouse when dragged: to the right its near side goes right, and down it is seen more from above.
+---The wheel moves the camera nearer and further while the mouse is over the view, and the page does not scroll then.
+---Two presses in a row put the view back. Nothing is drawn while the view is not on screen.
+---@class WaxModel: WaxControl
+---@field Loaded WaxSignal<fun()> The model given at the start or to Show is in the picture.
+---@field Failed WaxSignal<fun(reason: string)> The mesh could not be loaded or is not a skeletal mesh, or the game could not make the view.
+---@field Turned WaxSignal<fun(yaw: number, pitch: number, distance: number)> The player let go after a drag, turned the wheel or put the view back.
+---@field Clicked WaxSignal<fun()> The player pressed the view and let go without turning it.
+local Model = {}
+
+---Shows another model in the same box. The view goes back to where it starts, unless the first mesh is the one that
+---shows already: the same body with other parts or other fur is seen from where the player left it.
+---@param look WaxModelLook
+function Model:Show(look) end
+
+---Empties the box.
+function Model:Clear() end
+
+---Where the camera is: degrees round the model (0 looks at its front, 90 at its right side), degrees above it (negative is below), and how far away (1 fits the model in the box).
+---@return number yaw
+---@return number pitch
+---@return number distance
+function Model:GetView() end
+
+---Puts the camera somewhere. What is left out stays as it is. The slow turn stops.
+---@param yaw? number
+---@param pitch? number Kept between -20 and 75.
+---@param distance? number Kept between 0.45 and 1.6.
+function Model:SetView(yaw, pitch, distance) end
+
+---Puts the view back where it started, and starts the slow turn again.
+function Model:Reset() end
+
+---Changes what plays: "walk", "idle", "blueprint", the game path of an animation, or false to stand still.
+---@param animation "walk"|"idle"|"blueprint"|string|false
+---@param speed? number For "blueprint": what the creature is said to move at. 0 stands, 150 walks.
+function Model:SetAnimation(animation, speed) end
+
+---True once the model given at the start or to Show is in the picture.
+---@return boolean
+function Model:IsLoaded() end

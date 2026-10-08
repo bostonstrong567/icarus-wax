@@ -4,12 +4,15 @@
 local view = {}
 
 local FIT = 0.85            -- the game's screens are drawn this much smaller, which frees the column and the band
-local ZOOM = 1.25           -- the panels are read beside the game's own text, which is larger than a window's
 local GAP = 2
 local COLUMNS, TAB_COLUMNS, TAB_ROWS = 5, 6, 5
 local CARDS = 6
 local PLAIN = { item = "package", tag = "tags", resource = "droplet" }
 local KEYS = { make = "R", used = "U", favourite = "A" }
+local MIDDLE = "MiddleMouseButton"
+local POP = 2               -- a swept slot moves this far and settles: never more than the gap, so the mouse stays off the next slot
+local KEEP_CREATURES = true -- creatures can be kept on the shelf among the favourites and orders: false takes their star and key away
+local CREATURES = "creatures"   -- stands among an item's recipes for the card of its creatures
 
 function view.start(app)
     local text, rows, search = app.text, app.rows, app.search
@@ -26,7 +29,10 @@ function view.start(app)
     local has_research, research = pcall(function() return game.Research end)
     if not has_research then research = nil end
     local state = { query = "", page = 1, list = {}, mode = "make", view = "recipes", card_page = 1, tab = 1, pass = 0, on = true,
-        bare = false, detail = false, amount = 1, numbers = {}, tabs = {}, pages = {}, only = app.settings.bench_only ~= false }
+        bare = false, detail = false, amount = 1, numbers = {}, tabs = {}, pages = {}, only = app.settings.bench_only ~= false,
+        shown = {}, first = 0 }
+    -- a Wax that can say whether a key is held: the favourite key can then be held and moved over items
+    local can_hold = type(ui.IsKeyDown) == "function"
 
     -- every size and place comes from the screen's size, worked out in layout.lua
     local wide, high = ui.ScreenSize()
@@ -35,9 +41,18 @@ function view.start(app)
         task.wait(0.25)
         wide, high = ui.ScreenSize()
     end
-    local L = require(mod.layout).compute(wide, high)
-    -- another resolution or interface scale: everything is laid out again
-    if ui.ScreenChanged and mod.Reload then ui.ScreenChanged:Connect(function() mod.Reload() end) end
+    local layout = require(mod.layout)
+    local L = layout.compute(wide, high)
+    -- The numbers for a screen of this size. Each panel's place function asks, so they are worked out once for a change of
+    -- the screen, and the game's own screens are put beside the panels again in the same frame. Nothing is built again.
+    local refit = nil
+    local function laid_out(width, height)
+        if math.abs(width - L.width) > 0.005 or math.abs(height - L.height) > 0.005 then
+            L = layout.compute(width, height)
+            if refit then refit() end
+        end
+        return L
+    end
     local screen_width, screen_height = L.width, L.height
     local column, tall, inner, down = L.column, L.tall, L.inner, L.down
     local CELL, TAB, grid_rows, budget = L.cell, L.tab, L.grid_rows, L.budget
@@ -113,23 +128,32 @@ function view.start(app)
         return nil
     end
 
-    -- The order of the shelf, favourites and orders together: "f:<item>" and "o:<item>". What is not in it yet goes last.
+    -- The order of the shelf, favourites, orders and kept creatures together: "f:<item>", "o:<item>" and "c:<creature>".
+    -- What is not in it yet goes last.
     local shelf_order = {}
     for _, id in ipairs(storage.Load("shelf", {})) do
         if type(id) == "string" then shelf_order[#shelf_order + 1] = id end
     end
-    -- Every favourite and order there is, in the shelf's order. `listed` leaves favourites out that it does not answer for.
-    local function shelf_ids(listed)
+    -- Every favourite, order and kept creature there is, in the shelf's order. `listed` leaves favourites out that it
+    -- does not answer for, `met` creatures.
+    local function shelf_ids(listed, met)
         local ids, rank = {}, {}
         for at, id in ipairs(shelf_order) do rank[id] = at end
         for at, order in ipairs(orders) do ids[#ids + 1] = { id = "o:" .. order.key, order = at, rank = rank["o:" .. order.key] } end
         for _, key in ipairs(app.favourites:list(listed)) do ids[#ids + 1] = { id = "f:" .. key, key = key, rank = rank["f:" .. key] } end
+        for _, key in ipairs(KEEP_CREATURES and app.kept:list(met) or {}) do
+            ids[#ids + 1] = { id = "c:" .. key, creature = key, rank = rank["c:" .. key] }
+        end
         for at, entry in ipairs(ids) do entry.rank = entry.rank or (1000000 + at) end
         table.sort(ids, function(a, c) return a.rank < c.rank end)
         return ids
     end
 
     local show_items, show_tabs, show_list, show_favourites, show_detail, open, close_detail, station_changed, step_back, time_at
+    -- The Bestiary side (creature_view.lua), started further down, and what the two sides share: which one the column
+    -- shows, the row of the two tabs, and the counts on them.
+    local beasts, swap, set_side, show_sides
+    state.side, state.box = "items", ""
 
     -- What the open bench says about an item: { row, valid, order }, or nothing. at_bench answers only while the list is cut down to it.
     local function here_of(key)
@@ -162,6 +186,15 @@ function view.start(app)
         return names
     end
 
+    -- The hold of the favourite key while it lasts. One that takes things off only marks them (leaving) until the key comes up.
+    local sweep = nil
+    local function is_favourite(key)
+        return app.favourites:has(key) and not (sweep and sweep.leaving["f:" .. key])
+    end
+    local function is_kept(id)
+        return app.kept:has(id) and not (sweep and sweep.leaving["c:" .. id])
+    end
+
     -- What the tooltip of an item says, worked out when the mouse gets there.
     local function tip_of(key)
         local m = model()
@@ -170,17 +203,21 @@ function view.start(app)
         local lines = {}
         if rows.ready(m) then
             local names = station_names(m, item)
-            lines[#lines + 1] = #names > 0 and text.tip.made_at(names, 3) or (item.hints and item.hints[1]) or text.tip.no_recipe
+            -- what no recipe makes may come from creatures
+            local _, givers = beasts.droppers(key, 0)
+            lines[#lines + 1] = #names > 0 and text.tip.made_at(names, 3) or (item.hints and item.hints[1])
+                or (givers > 0 and text.beasts.dropped_by(givers)) or text.tip.no_recipe
             -- how long it takes: the recipe of the open bench when it has one, else the first
             local listed = here_of(key)
             local number = listed and listed.number or rows.recipes(m, item, "make", false)[1]
             local made = number and rows.recipe(m, app.job.needs, number, item, "make") or nil
             lines[#lines + 1] = made and text.tip.takes(time_at(made, nil)) or ""
+            lines[#lines + 1] = made and text.tip.gives(made.gives) or ""
             lines[#lines + 1] = text.tip.used_in(#rows.recipes(m, item, "used", false))
         end
         local level = item.level and m.levels and m.levels[item.level]
         if level and level.name then lines[#lines + 1] = { level.name, "warn" } end
-        if app.favourites:has(key) then lines[#lines + 1] = { text.tip.favourite, "accent" } end
+        if is_favourite(key) then lines[#lines + 1] = { text.tip.favourite, "accent" } end
         local here = at_bench(key)
         if here then
             local _, asks = asked_of(m, here)
@@ -201,7 +238,7 @@ function view.start(app)
         local key = item.key
         local here = at_bench(key)
         return { image = item.icon, icon = not item.icon and PLAIN.item or nil, value = key, tone = here and here.valid and "good" or nil,
-            dim = starred ~= false and here ~= nil and not here.valid, mark = starred ~= false and app.favourites:has(key) and "star" or nil,
+            dim = starred ~= false and here ~= nil and not here.valid, mark = starred ~= false and is_favourite(key) and "star" or nil,
             tip = function() return tip_of(key) end }
     end
 
@@ -240,9 +277,39 @@ function view.start(app)
     end
 
     -- the column at the right. First the list: categories, the bench switch, the page line, the items, the search box
-    local items = ui.Panel({ anchor = "right", x = 4, y = 0, width = column, height = tall, padding = 6, zoom = ZOOM, when = "always", opacity = 1,
-        visible = false })
-    local tabs = items:Slots({ columns = TAB_COLUMNS, rows = TAB_ROWS, size = TAB, gap = GAP })
+    local items = ui.Panel({ anchor = "right", x = 4, y = 0, width = column, height = tall, padding = 6, zoom = L.zoom, when = "always", opacity = 1,
+        visible = false, place = function(width, height) return { zoom = laid_out(width, height).zoom } end })
+    -- a Wax from before panels could be placed again: another screen size or interface size means laying everything out anew
+    local placed = items.Resized ~= nil
+    if not placed and ui.ScreenChanged and mod.Reload then ui.ScreenChanged:Connect(function() mod.Reload() end) end
+    -- The row of the two sides, the same in both panels: Items and Bestiary, each half the column whatever it says.
+    -- show(side, counts, off): the side that shows, how many each found while text is typed, and whether the Bestiary is off.
+    local function side_tabs(panel)
+        local row = panel:Row({ height = L.side_row })
+        local pair = { row = row.control }
+        for _, name in ipairs({ "items", "beasts" }) do
+            pair[name] = row:Button(text.beasts.side(name), function() set_side(name) end, { tab = true })
+        end
+        function pair.show(side, counts, off)
+            for _, name in ipairs({ "items", "beasts" }) do
+                local caption = text.beasts.side(name, counts and counts[name] or nil)
+                if caption ~= pair[name .. "_caption"] then
+                    pair[name .. "_caption"] = caption
+                    pair[name]:SetCaption(caption)
+                end
+                pair[name]:SetActive(name == side)
+            end
+            if off ~= pair.off then
+                pair.off = off
+                pair.beasts:SetEnabled(not off)
+                -- a Wax from before buttons had tips shows it switched off and no more
+                if pair.beasts.SetTip then pair.beasts:SetTip(off and text.beasts.changed or nil) end
+            end
+        end
+        return pair
+    end
+    local sides = side_tabs(items)
+    local tabs = items:Slots({ columns = TAB_COLUMNS, rows = TAB_ROWS, size = TAB, gap = GAP, below = L.snug })
     local category_line = items:Label("", { size = small, dim = true, align = "center" })
     local switch_row = items:Row()
     switch_row:Toggle(words.bench_only, state.only, function(on)
@@ -252,16 +319,32 @@ function view.start(app)
         station_changed()
     end)
     switch_row.control:SetVisible(false)
-    local head = items:Row()
-    local back = head:Button(nil, function() state.page = state.page - 1 show_items() end, { icon = "chevron-left" })
-    local page_label = head:Label("", { align = "center" })
-    local forth = head:Button(nil, function() state.page = state.page + 1 show_items() end, { icon = "chevron-right" })
+    -- A page line: an arrow, the page, an arrow. The item list and the favourites all have this one. turn(by) is told -1 or 1.
+    local function page_line(panel, turn)
+        local row = panel:Row()
+        local line = { row = row.control }
+        line.back = row:Button(nil, function() turn(-1) end, { icon = "chevron-left" })
+        line.label = row:Label("", { align = "center" })
+        line.forth = row:Button(nil, function() turn(1) end, { icon = "chevron-right" })
+        -- page of pages, and the arrow that leads nowhere switched off
+        function line.set(page, pages)
+            line.label:Set(words.page(page, pages))
+            line.back:SetEnabled(page > 1)
+            line.forth:SetEnabled(page < pages)
+        end
+        return line
+    end
+    local head = page_line(items, function(by)
+        state.page = state.page + by
+        show_items()
+    end)
     local note_label = items:Label("", { dim = true, align = "center" })
     note_label:SetVisible(false)
-    local grid = items:Slots({ columns = COLUMNS, rows = grid_rows, size = CELL, gap = GAP })
+    local grid = items:Slots({ columns = COLUMNS, rows = grid_rows, size = CELL, gap = GAP, below = L.snug })
     local find = items:Input(nil, { hint = words.search, clear = true })
+    -- a Wax whose game.Crafting finds what the mouse is over on every screen of the game says so with IsTyping
     local keys_line = items:Label(text.right.keys(KEYS), { size = small, dim = true, align = "center" })
-    local list_parts = { tabs, category_line, head.control, grid, find, keys_line }
+    local list_parts = { sides.row, tabs, category_line, head.row, grid, find, keys_line }
 
     function show_tabs()
         local m = model()
@@ -286,7 +369,8 @@ function view.start(app)
                 if not made then return { text.left.count(count) } end
                 return { text.left.count(count), { words.ready(can), can > 0 and "good" or "dim" } }
             end
-            looks[1] = { icon = "layout-grid", value = { category = false }, selected = state.category == nil,
+            -- the same filled picture as the Bestiary side's tile for everything
+            looks[1] = { image = require(mod.creature_view).ALL, symbol = true, value = { category = false }, selected = state.category == nil,
                 tip = { title = text.left.all_categories, lines = lines_for(made and all or m.counts.shown, all_ready) } }
             line = text.left.all_categories
             for _, category in ipairs(m.categories) do
@@ -308,11 +392,15 @@ function view.start(app)
         local per = grid:Capacity()
         local pages = math.max(1, math.ceil(#state.list / per))
         state.page = math.max(1, math.min(state.page, pages))
-        local looks, first = {}, (state.page - 1) * per
+        local looks, first, shown = {}, (state.page - 1) * per, {}
         for at = 1, per do
             local item = state.list[first + at]
-            if item then looks[at] = look_of(item) end
+            if item then
+                looks[at] = look_of(item)
+                shown[item.key] = at
+            end
         end
+        state.shown, state.first = shown, first
         grid:Set(looks)
         local line
         if model() then
@@ -323,9 +411,7 @@ function view.start(app)
         state.note = line
         note_label:Set(line)
         note_label:SetVisible(line ~= "" and not state.detail)
-        page_label:Set(words.page(state.page, pages))
-        back:SetEnabled(state.page > 1)
-        forth:SetEnabled(state.page < pages)
+        head.set(state.page, pages)
     end
 
     function show_list()
@@ -361,9 +447,12 @@ function view.start(app)
         state.list = list
         if not keep_page then state.page = 1 end
         show_items()
+        show_sides()
     end
 
-    find.Typed:Connect(function(typed)
+    -- What is typed in the item side's box: the list of items follows a frame later. The Bestiary side has a box of its own.
+    local function typed_in(typed)
+        if typed == state.query then return end
         state.query = typed
         if state.queued then return end
         state.queued = true
@@ -371,11 +460,16 @@ function view.start(app)
             state.queued = false
             apply(false)
         end)
+    end
+    find.Typed:Connect(function(typed)
+        state.box = typed
+        typed_in(typed)
     end)
 
     -- Then, in the same column, one item: its picture and name, four tabs, and what the chosen tab shows.
     local top = items:Row()
-    top:Button(words.back, function() close_detail() end, { icon = "arrow-left", stretch = false })
+    -- it reads the list it goes to: the side that was showing
+    local back_button = top:Button(words.back, function() close_detail() end, { icon = "arrow-left", stretch = false })
     top:Label("")
     local previous = top:Button(nil, function() step_back() end, { icon = "undo-2" })
     local star = top:Button(nil, function() view.favourite(state.pick) end, { icon = "star" })
@@ -424,6 +518,7 @@ function view.start(app)
     local card_back = pager:Button(nil, function() state.card_page = state.card_page - 1 show_detail() end, { icon = "chevron-left" })
     local card_label = pager:Label("", { align = "center", dim = true })
     local card_forth = pager:Button(nil, function() state.card_page = state.card_page + 1 show_detail() end, { icon = "chevron-right" })
+    sides.turn = { back = card_back, forth = card_forth, row = pager.control }
     -- Researches a recipe's node with the player's points, in the task of the button that asked, then says how it went.
     local function research_run(row)
         if state.researching then return end
@@ -563,22 +658,10 @@ function view.start(app)
     local detail_parts = { describe_label, flavour_label, where_label, table.unpack(where_lines) }
     local stat_groups = {}
     -- how a name and its figure can share a line, and the room each side then has for its text
-    local PAIR_SPLITS = { { 3, 2 }, { 1, 1 }, { 2, 3 } }
-    local function pair_room(split, side)
-        return (inner - 8) * split[side] / (split[1] + split[2]) * 0.94
-    end
+    local PAIR_SPLITS = rows.PAIR_SPLITS
     -- Which split shows every line of a group whole. Lines no split has room for are named, to go under as sentences.
     local function pair_fit(names, values)
-        local best, best_left = 1, nil
-        for index, split in ipairs(PAIR_SPLITS) do
-            local left = {}
-            for at = 1, #names do
-                if rows.measure(names[at]) > pair_room(split, 1) or rows.measure(values[at]) > pair_room(split, 2) then left[#left + 1] = at end
-            end
-            if not best_left or #left < #best_left then best, best_left = index, left end
-            if #left == 0 then break end
-        end
-        return best, best_left or {}
+        return rows.pair_fit(names, values, inner)
     end
     for at = 1, 6 do
         local group = { title = items:Label("", { size = small, dim = true }) }
@@ -633,13 +716,24 @@ function view.start(app)
         return table.concat(text.some(list, 3), ", ")
     end
 
+    -- What one craft gives at the chosen station, or over all of them: "52 XP".
+    local function gives_at(made, chosen)
+        return rows.gives(rows.xp(made, chosen and not chosen.all and chosen.name or nil))
+    end
+
     -- The recipes of one station as pages: as many to a page as the column has room for.
     local function paginate(m, numbers, more)
         local pages, page, used = {}, {}, 0
         for _, number in ipairs(numbers) do
-            local made = m.recipes[number]
-            local inputs = #made.inputs + #made.tags_in + #made.res_in
-            local height = (1 + math.max(1, math.min(2, math.ceil(inputs / COLUMNS)))) * (CELL + GAP) + 60 + more(number)
+            local height
+            if number == CREATURES then
+                local _, lines = L.creature_card(state.creatures or 0, state.mode ~= "make")
+                height = L.card(lines)
+            else
+                local made = m.recipes[number]
+                local inputs = #made.inputs + #made.tags_in + #made.res_in
+                height = L.card(1 + math.max(1, math.ceil(inputs / COLUMNS))) + more(number)
+            end
             if #page > 0 and (#page >= CARDS or used + height > budget - (state.points_shown and 20 or 0)) then
                 pages[#pages + 1] = page
                 page, used = {}, 0
@@ -651,20 +745,55 @@ function view.start(app)
         return pages
     end
 
+    -- The card of an item's creatures, drawn as a recipe. On Recipe: those that give it, an arrow, the item. On Uses:
+    -- the item, an arrow, those it is used on. More than fit: the last cell stands for the rest and lists them all.
+    local function show_creatures(card, picked)
+        local used = state.mode ~= "make"
+        local list = used and beasts.users or beasts.droppers
+        local _, total = list(picked.key, 0)
+        local shown = L.creature_card(total, used)
+        local looks = list(picked.key, shown)
+        if total > shown then
+            local rest = total - shown + 1
+            looks[shown] = { image = require(mod.creature_view).PAWS, symbol = true, count = text.plus(rest),
+                value = { [used and "users" or "droppers"] = picked.key },
+                tip = { title = text.and_more(rest), lines = { text.beasts.list_them } } }
+        end
+        local arrow = { icon = "arrow-right", plain = true }
+        -- the item itself: it is what is open, so it takes no click
+        local own = { image = picked.icon, icon = not picked.icon and PLAIN.item or nil, tip = { title = picked.name } }
+        if used then
+            local first, rest = { own, arrow }, {}
+            local room = #card.inputs * COLUMNS
+            for _, look in ipairs(looks) do
+                if #first < room then first[#first + 1] = look else rest[#rest + 1] = look end
+            end
+            fill_lines(card.inputs, first)
+            fill_lines(card.output, rest)
+        else
+            fill_lines(card.inputs, looks)
+            fill_lines(card.output, { arrow, own })
+        end
+        card.needs:Set(used and text.beasts.used_on(total) or text.beasts.dropped_by(total))
+        card.needs:SetVisible(true)
+        card.rule:SetVisible(true)
+    end
+
     local function show_recipes(m, picked, ready)
         mode_line:Set(ready and text.right.mode(state.mode, #state.numbers) or text.status.reading())
         local stations = state.tabs
         state.tab = math.max(1, math.min(state.tab, math.max(1, #stations)))
         local station_looks = {}
         for at, station in ipairs(stations) do
-            station_looks[at] = { image = station.icon, icon = not station.icon and station.plain or nil, value = { tab = at },
+            station_looks[at] = { image = station.icon, icon = not station.icon and station.plain or nil, symbol = station.symbol,
+                value = { tab = at },
                 selected = at == state.tab, tip = { title = station.name, lines = station.item and { words.station } or nil } }
         end
         fill_lines(station_lines, station_looks)
         local chosen, here = stations[state.tab], {}
         for _, number in ipairs(state.numbers) do
             local fits = chosen == nil or chosen.all == true
-            if not fits then
+            if not fits and not chosen.creatures then
                 for _, id in ipairs(m.recipes[number].stations) do
                     local set_of = m.sets[id]
                     if set_of and tab_key(set_of) == chosen.key then fits = true break end
@@ -672,6 +801,8 @@ function view.start(app)
             end
             if fits then here[#here + 1] = number end
         end
+        -- its creatures come last, as one card more
+        if state.creatures and (chosen == nil or chosen.all or chosen.creatures) then here[#here + 1] = CREATURES end
         station_line:Set(chosen and chosen.name or "")
         station_line:SetVisible(chosen ~= nil)
         -- the open bench makes this: one press chooses it there
@@ -704,8 +835,10 @@ function view.start(app)
         pager.control:SetVisible(#pages > 1)
         local page = pages[state.card_page] or {}
         for at, card in ipairs(cards) do
-            local made = page[at] and rows.recipe(m, app.job.needs, page[at], picked, state.mode) or nil
-            if made then
+            local made = page[at] and page[at] ~= CREATURES and rows.recipe(m, app.job.needs, page[at], picked, state.mode) or nil
+            if page[at] == CREATURES then
+                show_creatures(card, picked)
+            elseif made then
                 local inputs, outputs = {}, { { icon = "arrow-right", plain = true } }
                 for _, entry in ipairs(made.inputs) do inputs[#inputs + 1] = entry_look(entry) end
                 for _, entry in ipairs(made.outputs) do outputs[#outputs + 1] = entry_look(entry) end
@@ -713,7 +846,7 @@ function view.start(app)
                 fill_lines(card.output, outputs)
                 local needs = made.needs
                 local line = text.join(state.mode ~= "make" and made.name or nil, made.random and text.right.one_of or nil,
-                    time_at(made, chosen),
+                    time_at(made, chosen), gives_at(made, chosen),
                     needs and needs.short or nil, needs and needs.extra or nil, not needs and made.level or nil)
                 card.needs:Set(line)
                 card.needs:SetVisible(line ~= "")
@@ -722,7 +855,9 @@ function view.start(app)
             end
         end
         if ready and #here == 0 then
-            return state.mode == "make" and ((picked.hints and picked.hints[1]) or text.right.no_recipe) or text.right.no_use
+            -- while the game's creatures can be listed, drops are: the sentence no longer says they are not
+            local none = (app.beasts.off() or app.beasts.failed) and text.right.no_recipe or text.beasts.no_recipe
+            return state.mode == "make" and ((picked.hints and picked.hints[1]) or none) or text.right.no_use
         end
         return ""
     end
@@ -750,8 +885,8 @@ function view.start(app)
                 value = node.kind == "item" and node.key or nil,
                 tip = { title = node.kind == "tag" and text.right.any(node.name) or node.name, lines = { amount } } }
         end
-        -- how long each thing takes at the first bench of its station, and all of it together
-        local times, total = {}, 0
+        -- how long each thing takes at the first bench of its station and the XP it gives there, and all of it together
+        local times, total, gained = {}, 0, 0
         for _, step in ipairs(app.tree.steps(root)) do
             local set_of = step.set and m.sets[step.set]
             local bench = set_of and set_of.benches and set_of.benches[1]
@@ -763,18 +898,29 @@ function view.start(app)
                 total = total + seconds
                 lines[#lines + 1] = text.tree.each(text.duration(seconds / step.crafts), text.duration(seconds))
             end
+            -- a step whose XP is not known leaves the sum out
+            local xp = step.xp and rows.gives(step.xp) or ""
+            if not step.xp then gained = nil end
+            if xp ~= "" then
+                if gained then gained = gained + step.xp end
+                lines[#lines + 1] = text.tree.gives(rows.gives(step.xp // step.crafts), xp)
+            end
             if at and not step.hand then lines[#lines + 1] = at.name end
-            times[#times + 1] = text.tree.step(step.name, step.crafts, seconds and text.duration(seconds) or "", "")
+            times[#times + 1] = text.tree.step(step.name, step.crafts, seconds and text.duration(seconds) or "", "", xp)
             steps[#steps + 1] = { image = step.icon, icon = not step.icon and PLAIN.item or nil, count = text.short(step.crafts),
                 value = step.key, tip = { title = step.name, lines = lines } }
         end
         -- the list of times gets the lines that are left in the column, and says how many more there are
         local shown = math.min(#gather_lines, math.ceil(#raw / COLUMNS)) + math.min(#craft_lines, math.ceil(#steps / COLUMNS))
-        local room = math.floor((down - (CELL + 425 + shown * (CELL + GAP))) / 16) - 1
+        local all = gained and rows.gives(gained) or ""
+        local summed = total > 0 or all ~= ""
+        -- with its XP the sentence above the list is a line longer
+        local sentence = (total > 0 and all ~= "") and 16 or 0
+        local room = math.floor((down - (CELL + 425 + sentence + shown * (CELL + GAP))) / 16) - 1
         times_label:Set(table.concat(text.some(times, math.max(1, room - 1)), "\n"))
         times_label:SetVisible(#times > 0 and room >= 2)
-        total_label:Set(total > 0 and text.tree.total(text.duration(total)) or "")
-        total_label:SetVisible(total > 0)
+        total_label:Set(summed and text.tree.total(total > 0 and text.duration(total) or "", all) or "")
+        total_label:SetVisible(summed)
         gather_label:SetVisible(true)
         craft_label:SetVisible(true)
         fill_lines(gather_lines, raw)
@@ -855,10 +1001,16 @@ function view.start(app)
         set(one_parts, false)
         if not picked then
             state.detail = false
-            return show_list()
+            show_list()
+            return swap()
         end
         show_list()
         set(head_parts, true)
+        local back_to = state.side == "beasts" and text.beasts.back or words.back
+        if back_to ~= sides.back_to then
+            sides.back_to = back_to
+            back_button:SetCaption(back_to)
+        end
         picked_slot:Set({ look_of(picked, false) })
         -- a long name takes a second line beside the picture. Only one too long for two lines is cut short
         local name_lines = rows.wrap(picked.name, (inner - CELL - 20) * 0.94, 13)
@@ -867,7 +1019,7 @@ function view.start(app)
         end
         title:Set(table.concat(name_lines, "\n"))
         previous:SetEnabled(app.history:can_back())
-        star:SetIcon(app.favourites:has(picked.key) and ui.Icons.Has("star-off") and "star-off" or "star")
+        star:SetIcon(is_favourite(picked.key) and ui.Icons.Has("star-off") and "star-off" or "star")
         local ready = rows.ready(m)
         local showing = state.view == "recipes" and state.mode or state.view
         for name, button in pairs(view_tabs) do button:SetActive(name == showing) end
@@ -881,6 +1033,7 @@ function view.start(app)
         end
         message:Set(nothing)
         message:SetVisible(nothing ~= "")
+        swap()
     end
 
     -- The recipes of the picked item in the mode asked for, and the stations they are made at.
@@ -899,7 +1052,19 @@ function view.start(app)
                 end
             end
         end
-        if #stations > 1 then table.insert(stations, 1, { all = true, name = text.right.all_stations, plain = "layout-grid" }) end
+        -- The creatures that give the item, or that it is used on, are one card after the recipes, with a tab of its
+        -- own among the stations: last, or where it still shows when there are more stations than the tabs hold.
+        local _, creatures = beasts[state.mode == "make" and "droppers" or "users"](picked.key, 0)
+        state.creatures = creatures > 0 and creatures or nil
+        if state.creatures then
+            local room = #station_lines * COLUMNS
+            table.insert(stations, #stations + 2 <= room and #stations + 1 or room - 2,
+                { creatures = true, name = text.beasts.dropped, icon = require(mod.creature_view).PAWS, symbol = true })
+        end
+        -- the game's own filled pictures, as the stations beside them and the tiles of the two lists have
+        if #stations > 1 then
+            table.insert(stations, 1, { all = true, name = text.right.all_stations, icon = require(mod.creature_view).ALL, symbol = true })
+        end
         state.tabs = stations
     end
 
@@ -908,6 +1073,10 @@ function view.start(app)
         local m = model()
         local picked = m and key and m.items[key]
         if not picked then return end
+        -- a creature's page gives way: the item is in the item panel
+        beasts.leave()
+        -- an item's page says which creatures give it and which it is used on, so they are wanted now
+        app.beasts.want()
         mode = mode or "make"
         if not stay then app.history:push(key, mode) end
         state.detail, state.pick, state.mode, state.card_page, state.tab, state.view = true, key, mode, 1, 1, "recipes"
@@ -916,17 +1085,25 @@ function view.start(app)
         show_detail()
     end
 
+    -- Back to the list of the side that shows, from an item or from a creature: always one press.
     function close_detail()
         state.detail = false
         app.history:clear()
+        beasts.close()
         show_detail()
     end
 
-    -- The item looked at before this one, or the list when there was none.
+    -- The item or the creature looked at before this one, or the list when there was none.
     function step_back()
         local m, entry = model(), app.history:back()
-        while entry and not (m and m.items[entry.item]) do entry = app.history:back() end
-        if entry then open(entry.item, entry.mode, true) else close_detail() end
+        local function known(seen)
+            if seen.creature then return beasts.thing.known(seen.creature) end
+            return m ~= nil and m.items[seen.item] ~= nil
+        end
+        while entry and not known(entry) do entry = app.history:back() end
+        if not entry then return close_detail() end
+        if entry.creature then return beasts.open(entry.creature, entry.mode, true, entry.variant) end
+        open(entry.item, entry.mode, true)
     end
 
     -- favourites: on a shelf along the top, or beside a bench in the place of the game's own recipe list
@@ -935,40 +1112,113 @@ function view.start(app)
         if titled then panel:Label(words.favourites, { size = small, dim = true }) end
         local size = even(width, columns)
         local place = { panel = panel, columns = columns, at = 1, pitch = size + GAP }
-        place.hint = panel:Label(text.strip.empty(KEYS.favourite), { dim = true })
+        place.hint = panel:Label(text.strip.empty(KEYS.favourite, can_hold), { dim = true })
         place.lines = slot_lines(panel, count, columns, true, size)
         for _, line in ipairs(place.lines) do favourite_blocks[line] = place end
-        -- the page line with an arrow at each end, there only while there is more than one page
-        local pager_row = panel:Row()
-        place.back = pager_row:Button(nil, function()
-            place.at = place.at - 1
+        local function turn(by)
+            place.at = place.at + by
             show_favourites()
-        end, { icon = "chevron-left" })
-        place.page = pager_row:Label("", { size = small, dim = true, align = "center" })
-        place.forth = pager_row:Button(nil, function()
-            place.at = place.at + 1
-            show_favourites()
-        end, { icon = "chevron-right" })
-        place.pager = pager_row.control
-        place.pager:SetVisible(false)
+        end
+        place.turn = turn
+        if titled then
+            -- the page line, there only while there is more than one page
+            place.pager = page_line(panel, turn)
+            place.pager.row:SetVisible(false)
+        else
+            -- the shelf keeps room for its page line, which is made further down from small panels of its own
+            place.room = panel:Spacer(layout.PAGE_LINE.above - GAP + layout.PAGE_LINE.height + GAP)
+            place.room:SetVisible(false)
+        end
         panel:Spacer(4)
         return place
     end
-    local favourites = ui.Panel({ anchor = "top-left", x = L.shelf_x, y = L.top, width = shelf, padding = 6, zoom = ZOOM, when = "always", opacity = 1,
-        visible = false })
-    local on_shelf = favourite_place(favourites, shelf, favourite_columns, favourite_rows, false)
+    local favourites = ui.Panel({ anchor = "top-left", x = L.shelf_x, y = L.top, width = L.shelf, padding = 6, zoom = L.zoom, when = "always", opacity = 1,
+        visible = false, place = function(width, height)
+            local now = laid_out(width, height)
+            return { x = now.shelf_x, y = now.top, width = now.shelf, zoom = now.zoom }
+        end })
+    local on_shelf = favourite_place(favourites, L.shelf, L.favourite_columns, favourite_rows, false)
+    -- The shelf's page line is the column's in a compact form: an arrow, the page, an arrow, as wide as what is in it
+    -- and in the middle under the shelf's rows. Its three parts are small panels of their own, so that each stands exactly
+    -- where it should, which a row of a panel cannot do.
+    local LINE = layout.PAGE_LINE
+    local turner = { pieces = {}, wide = false }
+    local function pager_at() return L.pager_place(#on_shelf.lines, turner.wide) end
+    -- dx(at): how far right of the line's left end the part starts, in the line's own units
+    local function piece(make, width, dx, dy)
+        local entry = {}
+        function entry.where(at) return at.x + dx(at) * at.zoom, at.y + dy * at.zoom end
+        local at = pager_at()
+        local x, y = entry.where(at)
+        entry.panel = make({ anchor = "top-left", x = x, y = y, width = width, padding = 0, zoom = at.zoom, when = "always",
+            background = false, movable = false, visible = false,
+            place = function(screen_width, screen_height)
+                laid_out(screen_width, screen_height)
+                local now = pager_at()
+                local now_x, now_y = entry.where(now)
+                return { x = now_x, y = now_y, zoom = now.zoom }
+            end })
+        turner.pieces[#turner.pieces + 1] = entry
+        return entry.panel
+    end
+    local function arrow(icon, by, dx)
+        local panel = piece(ui.Panel, LINE.height, dx, 0)
+        local control = panel:Slots({ columns = 1, rows = 1, size = LINE.height, gap = 0, below = 0 })
+        control:Set({ { icon = icon } })
+        control.Activated:Connect(function() on_shelf.turn(by) end)
+        panel.Scrolled:Connect(on_shelf.turn)
+        return control
+    end
+    local pager = { back = arrow("chevron-left", -1, function() return 0 end),
+        forth = arrow("chevron-right", 1, function(at) return at.width - LINE.height end) }
+    -- in a row, where a label is one line whatever its width. Its panel is as wide as the longest page it can show
+    pager.label = piece(ui.Overlay, LINE.text[2], function(at) return (at.width - LINE.text[2]) / 2 end, 2.5):Row()
+        :Label("", { size = small, align = "center" })
+    -- page of pages, the arrow that leads nowhere switched off, and the parts where a line of this width has them
+    function pager.set(page, pages)
+        pager.label:Set(words.page(page, pages))
+        pager.back:SetEnabled(page > 1)
+        pager.forth:SetEnabled(page < pages)
+        turner.wide = pages >= 10
+        local at = pager_at()
+        local key = at.x .. " " .. at.y .. " " .. at.width
+        if key == turner.key then return end
+        turner.key = key
+        for _, entry in ipairs(turner.pieces) do entry.panel:SetOffset(entry.where(at)) end
+    end
+    on_shelf.pager = pager
+    -- the shelf spans the room beside the column: when that changes, its slots are set out again for the new width
+    if placed then
+        local function set_out(exact)
+            local columns = L.favourite_columns
+            -- while the size is still changing only a change in how many fit across costs anything: the cells keep their size
+            if columns == on_shelf.columns and not exact then return end
+            local again = columns ~= on_shelf.columns
+            on_shelf.columns, on_shelf.pitch = columns, L.shelf_cell + GAP
+            for _, line in ipairs(on_shelf.lines) do line:SetLayout(columns, L.shelf_cell) end
+            if again then show_favourites() end
+        end
+        favourites.Resized:Connect(function() set_out(false) end)
+        -- once the size has settled, a full row ends at the shelf's edge again
+        ui.ScreenChanged:Connect(function() set_out(true) end)
+    end
     -- where the game's list sits on a bench screen, as shares of the screen before it is made smaller
     local list_place = L.bench_list()
     local box_width, box_height = list_place.width, list_place.height
     local box = ui.Panel({ anchor = "top-left", x = list_place.x, y = list_place.y,
-        width = box_width, height = box_height, padding = 6, zoom = ZOOM, when = "always", opacity = 1, visible = false })
+        width = box_width, height = box_height, padding = 6, zoom = L.zoom, when = "always", opacity = 1, visible = false,
+        place = function(width, height)
+            local now = laid_out(width, height)
+            local list = now.bench_list()
+            return { x = list.x, y = list.y, width = list.width, height = list.height, zoom = now.zoom }
+        end })
     local in_box = favourite_place(box, box_width, math.max(3, math.floor((box_width - 12 + GAP) / (CELL + GAP))),
         math.max(1, math.floor((box_height - 12 - 21 - 21 - 4 + GAP) / (CELL + GAP))), true)
     local favourite_places = { on_shelf, in_box }
 
     -- One page of the entries in a place. `held` is the entry being dragged: it is drawn faint where it would land.
     local function show_place(place, entries, held)
-        local per = place.columns * (place.rows or #place.lines)
+        local per = place.columns * #place.lines
         local looks = {}
         for at = 1, per do
             local entry = entries[place.first + at]
@@ -981,17 +1231,38 @@ function view.start(app)
             looks[at] = entry
         end
         fill_lines(place.lines, looks)
+        -- a shelf with pages keeps all its rows on every page, so the page line under them never moves
+        if place.paged then
+            for _, line in ipairs(place.lines) do line:SetVisible(true) end
+        end
     end
 
-    function show_favourites()
+    -- The tooltip of something a hold has marked: it says first that it is going.
+    local function leaving_tip(tip)
+        return function()
+            local told = tip
+            if type(told) == "function" then told = told() end
+            if type(told) ~= "table" then return told end
+            local lines = { { words.leaving, "warn" } }
+            for _, line in ipairs(told.lines or {}) do lines[#lines + 1] = line end
+            return { title = told.title, lines = lines }
+        end
+    end
+
+    -- reveal: the id of a favourite just added. Each place turns to the page it is on.
+    function show_favourites(reveal)
         if state.drag then return end
         local m = model()
-        -- beside a bench, with the list cut down to it, the favourites are cut down the same way. Orders always show.
+        -- beside a bench, with the list cut down to it, the favourites are cut down the same way. Orders always show, and
+        -- creatures wherever the shelf does: not in the box that stands in the place of a bench's own list.
         local made = state.only and state.station and state.station.items or nil
-        local entries = {}
-        for _, entry in ipairs(m and shelf_ids(function(key) return m.items[key] ~= nil and (not made or made[key] ~= nil) end) or {}) do
+        local entries, found = {}, nil
+        for _, entry in ipairs(m and shelf_ids(function(key) return m.items[key] ~= nil and (not made or made[key] ~= nil) end,
+            function(key) return not state.replace and beasts.thing.known(key) end) or {}) do
             local look = nil
-            if entry.order then
+            if entry.creature then
+                look = beasts.thing.look(entry.creature)
+            elseif entry.order then
                 local order = orders[entry.order]
                 local item = m.items[order.key]
                 if item then
@@ -1004,25 +1275,35 @@ function view.start(app)
             end
             if look then
                 look.id = entry.id
+                -- what a hold has marked keeps its place, faint, until the key comes up
+                if sweep and sweep.leaving[entry.id] then
+                    look.dim, look.mark, look.tip = true, "x", leaving_tip(look.tip)
+                end
                 entries[#entries + 1] = look
+                if entry.id == reveal then found = #entries end
             end
         end
         state.entries = entries
         for _, place in ipairs(favourite_places) do
-            local per = place.columns * (place.rows or #place.lines)
+            local per = place.columns * #place.lines
             local pages = math.max(1, math.ceil(#entries / per))
+            if found then place.at = (found - 1) // per + 1 end
+            place.found = found
             place.at = math.max(1, math.min(place.at, pages))
-            place.first = (place.at - 1) * per
+            place.first, place.per = (place.at - 1) * per, per
+            -- with pages the shelf is the same on every page: all its rows, and the page line where it was
+            place.paged = place == on_shelf and pages > 1
             show_place(place, entries, nil)
             place.hint:SetVisible(#entries == 0)
-            place.page:Set(words.page(place.at, pages))
-            place.pager:SetVisible(pages > 1)
+            place.pager.set(place.at, pages)
             if place == on_shelf then
                 state.shelf_pager = pages > 1
-                state.shelf_lines = math.min(#place.lines, math.ceil(math.max(0, math.min(per, #entries - place.first)) / place.columns))
+                state.shelf_lines = pages > 1 and #place.lines
+                    or math.min(#place.lines, math.ceil(math.max(0, math.min(per, #entries - place.first)) / place.columns))
+                place.room:SetVisible(pages > 1)
+            else
+                place.pager.row:SetVisible(pages > 1)
             end
-            place.back:SetEnabled(place.at > 1)
-            place.forth:SetEnabled(place.at < pages)
         end
     end
 
@@ -1032,10 +1313,10 @@ function view.start(app)
         local entries = state.entries or {}
         local at = (place.first or 0) + (row - 1) * place.columns + index
         local entry = entries[at]
-        if not entry then return end
+        if not entry or sweep then return end
         -- anywhere on the page that shows, favourites and orders alike
         state.drag = { place = place, from = at, at = at, low = place.first + 1,
-            high = math.min(place.first + place.columns * (place.rows or #place.lines), #entries), entry = entry,
+            high = math.min(place.first + place.per, #entries), entry = entry,
             list = table.move(entries, 1, #entries, 1, {}) }
         show_place(place, state.drag.list, entry)
     end
@@ -1101,6 +1382,16 @@ function view.start(app)
             if state.detail then show_detail() end
             return
         end
+        -- a creature is kept or let go, and its cell and its page follow
+        if type(key) == "table" and key.creature then
+            if not (KEEP_CREATURES and beasts.thing.known(key.creature)) then return end
+            local kept = app.kept:toggle(key.creature)
+            beasts.kept_changed(key.creature)
+            -- the shelf turns to the page it landed on: it goes last, which may be a page that does not show
+            show_favourites(kept and "c:" .. key.creature or nil)
+            if state.detail then show_detail() end
+            return
+        end
         if type(key) ~= "string" then return end
         app.favourites:toggle(key)
         show_items()
@@ -1112,6 +1403,11 @@ function view.start(app)
     local function pressed(value, mode)
         if type(value) == "string" then return open(value, mode) end
         if type(value) ~= "table" then return end
+        -- a creature opens its page: on its drops for a right click, as an item opens on what it is used in
+        if value.creature then return beasts.open(value.creature, mode == "used" and "drops" or "about") end
+        -- the creatures that give an item, or that it is used on, listed in the Bestiary
+        if value.droppers then return beasts.list_drops(value.droppers) end
+        if value.users then return beasts.list_users(value.users) end
         if value.category ~= nil then
             -- the chosen category clicked again goes back to all of them
             local wanted = value.category or nil
@@ -1139,8 +1435,8 @@ function view.start(app)
         return select_here(type(value) == "string" and at_bench(value) or nil)
     end
     for _, block in ipairs({ tabs, grid, picked_slot }) do blocks[#blocks + 1] = block end
-    for _, block in ipairs(blocks) do
-        local chooses = block == grid or favourite_blocks[block] ~= nil
+    -- The clicks every block of slots has. chooses: a click on an item the open bench makes chooses it there.
+    local function wire(block, chooses)
         block.Activated:Connect(function(value)
             -- a second click on the same item straight after the first opens it, whatever the first click did
             local time = os.clock()
@@ -1149,11 +1445,98 @@ function view.start(app)
                 return open(value, "make")
             end
             state.clicked, state.clicked_at = value, time
-            if chooses and choose(value) then return end
+            -- a block may take a click itself (a saddle of the Bestiary is put on its mount's model)
+            if type(chooses) == "function" then
+                if chooses(value) then return end
+            elseif chooses and choose(value) then
+                return
+            end
             pressed(value, "make")
         end)
         block.RightClicked:Connect(function(value) pressed(value, "used") end)
-        block.MiddleClicked:Connect(function(value) view.favourite(value) end)
+        block.MiddleClicked:Connect(function(value)
+            -- a hold of the middle button dealt with this press when the button went down
+            if (sweep and sweep.key == MIDDLE) or os.clock() - (state.middle_done or -1) < 0.3 then return end
+            view.favourite(value)
+        end)
+    end
+    for _, block in ipairs(blocks) do wire(block, block == grid or favourite_blocks[block] ~= nil) end
+
+    -- The column shows one of its two panels: the items, or the Bestiary side while that is what is looked at.
+    function swap()
+        local theirs = state.there == true and beasts.active()
+        items:SetVisible(state.there == true and not theirs)
+        beasts.set_visible(theirs)
+    end
+
+    -- The two tabs of both panels: each says how many it found while text is typed in its own box.
+    function show_sides()
+        local counts = { items = state.query ~= "" and model() and #state.list or nil,
+            beasts = beasts.query() ~= "" and beasts.count() or nil }
+        local off = app.beasts.off()
+        sides.show("items", counts, off)
+        beasts.sides(counts, off)
+    end
+
+    -- A tab of the two was pressed. The Bestiary side builds itself the first time, and the items stay until it has.
+    function set_side(name)
+        if name == state.side or (name == "beasts" and app.beasts.off()) then return end
+        state.side = name
+        beasts.side_changed()
+        swap()
+        show_sides()
+    end
+
+    -- The game's own name for the map that is loaded ("Terrain_016"), while one is: a prospect or an outpost.
+    local function map_now()
+        local ok, name = pcall(function() return game.InProspect == true and game.MapName or nil end)
+        return ok and type(name) == "string" and name ~= "" and name or nil
+    end
+
+    -- What the Bestiary side is given of this one, so an item slot there behaves as an item slot does everywhere.
+    local host = {
+        map = map_now,
+        column = { anchor = "right", x = 4, y = 0, width = column, height = tall, padding = 6 },
+        place = function(width, height) return { zoom = laid_out(width, height).zoom } end,
+        L = function() return L end,
+        keys = KEYS,
+        keeps = KEEP_CREATURES,
+        kept = is_kept,
+        favourite = function(value) view.favourite(value) end,
+        model = model,
+        -- an item's slot as it looks everywhere. One the item list hides is drawn and takes no click
+        item_look = function(key)
+            local m = model()
+            local item = m and m.items[key]
+            if not item then return nil end
+            local look = look_of(item, false)
+            look.tone = nil
+            if item.hidden or item.title_only then look.value, look.tip = nil, { title = item.name } end
+            return look
+        end,
+        wire = wire, slot_lines = slot_lines, fill_lines = fill_lines, page_line = page_line, side_tabs = side_tabs,
+        pair_fit = pair_fit, pair_splits = PAIR_SPLITS,
+        side = function() return state.side end,
+        set_side = function(name) set_side(name) end,
+        item_open = function() return state.detail == true end,
+        -- a creature's page takes the column: the item that showed is put away
+        close_item = function()
+            if not state.detail then return end
+            state.detail = false
+            show_detail()
+        end,
+        close = function() close_detail() end,
+        back = function() step_back() end,
+        repaint = function()
+            swap()
+            show_sides()
+        end,
+    }
+    beasts = require(mod.creature_view).start(app, host)
+    -- a Wax that says when the game loads another map: "This map only" follows it while the column is up
+    local told_map, map_changed = pcall(function() return game.MapChanged end)
+    if told_map and type(map_changed) == "table" and map_changed.Connect then
+        map_changed:Connect(function() task.defer(beasts.map_changed) end)
     end
 
     -- keys for what is under the mouse: an item of ours, the bench of a station, or an item in the game's own slots
@@ -1166,6 +1549,22 @@ function view.start(app)
         end
         return nil
     end
+    -- What a node of the tech tree unlocks: the item of the first recipe that asks for it. Worked out once for each read of the data.
+    local nodes = {}
+    local function node_item(m, talent)
+        if nodes.model ~= m or nodes.stage ~= m.stage then
+            nodes = { model = m, stage = m.stage, items = {} }
+            local first = {}
+            for number, made in pairs(m.recipes) do
+                local item = made.talent and not made.hidden_only and (made.title or (made.outputs[1] and made.outputs[1].item))
+                if item and m.items[item] and number < (first[made.talent] or math.huge) then
+                    first[made.talent], nodes.items[made.talent] = number, item
+                end
+            end
+        end
+        return nodes.items[talent]
+    end
+    -- The item under the mouse in the game's own screens: in a slot, as what a recipe tile makes, or as what a node of the tech tree unlocks.
     local function in_game()
         local m = model()
         if not (m and crafting and crafting.GetHovered and state.near) then return nil end
@@ -1177,24 +1576,231 @@ function view.start(app)
             local number = m.recipe[row:lower()]
             local made = number and m.recipes[number]
             return made and (made.title or (made.outputs[1] and made.outputs[1].item)) or nil
+        elseif kind == "talent" then
+            return node_item(m, row:lower())
         end
         return nil
+    end
+    -- True while the keys may act: the panels show, and the player is not typing in one of the game's own text boxes.
+    -- The column shows: its list of items or one item, or the Bestiary side in the same place.
+    local function column_shows()
+        return items:IsVisible() or beasts.visible()
+    end
+    local function keys_on()
+        if not column_shows() then return false end
+        return not (crafting and crafting.IsTyping and crafting:IsTyping())
     end
     local function keyed()
         if ui.Hovered() ~= nil then return under_mouse() end
         return in_game()
     end
-    -- the favourite key over an order takes the order off
+    -- the favourite key over an order takes the order off, and over a creature keeps it or lets it go
     local function keyed_or_order()
         local value = ui.Hovered()
-        if type(value) == "table" and value.order then return value end
+        if type(value) == "table" and (value.order or value.creature) then return value end
         return keyed()
     end
+
+    -- Hold and sweep. What a slot stands for on the shelf: "f:<item>", "o:<item>" for an order, "c:<creature>" for a
+    -- creature. Nothing for any other slot.
+    local function id_of(value)
+        if type(value) == "table" and value.order then
+            local order = orders[value.order]
+            return order and "o:" .. order.key or nil
+        end
+        if type(value) == "table" and value.creature then
+            return KEEP_CREATURES and beasts.thing.known(value.creature) and "c:" .. value.creature or nil
+        end
+        local key = type(value) == "string" and value or nil
+        if type(value) == "table" and value.tab then
+            local station = state.tabs[value.tab]
+            key = station and station.item or nil
+        end
+        return key and "f:" .. key or nil
+    end
+
+    -- The slots on the straight way from one slot of a block to another, the last one included: a fast mouse skips none.
+    local function way(from, to, columns)
+        local x, y = (from - 1) % columns, (from - 1) // columns
+        local dx, dy = (to - 1) % columns - x, (to - 1) // columns - y
+        local steps, out = math.max(math.abs(dx), math.abs(dy)), {}
+        for step = 1, steps do
+            out[step] = (y + math.floor(dy * step / steps + 0.5)) * columns + x + math.floor(dx * step / steps + 0.5) + 1
+        end
+        return out
+    end
+
+    -- One thing the held key passed, once for each hold. The first decides what the hold does: add, or take off.
+    local function sweep_take(held, id, control, index)
+        if held.seen[id] then return end
+        held.seen[id] = true
+        local key, kind = id:sub(3), id:sub(1, 1)
+        local order = kind == "o"
+        -- a creature is kept in a list of its own
+        local kept = kind == "c" and app.kept or app.favourites
+        local has
+        if order then has = order_at(key) ~= nil else has = kept:has(key) end
+        if held.adds == nil then held.adds = not has end
+        if held.adds == has then return end
+        if held.adds then
+            kept:toggle(key)
+        else
+            held.leaving[id] = true
+            held.marked = held.marked + 1
+        end
+        if kind == "c" then
+            beasts.kept_changed(key)
+        elseif not order then
+            -- its slot in the list shows it at once, and so does the star of the picked item
+            local at = state.shown[key]
+            if at then grid:SetLook(at, look_of(state.list[state.first + at])) end
+            if state.detail and state.pick == key then
+                star:SetIcon(is_favourite(key) and ui.Icons.Has("star-off") and "star-off" or "star")
+            end
+        end
+        -- the slot the mouse is on gives a little. One on the shelf keeps still
+        if control and not favourite_blocks[control] then control:Slide(index, 0, held.adds and -POP or POP, 0.2) end
+        show_favourites(held.adds and id or nil)
+        if not held.adds then return end
+        -- what was added comes onto the shelf from the side
+        for _, place in ipairs(favourite_places) do
+            local on_page = place.found and place.found - place.first or 0
+            local line = on_page > 0 and place.lines[(on_page - 1) // place.columns + 1]
+            if line then line:Slide((on_page - 1) % place.columns + 1, 12, 0, 0.2) end
+        end
+    end
+
+    -- Once a frame while the key is held: the slot the mouse came to, and the slots it crossed on the way there.
+    local function sweep_look(held)
+        held.frame = held.frame + 1
+        local _, look, control = ui.Hovered()
+        if not look then
+            held.look, held.at = nil, nil
+            -- off the panels: what the mouse comes to in the game's own screens counts as it does for a press
+            local item = held.game and in_game() or nil
+            if item ~= held.item then
+                held.item = item
+                if item then sweep_take(held, "f:" .. item) end
+            end
+            return
+        end
+        held.item = nil
+        if look == held.look then return end
+        held.look = look
+        local index = nil
+        for at = 1, control:Capacity() do
+            if control:GetLook(at) == look then
+                index = at
+                break
+            end
+        end
+        if not index then return end
+        -- the same slot showing something else (a page turned under the mouse) is not a slot the mouse came to
+        local was = held.at
+        held.at = { control = control, index = index }
+        if was and was.control == control and was.index == index then return end
+        local cells, last = { index }, held.last
+        if last and last.control == control and held.frame - last.frame <= 3 then
+            local still = control:GetLook(last.index)
+            if still and id_of(still.value) == last.id then
+                cells = way(last.index, index, control == grid and COLUMNS or beasts.across(control) or control:Capacity())
+            end
+        end
+        held.last = { control = control, index = index, frame = held.frame, id = id_of(look.value) }
+        for _, cell in ipairs(cells) do
+            local passed = control:GetLook(cell)
+            local id = passed and id_of(passed.value)
+            if id then sweep_take(held, id, control, cell) end
+        end
+        held.look = control:GetLook(index)
+    end
+
+    -- The key came up: what the hold marked goes, all at once. cancel: nothing goes and the marks come off.
+    local function sweep_done(cancel)
+        local held = sweep
+        sweep = nil
+        if not held then return end
+        if held.key == MIDDLE then state.middle_done = os.clock() end
+        if held.marked == 0 then return end
+        local before = {}
+        for at, entry in ipairs(state.entries or {}) do before[entry.id] = at end
+        if not cancel then
+            local fewer = false
+            for at = #orders, 1, -1 do
+                if held.leaving["o:" .. orders[at].key] then
+                    table.remove(orders, at)
+                    fewer = true
+                end
+            end
+            if fewer then storage.Save("orders", orders) end
+            for id in pairs(held.leaving) do
+                local key, kind = id:sub(3), id:sub(1, 1)
+                if kind == "f" and app.favourites:has(key) then app.favourites:toggle(key) end
+                if kind == "c" and app.kept:has(key) then app.kept:toggle(key) end
+            end
+        end
+        show_items()
+        beasts.kept_changed()
+        show_favourites()
+        if state.detail then show_detail() end
+        if cancel then return end
+        -- what stood behind them slides into the places they left
+        for _, place in ipairs(favourite_places) do
+            for on_page = 1, place.per do
+                local entry = state.entries[place.first + on_page]
+                local moved = entry and before[entry.id] and before[entry.id] - (place.first + on_page) or 0
+                if moved > 0 then
+                    place.lines[(on_page - 1) // place.columns + 1]:Slide((on_page - 1) % place.columns + 1,
+                        math.min(moved, 3) * place.pitch, 0)
+                end
+            end
+        end
+    end
+
+    -- The favourite key: a press is one item, and held it does the same to every item the mouse passes. Escape ends the hold with nothing taken off.
+    local function favourite_key(key)
+        if key == KEYS.favourite and not keys_on() then return end
+        if not can_hold then return view.favourite(keyed_or_order()) end
+        -- a hold whose task ended without saying so is forgotten
+        if sweep and os.clock() - sweep.beat > 1 then sweep = nil end
+        if sweep or state.drag or not column_shows() then return end
+        -- game: this Wax finds what the mouse is over in the game's screens fast enough to ask every frame of a hold
+        local held = { key = key, seen = {}, leaving = {}, marked = 0, frame = 0, beat = os.clock(),
+            game = crafting ~= nil and crafting.IsTyping ~= nil }
+        sweep = held
+        -- on an older Wax an item in the game's own slots counts at the press only
+        if not held.game and ui.Hovered() == nil then
+            local item = in_game()
+            if item then sweep_take(held, "f:" .. item) end
+        end
+        while true do
+            local ok, problem = pcall(sweep_look, held)
+            if not ok then
+                sweep_done(true)
+                error(problem, 0)
+            end
+            task.wait()
+            if sweep ~= held then return end
+            held.beat = os.clock()
+            if not column_shows() or ui.IsKeyDown("Escape") then return sweep_done(true) end
+            if not ui.IsKeyDown(key) then return sweep_done(false) end
+        end
+    end
+
     local always = { in_menu = true }
-    ui.Hotkey(KEYS.make, function() open(keyed(), "make") end, always)
-    ui.Hotkey(KEYS.used, function() open(keyed(), "used") end, always)
-    ui.Hotkey(KEYS.favourite, function() view.favourite(keyed_or_order()) end, always)
-    ui.Hotkey("BackSpace", function() if state.detail then step_back() end end, always)
+    -- the two keys do the nearest thing for a creature under the mouse: its page, or its drops
+    local function key_open(mode)
+        if not keys_on() then return end
+        local value = ui.Hovered()
+        if type(value) == "table" and value.creature then return pressed(value, mode) end
+        open(keyed(), mode)
+    end
+    ui.Hotkey(KEYS.make, function() key_open("make") end, always)
+    ui.Hotkey(KEYS.used, function() key_open("used") end, always)
+    ui.Hotkey(KEYS.favourite, function() favourite_key(KEYS.favourite) end, always)
+    -- the middle button the same way. Without this its click still marks one item when it comes up
+    if can_hold then ui.Hotkey(MIDDLE, function() favourite_key(MIDDLE) end, { in_menu = true, hover = true }) end
+    ui.Hotkey("BackSpace", function() if (state.detail or beasts.page()) and keys_on() then step_back() end end, always)
     -- The wheel over a panel turns its pages. The panel takes the wheel, so the game's hotbar does not turn with it.
     items.Scrolled:Connect(function(by)
         if not state.detail then
@@ -1206,21 +1812,11 @@ function view.start(app)
         end
     end)
     for _, place in ipairs(favourite_places) do
-        place.panel.Scrolled:Connect(function(by)
-            place.at = place.at + by
-            show_favourites()
-        end)
+        place.panel.Scrolled:Connect(place.turn)
     end
 
     -- The game's own screens make room while the panels are beside them.
     local fit = ui.FitGame({ scale = L.scale, corner = "bottom-left", enabled = false })
-
-    -- The game's screens the panels belong beside: every tab of its main menu, so nothing changes size between tabs,
-    -- and a bench or a container. Not the escape menu.
-    local function beside()
-        local name = ui.GameScreen()
-        return name ~= nil and name ~= "UMG_EscapeMenu"
-    end
 
     -- What the open bench or crafting screen lists, by the item each recipe makes: { kind, items = { [key] = { row, valid, order } } }.
     local function read_station()
@@ -1282,47 +1878,63 @@ function view.start(app)
     end
 
     -- The panels show beside those screens in a prospect, with the Wax menu, and wherever the open key brought them up.
-    local frames, play, was_near = 0, false, false
-    local function place()
-        if frames % 30 == 0 then play = game.InProspect == true end
-        frames = frames + 1
-        local near = state.on and play and beside()
+    local play, was_near = false, false
+    local play_at, screen_at, station_at = -1, -1, 0    -- when each was last looked at: none of them needs a look every frame
+    refit = function()
+        if not state.near then return end
+        local lines = not state.replace and (state.shelf_lines or 0) or nil
+        fit:Set(L.fit(ui.GameScreen() or "", lines, state.shelf_pager == true))
+    end
+    -- changed: the game has just shown another screen, so which bench is open is looked at now.
+    local function place(changed)
+        local now = os.clock()
+        if now - play_at >= 0.35 then play, play_at = game.InProspect == true, now end
+        -- The game's screens the panels belong beside: every tab of its main menu, so nothing changes size between tabs,
+        -- and a bench or a container. Not the escape menu.
+        local name = ui.GameScreen()
+        local near = state.on and play and name ~= nil and name ~= "UMG_EscapeMenu"
         state.near = near
         -- each kind of screen is moved up as far as its own top allows, so it sits just under the favourites
         if near then
             local lines = not state.replace and (state.shelf_lines or 0) or nil
-            fit:Set(L.fit(ui.GameScreen() or "", lines, state.shelf_pager == true))
+            fit:Set(L.fit(name, lines, state.shelf_pager == true))
         end
         fit:SetEnabled(near)
         -- which bench is open: looked at the frame a screen comes up, then a few times a second
         local screen = state.screen
         if not near then
             screen = nil
-        elseif crafting and (not was_near or frames % 6 == 0) then
+        elseif crafting and (changed or not was_near or now - screen_at >= 0.07) then
+            screen_at = now
             local number, kind = crafting:GetScreen()
             screen = number and (kind .. number) or nil
         end
         was_near = near
         if screen ~= state.screen then
-            state.screen = screen
+            state.screen, station_at = screen, now
             station_changed()
-        elseif state.station and frames % 120 == 0 then
+        elseif state.station and now - station_at >= 1.4 then
+            station_at = now
             check_station()
         end
         -- with the Wax menu they come up too, but not over the escape menu: the column would cover its buttons
-        local escape = play and ui.GameScreen() == "UMG_EscapeMenu"
+        local escape = play and name == "UMG_EscapeMenu"
         local there = state.on and (state.bare or near or (play and not escape and (ui.IsOpen() or ui.IsPreview())))
-        items:SetVisible(there)
+        state.there = there == true
+        swap()
         favourites:SetVisible(there and not state.replace)
+        local paged = there and not state.replace and state.shelf_pager == true
+        for _, entry in ipairs(turner.pieces) do entry.panel:SetVisible(paged) end
         box:SetVisible(there and state.replace == true)
         if there then
             app.job.want()
-        elseif state.detail then
+        elseif state.detail or beasts.page() then
             close_detail()
         end
     end
 
     local function refresh()
+        beasts.refresh()
         show_tabs()
         -- the bench is read again once the recipes are known
         if state.screen and not state.station then station_changed() end
@@ -1349,29 +1961,53 @@ function view.start(app)
 
     -- The open key hides the panels while they show. While they do not, it frees the mouse and shows them on their own.
     local function toggle()
-        if items:IsVisible() then
+        if column_shows() then
             if state.bare then return ui.Close() end
             state.on = false
             return place()
         end
         state.on = true
         place()
-        if items:IsVisible() then return end
+        if column_shows() then return end
         state.bare = true
         place()
         ui.Open({ windows = false })
     end
 
-    -- every frame, so the game's screen is its smaller size from the frame it opens
+    -- The game's screen is its smaller size from the frame it opens. A Wax that says when the game shows another screen is
+    -- listened to, and a look a few times a second sees to the rest. An older Wax is asked every frame.
+    local told = ui.GameScreenChanged
+    if told then
+        told:Connect(function() place(true) end)
+        ui.Opened:Connect(function() place() end)
+    end
     task.spawn(function()
         while true do
             place()
-            task.wait()
+            task.wait(told and 0.25 or nil)
         end
     end)
     refresh()
+    -- creatures kept on the shelf need the game's creatures to be drawn, so they are read without being asked for
+    if KEEP_CREATURES and app.kept:count() > 0 then app.beasts.want() end
 
-    return { refresh = refresh, toggle = toggle, showing = function() return items:IsVisible() end }
+    -- creatures: the read of the creature tables has started or ended. The Bestiary side and the tabs show it, the
+    -- shelf has the creatures that are kept, and an item that is open has its card of creatures.
+    -- beasts, sides: the Bestiary side and the controls of this one, for a test or a script that presses them
+    sides.back, sides.previous, sides.find, sides.grid, sides.categories = back_button, previous, find, grid, tabs
+    sides.shelf, sides.cards, sides.stations, sides.views, sides.message = on_shelf.lines, cards, station_lines, view_tabs, message
+    sides.tree = { total = total_label, times = times_label, steps = craft_lines }
+    return { refresh = refresh, toggle = toggle, showing = column_shows, beasts = beasts, sides = sides, creatures = function()
+        beasts.refresh()
+        show_sides()
+        show_favourites()
+        local m = model()
+        local picked = m and state.detail and state.pick and m.items[state.pick]
+        if picked then
+            prepare(m, picked)
+            show_detail()
+        end
+    end }
 end
 
 return view

@@ -45,8 +45,8 @@ for _, name in ipairs(TOPS) do is_top[name] = true end
 local fail, pause, attempt = net.fail, net.pause, net.attempt
 local was_fetching = false
 
--- Whether a newer Wax is fetched by itself: its own setting, and the Mods page's "Look for updates" and "Auto Update".
-local function fetches() return settings.auto and net.auto() and net.looking() end
+-- Whether a newer Wax is fetched by itself: its own stored value (on unless switched off), and the Mods page's "Look for updates".
+local function fetches() return settings.auto and net.looking() end
 
 -- Like attempt, and hands back what the function returned.
 local function try(fn, ...)
@@ -475,12 +475,13 @@ local function switched(on)
     changed()
 end
 
--- The two switches of the Mods page are the mod updater's. This follows them whenever that updater says something changed.
+-- "Look for updates" is the mod updater's switch. This follows it whenever that updater says something changed.
 local function follow()
     if fetches() ~= was_fetching then switched(fetches()) end
 end
 
--- Whether a newer Wax is downloaded by itself. Switched off, nothing is asked of the catalogue and a version that waits is not put in.
+-- Whether a newer Wax is downloaded by itself: Wax's own value, kept in saved/wax.selfupdate.lua, apart from every mod's Auto Update.
+-- Switched off, nothing is asked of the catalogue about Wax and a version that waits is not put in.
 function selfupdate.set_auto(on)
     settings.auto = on and true or false
     save()

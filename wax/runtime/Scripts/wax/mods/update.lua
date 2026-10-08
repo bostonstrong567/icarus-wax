@@ -25,8 +25,10 @@ update.loadlib = package.loadlib            -- replaced in tests
 update.time = os.time                       -- replaced in tests
 update.Changed = sched.Signal.new("update") -- fired whenever update.state() would answer differently
 
-local settings = { look = true, auto = true, last = 0 }   -- look: whether the catalogue is asked at all. auto: whether what it has is put in
+-- look: whether the catalogue is asked at all. mods: id -> that mod's own Auto Update switch. auto: what a mod without one gets
+local settings = { look = true, auto = true, last = 0, mods = {} }
 local available, queued, queue = {}, {}, {}
+local origins, roster = {}, nil             -- id -> the version its wax.origin gives, and the mods that were looked at for it
 local checking, problem, wanted, asked_at = false, nil, false, nil
 local worker, helper, dead = nil, nil, false
 local wax_version, run_number = nil, nil
@@ -268,19 +270,44 @@ local function check_signed(head, files, signature, output)
     if bytes ~= #text then fail("the helper checked another list than the one written for it") end
 end
 
--- Finds out which installed mods the catalogue has a newer version of.
-local function compare()
-    local mine = {}
-    for _, entry in ipairs(Wax.mods.list()) do
-        local mod = Wax.mods.get(entry.id)
+-- The mods that are here now, as one text: when it changes, their folders are looked at again.
+local function present()
+    local names = {}
+    for index, entry in ipairs(Wax.mods.list()) do names[index] = entry.id end
+    return table.concat(names, "\n")
+end
+
+-- Reads which installed mods came from the catalogue, and with which version. Nothing is asked of the network for this.
+local function scan()
+    local mine, now = {}, present()
+    for id in now:gmatch("[^\n]+") do
+        local mod = Wax.mods.get(id)
         local origin = mod and read_origin(mod.dir)
         pause()
-        if origin and origin.id == entry.id and parse(origin.version) then
-            mine[entry.id] = origin.version
+        if origin and origin.id == id and parse(origin.version) then
+            mine[id] = origin.version
         elseif origin then
-            once("origin " .. entry.id, "warn", "mods/%s has a wax.origin that names another mod or no version, so it is left alone", entry.id)
+            once("origin " .. id, "warn", "mods/%s has a wax.origin that names another mod or no version, so it is left alone", id)
         end
     end
+    local same = true
+    for id, version in pairs(mine) do same = same and origins[id] == version end
+    for id in pairs(origins) do same = same and mine[id] ~= nil end
+    origins, roster = mine, now
+    if not same then changed() end
+    return mine
+end
+
+-- Whether a mod is updated by itself: its own switch, else what the one switch for all mods said before each had one.
+local function auto_for(id)
+    local own = settings.mods[id]
+    if own == nil then return settings.auto end
+    return own
+end
+
+-- Finds out which installed mods the catalogue has a newer version of.
+local function compare()
+    local mine = scan()
     if next(mine) == nil then
         available = {}
         return
@@ -413,7 +440,7 @@ local function swap(id, mod, version)
     end
     Wax.mods.request_sync()
     for _, other in ipairs(dependents) do Wax.mods.request_reload(other) end
-    available[id] = nil
+    available[id], origins[id] = nil, version
     log:info("%s was updated to %s. The version before is kept as mods/%s", id, version, kept)
     notify(("%s was updated to %s."):format(name, version))
 end
@@ -492,10 +519,27 @@ local function attempt(fn, ...)
     return false, tostring(why)
 end
 
-local function enqueue(id)
+-- how: "auto" when the mod's switch asked for it, "asked" when the player pressed its button.
+local function enqueue(id, how)
     if queued[id] or not available[id] then return end
-    queued[id] = true
+    queued[id] = how
     queue[#queue + 1] = id
+end
+
+-- Every newer version whose mod has its switch on is put in. One that waits because of a switch that is now off waits no more.
+local function follow_switches()
+    for id in pairs(available) do
+        if auto_for(id) then
+            enqueue(id, "auto")
+        elseif queued[id] == "auto" then
+            for index = #queue, 1, -1 do
+                if queue[index] == id then
+                    table.remove(queue, index)
+                    queued[id] = nil
+                end
+            end
+        end
+    end
 end
 
 local function look()
@@ -507,9 +551,7 @@ local function look()
         problem = nil
         settings.last = update.time()
         storage.save("wax", "updates", settings)
-        if settings.auto then
-            for id in pairs(available) do enqueue(id) end
-        end
+        follow_switches()
     elseif not dead then
         problem = "Updates could not be checked."
         once("check " .. why, "warn", "could not check for updates: %s", why)
@@ -545,6 +587,8 @@ local function loop()
     local due = sched.clock() + FIRST_SECONDS
     while not dead do
         task.wait(1)
+        -- which mods came from the catalogue is read from their folders when the list of mods changes
+        if present() ~= roster then scan() end
         local now = sched.clock()
         if settings.look and (wanted or now >= due) then
             wanted, due, asked_at = false, now + EVERY_SECONDS, now
@@ -554,13 +598,14 @@ local function loop()
     end
 end
 
--- What the Mods page shows. last is the os.time of the last check, stopped is true once the helper could not be loaded.
+-- What the Mods page shows. mods: each mod from the catalogue as { version, auto }. last: os.time of the last check. stopped: no helper.
 function update.state()
-    local found, busy = {}, {}
+    local found, busy, mods = {}, {}, {}
     for id, version in pairs(available) do found[id] = version end
     for id in pairs(queued) do busy[id] = true end
-    return { available = found, installing = busy, checking = checking, last = settings.last, look = settings.look, auto = settings.auto,
-        problem = problem, stopped = dead }
+    for id, version in pairs(origins) do mods[id] = { version = version, auto = auto_for(id) } end
+    return { available = found, installing = busy, mods = mods, checking = checking, last = settings.last, look = settings.look,
+        auto = settings.auto, problem = problem, stopped = dead }
 end
 
 -- Whether the catalogue is asked at all, for mods and for Wax itself. Switched off, no request is made and the helper is not loaded.
@@ -575,13 +620,15 @@ function update.set_looking(on)
     changed()
 end
 
--- Whether updates are put in by themselves. Switched off, a newer version is only offered.
-function update.set_auto(on)
-    settings.auto = on and true or false
-    storage.save("wax", "updates", settings)
-    if settings.auto then
-        for id in pairs(available) do enqueue(id) end
+-- Whether one mod is updated by itself. Off, its newer version is only offered. With no id: for mods whose switch was never set, and for Wax.
+function update.set_auto(id, on)
+    if type(id) == "string" then
+        settings.mods[id] = on and true or false
+    else
+        settings.auto = id and true or false
     end
+    storage.save("wax", "updates", settings)
+    follow_switches()
     changed()
 end
 
@@ -598,7 +645,7 @@ end
 -- Puts in the newer version that is known for this mod. Returns false when none is.
 function update.install(id)
     if dead or not worker or not settings.look or not available[id] then return false end
-    enqueue(id)
+    enqueue(id, "asked")
     changed()
     return true
 end
@@ -609,6 +656,11 @@ function update.start()
     settings.look = settings.look ~= false
     settings.auto = settings.auto ~= false
     settings.last = tonumber(settings.last) or 0
+    local switches = {}
+    for id, on in pairs(type(settings.mods) == "table" and settings.mods or {}) do
+        if type(id) == "string" and type(on) == "boolean" then switches[id] = on end
+    end
+    settings.mods = switches
     local previous = scope.enter(nil)
     worker = task.label(task.spawn(function()
         while not dead do

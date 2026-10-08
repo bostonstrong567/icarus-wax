@@ -13,7 +13,8 @@ for name in Wax.import("gui.icons_list"):gmatch("%S+") do
     bundled[name] = count
 end
 icons.SHEET_COLUMNS = 40
-local registered = { ["wax-grip"] = Wax.root .. "/assets/icon_grip.png" }
+local registered = { ["wax-grip"] = Wax.root .. "/assets/icon_grip.png", ["wax-dots"] = Wax.root .. "/assets/icon_dots.png" }
+local OWN = { ["wax-grip"] = true, ["wax-dots"] = true }     -- Wax's own, not listed among the icons
 
 -- The texture key (and file, for registered images) of an icon drawn at this many screen pixels.
 function icons.resolve(name, pixels)
@@ -39,7 +40,7 @@ function icons.names()
         sorted = {}
         for name in pairs(bundled) do sorted[#sorted + 1] = name end
         for name in pairs(registered) do
-            if name ~= "wax-grip" then sorted[#sorted + 1] = name end
+            if not OWN[name] then sorted[#sorted + 1] = name end
         end
         table.sort(sorted)
     end
