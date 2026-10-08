@@ -2,7 +2,7 @@
   "name": "wax-icarus",
   "displayName": "Wax for Icarus",
   "description": "Write Lua mods for ICARUS with Wax. It starts new mods for you, completes and checks your code, runs it in the running game, and shows the game's log and errors.",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "publisher": "RobertCincotta",
   "icon": "icon.png",
   "homepage": "https://wax-icarus.duckdns.org/",
@@ -58,6 +58,24 @@
         "title": "New Script",
         "category": "Wax",
         "icon": "$(new-file)"
+      },
+      {
+        "command": "wax.newFolder",
+        "title": "New Folder",
+        "category": "Wax",
+        "icon": "$(new-folder)"
+      },
+      {
+        "command": "wax.addAsset",
+        "title": "Add Asset",
+        "category": "Wax",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "wax.addModel",
+        "title": "Add 3D Model",
+        "category": "Wax",
+        "icon": "$(symbol-structure)"
       },
       {
         "command": "wax.setUpEditor",
@@ -135,6 +153,18 @@
         "title": "Open the Unreal Project",
         "category": "Wax",
         "icon": "$(tools)"
+      },
+      {
+        "command": "wax.chooseUnreal",
+        "title": "Choose the Unreal Editor Folder",
+        "category": "Wax",
+        "icon": "$(folder)"
+      },
+      {
+        "command": "wax.installUnreal",
+        "title": "Install the Unreal Editor",
+        "category": "Wax",
+        "icon": "$(cloud-download)"
       },
       {
         "command": "wax.openDocs",
@@ -302,6 +332,66 @@
           "command": "wax.buildContent",
           "when": "view == wax.mods && viewItem =~ /^mod\\./",
           "group": "wax@3"
+        },
+        {
+          "command": "wax.newScript",
+          "when": "view == wax.mods && viewItem == part.scripts",
+          "group": "inline@0"
+        },
+        {
+          "command": "wax.newFolder",
+          "when": "view == wax.mods && viewItem == part.scripts",
+          "group": "inline@1"
+        },
+        {
+          "command": "wax.addAsset",
+          "when": "view == wax.mods && viewItem == part.assets",
+          "group": "inline@0"
+        },
+        {
+          "command": "wax.newFolder",
+          "when": "view == wax.mods && viewItem =~ /^mod\\./",
+          "group": "wax@1"
+        },
+        {
+          "command": "wax.addAsset",
+          "when": "view == wax.mods && viewItem =~ /^mod\\./",
+          "group": "wax@1"
+        },
+        {
+          "command": "wax.addAsset",
+          "when": "view == wax.mods && viewItem == part.scripts",
+          "group": "wax@1"
+        },
+        {
+          "command": "wax.buildContent",
+          "when": "view == wax.mods && viewItem == part.content",
+          "group": "inline@0"
+        },
+        {
+          "command": "wax.openUnreal",
+          "when": "view == wax.mods && viewItem == part.content",
+          "group": "inline@1"
+        },
+        {
+          "command": "wax.chooseUnreal",
+          "when": "view == wax.mods && viewItem == part.content",
+          "group": "wax@1"
+        },
+        {
+          "command": "wax.installUnreal",
+          "when": "view == wax.mods && viewItem == part.content",
+          "group": "wax@2"
+        },
+        {
+          "command": "wax.addModel",
+          "when": "view == wax.mods && viewItem == part.assets",
+          "group": "inline@1"
+        },
+        {
+          "command": "wax.addModel",
+          "when": "view == wax.mods && viewItem =~ /^mod\\./",
+          "group": "wax@1"
         }
       ],
       "explorer/context": [
@@ -369,6 +459,13 @@
           "default": false,
           "order": 4,
           "markdownDescription": "Build a mod's game content by itself when one of its assets is saved in the Unreal editor, and have the running game take the new pak. A build takes a minute or two. Only where the Wax source folder with its Unreal editor is open."
+        },
+        "wax.unrealPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "order": 5,
+          "markdownDescription": "The folder of an Unreal Engine 4.27 you already have, the one that holds `Engine`. A mod's game content is cooked with it. Leave it empty to use the editor in the open Wax folder (`engine\\UE_4.27`), which **Wax: Install the Unreal Editor** puts there. The command **Wax: Choose the Unreal Editor Folder** fills it in for you."
         }
       }
     },

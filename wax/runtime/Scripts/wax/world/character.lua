@@ -185,6 +185,15 @@ local function player_name(_, raw)
     return name
 end
 
+-- The name the player gave the character they play, as the game shows it.
+local function character_name(_, raw)
+    local state = part(raw, "PlayerState")
+    if not state then return nil end
+    local ok, name = pcall(function() return state.ActiveCharacter.CharacterName:ToString() end)
+    if not ok or type(name) ~= "string" or name == "" then return nil end
+    return name
+end
+
 local function is_local(self) return rawequal(current(), self) end
 
 local function in_cave(self, raw)
@@ -205,7 +214,7 @@ local player_fields = {
     MaxWater = state_number("MaxWater"), Oxygen = state_number("OxygenLevel"), MaxOxygen = state_number("MaxOxygen"),
     Radiation = state_number("RadiationLevel"), MaxRadiation = state_number("MaxRadiation"),
     BodyTemperature = degrees("ModifiedInternalTemperature"), Weight = weight, MaxWeight = max_weight,
-    PlayerName = player_name, Local = is_local, InCave = in_cave,
+    PlayerName = player_name, CharacterName = character_name, Local = is_local, InCave = in_cave,
 }
 
 -- the local player's character

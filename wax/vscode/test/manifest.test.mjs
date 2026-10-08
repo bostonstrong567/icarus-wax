@@ -83,18 +83,18 @@ test('the context keys the menus wait for are set by the code, and the view exis
   assert.deepEqual(contributes.views[container.id].map((view) => view.id), ['wax.mods']);
   assert.ok(source.includes("createTreeView('wax.mods'"));
   const inline = contributes.menus['view/item/context'].filter((entry) => entry.group.startsWith('inline')).map((entry) => entry.command);
-  assert.deepEqual(inline.sort(), ['wax.disableMod', 'wax.enableMod', 'wax.newScript', 'wax.openMod', 'wax.reloadMod']);
+  assert.deepEqual(inline.sort(), ['wax.addAsset', 'wax.addModel', 'wax.buildContent', 'wax.disableMod', 'wax.enableMod', 'wax.newFolder', 'wax.newScript', 'wax.newScript', 'wax.openMod', 'wax.openUnreal', 'wax.reloadMod']);
   const title = contributes.menus['view/title'].filter((entry) => entry.group.startsWith('navigation')).map((entry) => entry.command);
   assert.deepEqual(title, ['wax.newMod', 'wax.refreshMods']);
 });
 
 test('the settings are the ones the code reads', () => {
   const settings = contributes.configuration.properties;
-  assert.deepEqual(Object.keys(settings).sort(), ['wax.content.autoBuild', 'wax.docsUrl', 'wax.gamePath', 'wax.runtimePath']);
+  assert.deepEqual(Object.keys(settings).sort(), ['wax.content.autoBuild', 'wax.docsUrl', 'wax.gamePath', 'wax.runtimePath', 'wax.unrealPath']);
   assert.equal(settings['wax.docsUrl'].default, docs.DOCS);
   for (const name of Object.keys(settings)) assert.ok(source.includes(`get('${name.slice(4)}'`), name);
   // a path on this PC is no use on another one, so the two paths are not carried along by Settings Sync
-  for (const name of ['wax.gamePath', 'wax.runtimePath']) {
+  for (const name of ['wax.gamePath', 'wax.runtimePath', 'wax.unrealPath']) {
     assert.equal(settings[name].default, '');
     assert.equal(settings[name].scope, 'machine-overridable');
   }

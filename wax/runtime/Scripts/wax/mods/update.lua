@@ -17,7 +17,7 @@ local MAX_OUTPUT, MAX_FULL_PATH = 220, 255
 local ORIGIN, MARK = "wax.origin", "wax.new"    -- the two files in a mod's folder that are Wax's own, never the mod's
 local NET = Wax.root .. "/run/net"
 local KINDS, DEVICES = {}, {}
-for kind in ("lua json txt md png jpg jpeg webp ogg wav csv"):gmatch("%a+") do KINDS[kind] = true end
+for kind in ("lua json txt md png jpg jpeg webp ogg wav csv obj"):gmatch("%a+") do KINDS[kind] = true end
 for name in ("CON PRN AUX NUL"):gmatch("%a+") do DEVICES[name] = true end
 for digit = 0, 9 do DEVICES["COM" .. digit], DEVICES["LPT" .. digit] = true, true end
 

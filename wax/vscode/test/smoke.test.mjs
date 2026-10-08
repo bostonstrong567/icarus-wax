@@ -767,3 +767,64 @@ test('every link the extension opens goes to the docs site or the download page'
   await session.user.run('wax.openDocs');
   assert.equal(session.state.external.at(-1), DOCS);
 });
+test('a mod in the view opens into its scripts, its other files and the mods it uses', (t) => {
+  const session = start(t, makeWorkspace(t));
+  const hello = path.join(session.mods, 'Hello');
+  fs.mkdirSync(path.join(hello, 'extras'), { recursive: true });
+  fs.writeFileSync(path.join(hello, 'extras', 'Utils.lua'), 'return {}\n');
+  fs.writeFileSync(path.join(hello, 'logo.png'), 'not really a picture');
+  fs.mkdirSync(path.join(session.mods, 'Other'), { recursive: true });
+  fs.writeFileSync(path.join(session.mods, 'Other', 'init.lua'), 'print("other")\n');
+  fs.writeFileSync(path.join(session.mods, 'Other', 'mod.lua'), 'return { id = "Other", name = "Other", version = "1.0.0", dependencies = { "Hello", "Gone" } }\n');
+  session.app.scanned = null;
+
+  const { provider } = session.state.views.get('wax.mods');
+  const mods = provider.getChildren();
+  const of = (id) => mods.find((mod) => mod.id === id);
+  const groups = (id) => provider.getChildren(of(id));
+  const labels = (nodes) => nodes.map((node) => provider.getTreeItem(node).label);
+
+  assert.deepEqual(labels(groups('Hello')), ['Scripts', 'Assets', 'Used by']);
+  const [scripts, assets, usedBy] = groups('Hello');
+  assert.equal(provider.getTreeItem(scripts).contextValue, 'part.scripts');
+  const top = provider.getChildren(scripts);
+  assert.equal(labels(top)[0], 'extras', 'folders come first');
+  assert.ok(labels(top).includes('init.lua'));
+  assert.deepEqual(labels(provider.getChildren(top[0])), ['Utils.lua']);
+  const file = provider.getTreeItem(provider.getChildren(top[0])[0]);
+  assert.equal(file.command.command, 'vscode.open');
+  assert.deepEqual(labels(provider.getChildren(assets)), ['logo.png']);
+  assert.deepEqual(labels(provider.getChildren(usedBy)), ['Other']);
+
+  assert.deepEqual(labels(groups('Other')), ['Scripts', 'Assets', 'Uses']);
+  assert.equal(provider.getTreeItem(groups('Other')[1]).description, 'none yet');
+  const uses = provider.getChildren(groups('Other')[2]).map((node) => provider.getTreeItem(node));
+  assert.deepEqual(uses.map((item) => [item.label, item.description, Boolean(item.command)]),
+    [['Hello', '0.1.0', true], ['Gone', 'not in your mods', false]]);
+});
+
+test('New Folder makes a folder that shows in the tree, and Add Asset copies picked files into the mod', async (t) => {
+  const session = start(t, makeWorkspace(t));
+  const hello = path.join(session.mods, 'Hello');
+  const { provider } = session.state.views.get('wax.mods');
+  const mod = () => provider.getChildren().find((entry) => entry.id === 'Hello');
+  const scripts = () => provider.getChildren(mod())[0];
+
+  session.state.reply = (kind) => (kind === 'input' ? 'sounds' : undefined);
+  await session.state.commands.get('wax.newFolder')(mod());
+  assert.ok(fs.statSync(path.join(hello, 'sounds')).isDirectory());
+  const top = provider.getChildren(scripts());
+  assert.equal(provider.getTreeItem(top[0]).label, 'sounds', 'an empty folder shows');
+
+  session.state.reply = (kind) => (kind === 'input' ? 'inner' : undefined);
+  await session.state.commands.get('wax.newFolder')(top[0]);
+  assert.ok(fs.statSync(path.join(hello, 'sounds', 'inner')).isDirectory());
+
+  const picture = path.join(session.root, 'picked.png');
+  fs.writeFileSync(picture, 'picture bytes');
+  session.state.reply = (kind) => (kind === 'open' ? picture : undefined);
+  await session.state.commands.get('wax.addAsset')(mod());
+  assert.equal(fs.readFileSync(path.join(hello, 'picked.png'), 'utf8'), 'picture bytes');
+  const assets = provider.getChildren(provider.getChildren(mod())[1]).map((node) => provider.getTreeItem(node).label);
+  assert.deepEqual(assets, ['picked.png']);
+});

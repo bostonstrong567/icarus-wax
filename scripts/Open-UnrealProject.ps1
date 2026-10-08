@@ -15,7 +15,9 @@
 param([switch]$NoLaunch)
 . "$PSScriptRoot\_common.ps1"
 
+# An Unreal Editor 4.27 that is somewhere else: its folder (the one that holds Engine) in WAX_UNREAL_ENGINE.
 $engineDir = Join-Path $Root 'engine\UE_4.27'
+if ($env:WAX_UNREAL_ENGINE -and (Test-Path (Join-Path $env:WAX_UNREAL_ENGINE 'Engine\Binaries\Win64\UE4Editor-Cmd.exe'))) { $engineDir = $env:WAX_UNREAL_ENGINE.TrimEnd('\', '/') }
 $editor    = Join-Path $engineDir 'Engine\Binaries\Win64\UE4Editor.exe'
 $project   = Join-Path $Root 'unreal\Icarus\Icarus.uproject'
 if (-not (Test-Path $editor)) { throw "Unreal Editor not found. Run scripts\Install-UnrealEditor.ps1." }

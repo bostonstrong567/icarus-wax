@@ -854,6 +854,109 @@ function M.forget_all()
     if bank then lose_all() end
 end
 
+local MODEL_OPTIONS = { "scale", "up", "flip", "collision" }
+local MAX_MODEL_BYTES = 8 * 1024 * 1024
+
+-- A 3D model from an .obj file in the mod's folder, as a shape for a part: what game.Assets:Mesh gives.
+-- options: scale (100 when omitted: a model made in metres), up ("y" as most programs save it, or "z"),
+-- flip (true turns every triangle round, for a model that shows inside out), collision.
+function members:Model(file, options)
+    colon(self, "Model", "file")
+    if type(file) ~= "string" then
+        error(("game.Assets:Model expects the name of a model file such as \"rock.obj\", got %s"):format(describe(file)), 2)
+    end
+    options = options or {}
+    if type(options) ~= "table" then error("game.Assets:Model: the options are a table, such as { scale = 100 }", 2) end
+    known_keys(options, MODEL_OPTIONS, "game.Assets:Model", 2)
+    local scale, up = options.scale or 100, options.up or "y"
+    if not finite(scale) or scale == 0 then error("game.Assets:Model: scale is a number that is not 0", 2) end
+    if up ~= "y" and up ~= "z" then error("game.Assets:Model: up is \"y\" or \"z\"", 2) end
+    local path = file:gsub("\\", "/")
+    if not path:lower():match("%.obj$") then error(("game.Assets:Model: '%s' is not an .obj file"):format(file), 2) end
+    if not (path:match("^%a:/") or path:sub(1, 1) == "/") then
+        if ("/" .. path .. "/"):find("/../", 1, true) then error(("game.Assets:Model: '%s' leaves the mod's folder"):format(file), 2) end
+        local folder = mod_folder(owner_now())
+        if not folder then error(("game.Assets:Model: '%s' is a file name, and no mod is running that it could belong to. Give the whole path"):format(file), 2) end
+        path = folder .. "/" .. path
+    end
+    local handle = io.open(path, "rb")
+    if not handle then error(("game.Assets:Model: there is no file %s"):format(path), 2) end
+    local size = handle:seek("end")
+    if size > MAX_MODEL_BYTES then
+        handle:close()
+        error("game.Assets:Model: the file is larger than 8 MB. A model that large belongs in a mod's game content", 2)
+    end
+    handle:seek("set", 0)
+    local text = handle:read("a")
+    handle:close()
+
+    local places, pictures, facings = {}, {}, {}
+    local vertices, uvs, normals, triangles, made = {}, {}, {}, {}, {}
+    local has_uv, has_normal = true, true
+    local function place(x, y, z)
+        x, y, z = x * scale, y * scale, z * scale
+        if up == "y" then return { X = x, Y = z, Z = y } end
+        return { X = x, Y = y, Z = z }
+    end
+    local function facing(x, y, z)
+        if up == "y" then return { X = x, Y = z, Z = y } end
+        return { X = x, Y = y, Z = z }
+    end
+    -- A corner of a face is a place with its own spot on the picture and its own facing: each such trio is one vertex.
+    local function corner(word)
+        local known = made[word]
+        if known then return known end
+        local v, vt, vn = word:match("^(-?%d+)/?(-?%d*)/?(-?%d*)$")
+        v = tonumber(v)
+        if not v then error("game.Assets:Model: a face names a corner that cannot be read: " .. word, 0) end
+        if v < 0 then v = #places + 1 + v end
+        local at = places[v]
+        if not at then error("game.Assets:Model: a face names a place the file does not have", 0) end
+        local index = #vertices + 1
+        if index > M.MAX_VERTICES then
+            error(("game.Assets:Model: the model has more than %d vertices. One that large belongs in a mod's game content"):format(M.MAX_VERTICES), 0)
+        end
+        vertices[index] = at
+        vt, vn = tonumber(vt), tonumber(vn)
+        if vt and vt < 0 then vt = #pictures + 1 + vt end
+        if vn and vn < 0 then vn = #facings + 1 + vn end
+        if vt and pictures[vt] then uvs[index] = pictures[vt] else has_uv = false end
+        if vn and facings[vn] then normals[index] = facings[vn] else has_normal = false end
+        made[word] = index
+        return index
+    end
+    local ok, problem = pcall(function()
+        for line in text:gmatch("[^\r\n]+") do
+            local kind, rest = line:match("^%s*(%a+)%s+(.*)$")
+            if kind == "v" then
+                local x, y, z = rest:match("^(%S+)%s+(%S+)%s+(%S+)")
+                x, y, z = tonumber(x), tonumber(y), tonumber(z)
+                if not (x and y and z) then error("game.Assets:Model: a place in the file cannot be read", 0) end
+                places[#places + 1] = place(x, y, z)
+            elseif kind == "vt" then
+                local u, v = rest:match("^(%S+)%s*(%S*)")
+                pictures[#pictures + 1] = { X = tonumber(u) or 0, Y = 1 - (tonumber(v) or 0) }
+            elseif kind == "vn" then
+                local x, y, z = rest:match("^(%S+)%s+(%S+)%s+(%S+)")
+                facings[#facings + 1] = facing(tonumber(x) or 0, tonumber(y) or 0, tonumber(z) or 1)
+            elseif kind == "f" then
+                local corners = {}
+                for word in rest:gmatch("%S+") do corners[#corners + 1] = corner(word) end
+                -- a face of more than three corners is cut into triangles from its first corner
+                for index = 2, #corners - 1 do
+                    local a, b, c = corners[1], corners[index], corners[index + 1]
+                    if options.flip then b, c = c, b end
+                    triangles[#triangles + 1], triangles[#triangles + 2], triangles[#triangles + 3] = a, b, c
+                end
+            end
+        end
+    end)
+    if not ok then error(problem, 2) end
+    if #triangles == 0 then error(("game.Assets:Model: %s holds no faces"):format(path), 2) end
+    return self:Mesh({ vertices = vertices, triangles = triangles, uvs = has_uv and uvs or nil, normals = has_normal and normals or nil,
+        collision = options.collision })
+end
+
 -- Something made paths loadable that were not (a pack of files was added): they are tried again at once.
 function M.forget_missing() missing, missing_count = {}, 0 end
 

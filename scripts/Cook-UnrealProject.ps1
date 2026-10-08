@@ -40,7 +40,10 @@ param(
 )
 . "$PSScriptRoot\_common.ps1"
 
-$cmd        = Join-Path $Root 'engine\UE_4.27\Engine\Binaries\Win64\UE4Editor-Cmd.exe'
+# An Unreal Editor 4.27 that is somewhere else: its folder (the one that holds Engine) in WAX_UNREAL_ENGINE.
+$engineDir = Join-Path $Root 'engine\UE_4.27'
+if ($env:WAX_UNREAL_ENGINE -and (Test-Path (Join-Path $env:WAX_UNREAL_ENGINE 'Engine\Binaries\Win64\UE4Editor-Cmd.exe'))) { $engineDir = $env:WAX_UNREAL_ENGINE.TrimEnd('\', '/') }
+$cmd        = Join-Path $engineDir 'Engine\Binaries\Win64\UE4Editor-Cmd.exe'
 $projectDir = Join-Path $Root 'unreal\Icarus'
 $project    = Join-Path $projectDir 'Icarus.uproject'
 $contentDir = Join-Path $projectDir 'Content'
@@ -48,7 +51,7 @@ $cooked     = Join-Path $projectDir 'Saved\Cooked\WindowsNoEditor\Icarus\Content
 $listFile   = Join-Path $projectDir 'GameFiles.txt'
 $reader     = Join-Path $PSScriptRoot 'check_imports.py'
 $parts      = '.uasset', '.umap', '.uexp', '.ubulk', '.uptnl', '.ufont'
-if (-not (Test-Path $cmd)) { throw "Unreal Editor not found. Run scripts\Install-UnrealEditor.ps1." }
+if (-not (Test-Path $cmd)) { throw "Unreal Editor 4.27 not found. Run scripts\Install-UnrealEditor.ps1, or put the folder of one you have in WAX_UNREAL_ENGINE." }
 if ($Mod -and $Content) { throw 'Use -Content for a pak of new files or -Mod for a classic pak, not both.' }
 if ($Mod -and -not (Test-Path (Join-Path $ModsDir $Mod))) { throw "mods\$Mod does not exist. Create it with New-Mod.ps1." }
 

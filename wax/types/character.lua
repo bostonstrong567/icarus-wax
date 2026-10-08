@@ -83,6 +83,7 @@ function Character:Teleport(place, facing) end
 ---@field Weight number? What it carries in all its inventories, in kilograms. The game works it out a moment after the items change, not in the same frame.
 ---@field MaxWeight integer? The weight it can carry, in kilograms: the game's stat WeightCapacity_+.
 ---@field PlayerName string? The name of the player who controls it. nil while the game has not said.
+---@field CharacterName string? The name the player gave this character, such as the one on the character screen. nil while the game has not said.
 ---@field Local boolean True for the character this player controls.
 ---@field InCave boolean? True while the game counts it as inside a cave.
 
