@@ -1378,6 +1378,13 @@ class Stored(unittest.TestCase):
         model = stored_model()
         if model is None:
             self.skipTest("no model of the installed build to compare with")
+        # Get-GameSdk.ps1 brings the index the server made from the newest build, and notes which one beside it.
+        try:
+            with open(os.path.join(gameindex.INDEX_DIR, "sdk.json"), encoding="utf-8-sig") as file:
+                if json.load(file).get("build_id") == self.index["source"].get("model"):
+                    return
+        except (OSError, ValueError):
+            pass
         self.assertEqual(self.index["source"].get("model"), model[0], "the index was made from a dump, or from the model of "
                          "another build, while a model of the installed build is there. Run: python scripts\\gameindex.py build")
 

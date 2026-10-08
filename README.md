@@ -3,7 +3,7 @@
 Wax lets you write mods for ICARUS in Lua. A mod is a folder with one Lua file. Save the file while the game
 runs and the mod reloads in place.
 
-This is an early version. It is for ICARUS on Steam, on Windows.
+It is for ICARUS on Steam, on Windows.
 
 - Documentation: https://wax-icarus.duckdns.org/
 - Mods: https://wax-icarus.duckdns.org/mods/
@@ -123,6 +123,13 @@ PowerShell that check a zip against the list and the key:
 | [`luamods`](luamods) | Two mods to read: `RecipeBrowser`, which is Prospector's Codex, the mod that comes with the download (it was called Recipe Browser before 0.3.0), and `EntityESP`. |
 | [`wax/examples`](wax/examples) | `Hello`, a small mod to start from. |
 | [`scripts`](scripts) | The build and test scripts. |
+
+## Related repositories
+
+| Repository | What |
+|---|---|
+| [wax-docs](https://github.com/bostonstrong567/wax-docs) | The source of the documentation site, <https://wax-icarus.duckdns.org/>: the guides, the reference and the Explorer. |
+| [icarus-sdk](https://github.com/bostonstrong567/icarus-sdk) | Every class of ICARUS with its parents, variables and functions, made again on each game update. |
 
 ## Build it yourself
 

@@ -10,8 +10,14 @@
   .\scripts\Build-WaxExtension.ps1
 #>
 [CmdletBinding()]
-param()
+param([switch]$NoSync)
 . "$PSScriptRoot\_common.ps1"
+
+# The classes of the newest build of the game, when this copy has the script and the repository answers.
+$sync = Join-Path $PSScriptRoot 'Get-GameSdk.ps1'
+if (-not $NoSync -and (Test-Path $sync)) {
+    try { & $sync } catch { Write-Warning "The game's classes were not brought up to date: $_" }
+}
 
 $npx = Get-Command npx -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $npx) { throw 'Node.js (npx) is needed to pack the extension.' }

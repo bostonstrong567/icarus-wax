@@ -2598,7 +2598,6 @@ BP_Barbed_Wire_C
 BP_Barbed_Wire_Curved_C
 BP_Barbed_Wire_Stairs_C
 BP_BaseCaveEntrance_C
-BP_BaseRVT_C
 BP_BasicOxiteDissolver_C
 BP_BasicSplineMeshActor_C
 BP_Basic_Ceiling_Light_C
@@ -4001,7 +4000,6 @@ BP_FocusableBehaviour_Fishing_C
 BP_FocusableBehaviour_FocusableArmour_C
 BP_FocusableBehaviour_FocusableArmour_GolemGauntlet_C
 BP_FocusableBehaviour_Jackhammer_C
-BP_FoliageMaskRVT_C
 BP_Food_Trough_C
 BP_Food_Trough_Glass_C
 BP_Food_Trough_Large_C
@@ -4371,7 +4369,6 @@ BP_Hanging_Meat_F_C
 BP_Hay_Bale_A_C
 BP_Hay_Bale_B_C
 BP_Heater_Large_C
-BP_HeightRVT_C
 BP_Herb_Aloe_Vera_C
 BP_Herb_Conifer_Flower_C
 BP_Herb_Mushroom_A_C
@@ -6965,7 +6962,6 @@ BP_Voxel_GEN_05_C
 BP_WTShrinkWrap_C
 BP_WTSplineMesh_C
 BP_WaterPump_C
-BP_WaterRVT_C
 BP_WaterWheel_Generator_C
 BP_Water_Barrel_C
 BP_Water_Borer_C
@@ -9407,9 +9403,7 @@ RulesetSubsystem
 RulesetsLibrary
 RulesetsTable
 RuntimeVirtualTexture
-RuntimeVirtualTextureComponent
 RuntimeVirtualTextureStreamingProxy
-RuntimeVirtualTextureVolume
 SCS_Node
 SK_1ST_CHA_MAL_ARM_Arm_AnimBP_C
 SK_1ST_CHA_MAL_ARM_Blackwolf_Arm_Skeleton_AnimBlueprint_C
@@ -11168,8 +11162,6 @@ VerticalBoxSlot
 VirtualStatFunctionLibrary
 VirtualStats
 VirtualStatsLibrary
-VirtualTexture2D
-VirtualTextureBuilder
 Visual
 VisualLoggerKismetLibrary
 VocalisationComponent

@@ -1,6 +1,6 @@
 Wax @VERSION@ for ICARUS
 
-Wax lets you write mods for ICARUS in Lua. This is an early version.
+Wax lets you write mods for ICARUS in Lua.
 
 Docs:           https://wax-icarus.duckdns.org/
 Newest version: https://wax-icarus.duckdns.org/docs/install/

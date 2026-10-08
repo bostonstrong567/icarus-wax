@@ -35,16 +35,10 @@
 ---@field LessThan fun(self: AfflictionRow_C, Other: Object?): boolean
 ---@field ["Set Row"] fun(self: AfflictionRow_C, RowName: string)
 
----@class BP_BaseRVT_C : RuntimeVirtualTextureVolume
-
 ---@class BP_CaveCheatMarker_C : Actor
 ---@field DefaultSceneRoot SceneComponent
 ---@field IcarusMapIcon IcarusMapIconComponent
 ---@field Prefab CavePrefabAsset
-
----@class BP_FoliageMaskRVT_C : RuntimeVirtualTextureVolume
-
----@class BP_HeightRVT_C : RuntimeVirtualTextureVolume
 
 ---@class BP_MinBoundsEnforcer_C : Actor
 ---@field Bounds BoxSphereBounds
@@ -53,8 +47,6 @@
 
 ---@class BP_RTXCheatMarker_C : Actor
 ---@field DefaultSceneRoot SceneComponent
-
----@class BP_WaterRVT_C : RuntimeVirtualTextureVolume
 
 ---@class BP_WorldToolFunctionLibrary_C : BlueprintFunctionLibrary
 ---@field ConvertSplineData fun(self: BP_WorldToolFunctionLibrary_C, List: FRiverSplineList|{}, Transform: Transform|{}, __WorldContext: Object?, Setup: FRiverSplineSetup[])

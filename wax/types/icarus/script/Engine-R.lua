@@ -180,28 +180,9 @@
 ---@field GetTileCount fun(self: RuntimeVirtualTexture): integer
 ---@field GetTileSize fun(self: RuntimeVirtualTexture): integer
 
----@class RuntimeVirtualTextureComponent : SceneComponent
----@field BoundsAlignActor Actor
----@field ScalabilityGroup integer
----@field StreamLowMips integer
----@field StreamingTexture VirtualTextureBuilder
----@field VirtualTexture RuntimeVirtualTexture
----@field bBuildDebugStreamingMips boolean
----@field bBuildStreamingMipsButton boolean
----@field bEnableCompressCrunch boolean
----@field bEnableScalability boolean
----@field bHidePrimitives boolean
----@field bSetBoundsButton boolean
----@field bSnapBoundsToLandscape boolean
----@field bUseStreamingLowMipsInEditor boolean
----@field Invalidate fun(self: RuntimeVirtualTextureComponent, WorldBounds: BoxSphereBounds|{})
-
 ---@class RuntimeVirtualTextureParameterValue
 ---@field ExpressionGUID Guid
 ---@field ParameterInfo MaterialParameterInfo
 ---@field ParameterValue RuntimeVirtualTexture
 
 ---@class RuntimeVirtualTextureStreamingProxy : Texture2D
-
----@class RuntimeVirtualTextureVolume : Actor
----@field VirtualTextureComponent RuntimeVirtualTextureComponent
