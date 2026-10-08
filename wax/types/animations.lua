@@ -10,9 +10,9 @@
 ---What a key adds. Everything is an offset from where the bone or the thing is without the animation, so a key of {}
 ---means "as the game has it".
 ---@class WaxAnimationValues
----@field Pitch? number Degrees.
----@field Yaw? number Degrees.
----@field Roll? number Degrees.
+---@field Pitch? number Degrees about the character's right: positive tips back, negative leans forward.
+---@field Yaw? number Degrees about up: positive turns to the right.
+---@field Roll? number Degrees about forward.
 ---@field X? number
 ---@field Y? number
 ---@field Z? number
@@ -22,10 +22,19 @@
 ---@class WaxAnimationSpec
 ---@field tracks table<string, WaxAnimationKey[]> What moves, by name: a bone ("RightShoulder", or the name its skeleton gives it), or Self for the thing as a whole.
 ---@field third? table<string, WaxAnimationKey[]> Tracks for the player's body seen in third person, when they should differ from tracks.
+---@field reach? table<string, WaxAnimationKey[]|WaxReach> Where the end of a limb goes: RightHand, LeftHand, RightFoot or LeftFoot. The two bones above it are bent to get it there.
+---@field reach_from? "hand"|"shoulder" "hand" (when omitted): a reach key adds to where the limb's end is. "shoulder": a key says where it is, forward, right and up of the limb's root, and the reach comes in from the game's pose and goes back to it.
+---@field reach_blend? number|number[] With reach_from = "shoulder": the seconds a reach takes to come in from the game's pose, and to go back. One number for both, or { in, out }. 0.15 when omitted.
 ---@field length? number How long it runs, in seconds. The time of the last key when omitted.
 ---@field loop? boolean True starts it again when it ends.
 ---@field ease? "linear"|"smooth"|"in"|"out"|"snap" How keys are eased when a key does not say. "smooth" when omitted.
 ---@field events? { [1]: number, [2]: fun(play: WaxAnimationPlay) }[] Functions that run when the animation passes a time.
+
+---A reach that also turns the end of the limb.
+---@class WaxReach
+---@field keys WaxAnimationKey[] X, Y and Z say where the end goes. Pitch, Yaw and Roll say how it is turned.
+---@field from? "hand"|"shoulder" What this limb's keys are measured from, when it differs from the animation's reach_from.
+---@field turn? boolean True uses Pitch, Yaw and Roll: with reach_from = "shoulder" they are the turn of what the hand holds, as the character stands. Otherwise they are added.
 
 ---What animation:Play takes besides the target.
 ---@class WaxAnimationPlayOptions
@@ -34,6 +43,7 @@
 ---@field weight? number How much of the movement is added. 1 when omitted.
 ---@field keep? boolean True leaves a thing where its Self track put it when the animation ends.
 ---@field done? fun(play: WaxAnimationPlay) Runs when the animation has run to its end. Not when it is stopped.
+---@field view? "first"|"third" On the player's own character: the one view it shows in. Both when omitted.
 
 ---An animation that is playing.
 ---@class WaxAnimationPlay
@@ -75,6 +85,8 @@ function Animation:Play(target, options) end
 ---@field start? number Where in the clip it starts, in seconds.
 ---@field slot? string The slot a single sequence plays in. "DefaultSlot" when omitted.
 ---@field loops? integer How often a single sequence plays. 1 when omitted.
+---@field part? string|{ first?: string, third?: string } The part of a montage to play, by its name in the game, such as "Action_0".
+---@field match? boolean With first and third given: false lets each clip run at its own length. When omitted the body's clip is paced to last as long as the arms'.
 
 ---One of the game's clips that was started.
 ---@class WaxClipPlay

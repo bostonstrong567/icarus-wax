@@ -1097,6 +1097,54 @@ function model.install(Container, tools)
             view.anim_due = true
         end
 
+        -- Puts a shape from game.Assets:Mesh or game.Assets:Model on a socket or a bone of the model that shows.
+        -- options: socket, at, turn, scale, material. It goes when another model is shown.
+        function control:Attach(shape, options)
+            if type(shape) ~= "table" or type(shape.Apply) ~= "function" then
+                error("Attach expects a shape from game.Assets:Mesh or game.Assets:Model", 2)
+            end
+            options = options or {}
+            if type(options) ~= "table" then error("Attach: the options are a table such as { socket = \"R_prop_00\" }", 2) end
+            local rig = view.rig
+            if not (view.loaded and rig and rig.part) then error("Attach: the model is not in the picture yet. Wait for Loaded", 2) end
+            local at, turn_by = options.at or {}, options.turn or {}
+            local actor = rig.part:GetOwner()
+            local spot = place(0, 0, 0)
+            local part = actor:AddComponentByClass(class("/Script/ProceduralMeshComponent.ProceduralMeshComponent"), true, spot, true)
+            part:SetMobility(2)
+            actor:FinishAddComponent(part, true, spot)
+            -- on the posed copy when one stands in for the model, so that it goes along with an animation that plays
+            local holder = Wax.import("world.animations").copy_of(rig.part) or rig.part
+            part:K2_AttachToComponent(holder, FName(options.socket or "None"), 2, 2, 2, false)
+            part:K2_SetRelativeLocation({ X = at.X or at[1] or 0, Y = at.Y or at[2] or 0, Z = at.Z or at[3] or 0 }, false, {}, false)
+            part:K2_SetRelativeRotation({ Pitch = turn_by.Pitch or 0, Yaw = turn_by.Yaw or 0, Roll = turn_by.Roll or 0 }, false, {}, false)
+            local size = options.scale or 1
+            part:SetRelativeScale3D({ X = size, Y = size, Z = size })
+            shape:Apply(Wax.import("engine.instance").wrap(part), options.material and { material = options.material } or nil)
+            quiet(part)
+            rig.capture:ShowOnlyComponent(part)
+        end
+
+        -- Plays an animation from game.Animations:Define on the model that shows, and gives the play.
+        function control:Play(animation, options)
+            if type(animation) ~= "table" or type(animation.Play) ~= "function" then
+                error("Play expects an animation from game.Animations:Define", 2)
+            end
+            local rig = view.rig
+            if not (view.loaded and rig and rig.part) then error("Play: the model is not in the picture yet. Wait for Loaded", 2) end
+            local play = animation:Play(Wax.import("engine.instance").wrap(rig.part), options)
+            -- the picture only draws what it was told of, so the posed copy is added to it
+            local animations = Wax.import("world.animations")
+            animations.set_facing(rig.part, view.look and view.look.facing or 0)
+            local copy = animations.copy_of(rig.part)
+            if copy and rig.posed ~= copy:GetAddress() then
+                rig.capture:ShowOnlyComponent(copy)
+                rig.posed = copy:GetAddress()
+            end
+            rig.playing = true
+            return play
+        end
+
         -- True once the model is in the picture.
         function control:IsLoaded() return view.loaded end
 

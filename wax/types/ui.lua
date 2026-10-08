@@ -785,6 +785,20 @@ function Model:Reset() end
 ---@param speed? number For "blueprint": what the creature is said to move at. 0 stands, 150 walks.
 function Model:SetAnimation(animation, speed) end
 
+---Puts a shape from game.Assets:Mesh or game.Assets:Model on a socket or a bone of the model that shows: a tool in a
+---hand, a hat on a head. The model has to be in the picture: wait for Loaded. It goes when another model is shown.
+---@param shape WaxMesh
+---@param options? { socket?: string, at?: table, turn?: table, scale?: number, material?: any }
+function Model:Attach(shape, options) end
+
+---Plays an animation from game.Animations:Define on the model that shows, so it can be looked at from every side
+---before it is used in the world. The model has to be in the picture: wait for Loaded. Give the look `facing = 0`
+---for a mesh that faces along its own X, as the player's body does.
+---@param animation WaxAnimation
+---@param options? WaxAnimationPlayOptions
+---@return WaxAnimationPlay
+function Model:Play(animation, options) end
+
 ---True once the model given at the start or to Show is in the picture.
 ---@return boolean
 function Model:IsLoaded() end

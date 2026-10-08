@@ -12,6 +12,7 @@ local M = {}
 M.SECONDS = 3               -- how long particles and a light stay when nothing is said
 M.MOST = 64                 -- effects alive at once, for all mods
 M.TRAIL_POINTS = 14
+M.TRAIL_JUMP = 150          -- further than this in one frame is a jump, not a movement
 M.SHAKE = "/Game/BP/CameraShake/Creatures/CS_Mammoth_Footstep.CS_Mammoth_Footstep_C"
 M.GLOW = "/Engine/EngineMaterials/EmissiveMeshMaterial"
 
@@ -316,6 +317,9 @@ function members:Trail(on, options)
         if feeding then
             local world = edge.Raw:K2_GetComponentToWorld()
             local a, b = e.math:TransformLocation(world, from), e.math:TransformLocation(world, to)
+            -- what it follows was moved somewhere else at once: the ribbon starts over, or it would stretch across the jump
+            local before = points[#points]
+            if before and (a.X - before.a.X) ^ 2 + (a.Y - before.a.Y) ^ 2 + (a.Z - before.a.Z) ^ 2 > M.TRAIL_JUMP ^ 2 then points = {} end
             points[#points + 1] = { at = now, a = { X = a.X, Y = a.Y, Z = a.Z }, b = { X = b.X, Y = b.Y, Z = b.Z } }
         end
         while points[1] and (now - points[1].at > seconds or #points > M.TRAIL_POINTS) do table.remove(points, 1) end
