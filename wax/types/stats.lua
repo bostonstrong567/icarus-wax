@@ -42,7 +42,7 @@ function Stats:GetModifiers() end
 ---@return boolean
 function Stats:HasModifier(name) end
 
----Puts a modifier on the character, for the host only: in someone else's game it raises an error that says so. The
+---Puts a modifier on the character. The
 ---modifier is named by its row of D_ModifierStates, such as "Health_Regen", in any letter case, and a name the game does
 ---not have raises an error that suggests the nearest ones. How long it stays has to be given: the game's table keeps no
 ---time of its own for a modifier. It is on at once, and GetModifiers and HasModifier say so in the same frame.
@@ -52,7 +52,7 @@ function Stats:HasModifier(name) end
 ---@return integer? id The number the game gave it, which GetModifiers lists as Id. nil when the game did not put it on.
 function Stats:AddModifier(name, seconds) end
 
----Takes modifiers off the character at once, for the host only. With a name, every modifier of that row. With a record
+---Takes modifiers off the character at once. With a name, every modifier of that row. With a record
 ---that GetModifiers gave, the one with that Id.
 ---@param modifier string|WaxModifier
 ---@return integer count How many were taken off. 0 when none of that name was on.

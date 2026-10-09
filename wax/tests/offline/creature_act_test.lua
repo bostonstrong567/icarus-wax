@@ -136,27 +136,6 @@ local buffalo = animal("Buffalo", { at = { 2000, 0, 0 } })
 local mount = animal("Mount_Buffalo", { at = { 3000, 0, 0 } })
 local worm = animal("SandWorm", { at = { 9000, 0, 0 } })
 
-t.test("in someone else's game every one of them is refused, and the game is asked for nothing", function()
-    actions.host(false)
-    local touched, looked = world.touches, values.finds
-    local refusals = {
-        function() deer.instance:SetLevel(9) end, function() deer.instance:Freeze() end, function() deer.instance:Unfreeze() end,
-        function() deer.instance:Remove() end, function() buffalo.instance:Attack(game.Me) end,
-        function() deer.instance.Behaviour = "Friendly" end, function() Creatures:Spawn("Deer") end,
-    }
-    for index, refused in ipairs(refusals) do
-        local err = t.raises(refused, "only the host can", "refusal " .. index)
-        t.ok(tostring(err):find("creature_act_test.lua:", 1, true), "it names the mod's line: " .. tostring(err))
-        t.ok(tostring(err):find("game.IsHost says which you are", 1, true))
-        said[#said + 1] = (tostring(err):gsub("^.-%.lua:%d+: ", ""))
-    end
-    t.eq(next(acts.calls), nil, "no function of the game was called")
-    t.eq(values.finds, looked, "nothing was looked up")
-    t.eq(deer.instance.IsFrozen, false, "reading stays allowed")
-    t.ok(world.touches > touched)
-    actions.host(true)
-end)
-
 -- --------------------------------------------------------------------------------------------------------- spawn
 
 t.test("Spawn in a task answers once the game gave the animal its level, six metres ahead on the ground, turned to the character", function()

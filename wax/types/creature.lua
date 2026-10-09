@@ -5,8 +5,7 @@
 ---Epic, Behaviour, Action, Target, Stance and IsFrozen are read from an IcarusNPCCharacter only. On the few creatures that are an
 ---IcarusPawn they are nil.
 ---
----The host can assign Behaviour and call SetLevel, Freeze, Unfreeze, Attack and Remove. They act on the machine that runs
----them, so in someone else's game each of them raises an error that says only the host can. game.IsHost says which you are.
+---Behaviour can be assigned, and SetLevel, Freeze, Unfreeze, Attack and Remove called. They are the game's own calls.
 ---In this version of Wax they are for wild animals that are an IcarusNPCCharacter. On a tamed animal and on an IcarusPawn
 ---each raises an error that says so, because the game's calls were only made on wild ones. No other field can be assigned.
 ---
@@ -17,7 +16,7 @@
 ---@field Variant string? The version of its kind, such as "Conifer_Wolf": a row of the table D_AISetup. nil when the game names none.
 ---@field DisplayName string? The name the game shows players for its kind, such as "Cave Worm".
 ---@field Epic string? The row of D_EpicCreatures that makes it a named boss or alpha, such as "AlphaWolf_Boss". nil for an ordinary creature.
----@field Behaviour string? The team the game has it on now, which decides whom it treats as an enemy: "Friendly" for the team FriendlyAll, "Tame" for Player (the players' own team), "HostileToPlayers" for EnemyPlayerOnly, "HostileToAll" for EnemyAll. On any other team it is "Default" while that is the team its variant starts on, and else the team's own name, a row of D_AIRelationships such as "DefaultLargeCarnivore". nil when the game names no team. The host can assign it: one of the five words, where "Default" puts it back on the team its variant starts on, or a team's own name. A name that is neither raises an error that suggests the nearest. The game goes by the new team from the next time the animal notices somebody, not at once: a wolf that had a player in view attacked two seconds after "HostileToPlayers", a wolf that was walking away did nothing in five, and an animal that is attacking goes on attacking after "Friendly".
+---@field Behaviour string? The team the game has it on now, which decides whom it treats as an enemy: "Friendly" for the team FriendlyAll, "Tame" for Player (the players' own team), "HostileToPlayers" for EnemyPlayerOnly, "HostileToAll" for EnemyAll. On any other team it is "Default" while that is the team its variant starts on, and else the team's own name, a row of D_AIRelationships such as "DefaultLargeCarnivore". nil when the game names no team. It can be assigned: one of the five words, where "Default" puts it back on the team its variant starts on, or a team's own name. A name that is neither raises an error that suggests the nearest. The game goes by the new team from the next time the animal notices somebody, not at once: a wolf that had a player in view attacked two seconds after "HostileToPlayers", a wolf that was walking away did nothing in five, and an animal that is attacking goes on attacking after "Friendly".
 ---@field Action string? What it is doing now, as the game's class for that action is called: "Wander", "FindFood", "EmergeFromRetreat". nil while the game names none for it.
 ---@field Target WaxInstance? The actor it is after right now, such as a player's character or another creature. nil while it is after nothing.
 ---@field Stance "Standing"|"Sitting"|"Lying"|nil How it holds itself.
@@ -48,28 +47,28 @@ function Creature:SetModel(model) end
 ---@return boolean changed False when it wore no model.
 function Creature:ResetModel() end
 
----Makes a mount attack, for the host only, as the game does when its rider attacks: it plays the mount's own attack,
+---Makes a mount attack, as the game does when its rider attacks: it plays the mount's own attack,
 ---takes the stamina that costs, and hits what stands in front of it at the strike. The game keeps this for mounts with
 ---the talent for it. Strike asks for no talent.
 ---@return boolean started False when the mount is in the middle of another move, or the game gives its kind no attack.
 ---@return string? why The reason, when it did not start.
 function Creature:Strike() end
 
----Sets the creature's level through the game, for the host only. Its experience, the most health it can have and its
+---Sets the creature's level through the game. Its experience, the most health it can have and its
 ---level stats follow in the same call, and its health is full afterwards. So set the level first and Health after it.
 ---@param level number From 1 to 120, the highest level the game's own zones give. It is rounded to a whole number.
 ---@return boolean changed True when the level changed. False when the creature had that level already.
 function Creature:SetLevel(level) end
 
----Holds the creature where it stands, for the host only. It stops in the same frame and decides nothing until Unfreeze.
+---Holds the creature where it stands. It stops in the same frame and decides nothing until Unfreeze.
 ---@return boolean frozen True when it moved freely and is frozen now. False when it was frozen already.
 function Creature:Freeze() end
 
----Lets a frozen creature go again, for the host only. A deer walked on within half a second.
+---Lets a frozen creature go again. A deer walked on within half a second.
 ---@return boolean freed True when it was frozen and is free now. False when it was not frozen.
 function Creature:Unfreeze() end
 
----Makes the creature angry at a player's character, for the host only: the game raises its aggression to the most and
+---Makes the creature angry at a player's character: the game raises its aggression to the most and
 ---tells it where the target is. A wolf had the character as its Target within a second or two and ran at it.
 ---It is for the animals the game gives aggression, the hunters. For one that has none, such as a deer or a rabbit, it
 ---raises an error that says so, and so it does for a target that is not a player's character.
@@ -78,7 +77,7 @@ function Creature:Unfreeze() end
 ---@return boolean angry True when its aggression is raised afterwards.
 function Creature:Attack(target) end
 
----Takes the creature out of the world, for the host only, alive or dead, with nothing left behind. The game does it a
+---Takes the creature out of the world, alive or dead, with nothing left behind. The game does it a
 ---moment later, not in the same frame: IsValid() says when it is gone.
 ---The game replaces a dead creature by a corpse a few seconds after its death, one to three seconds when it was timed. The
 ---corpse is no creature: it is not in game.Creatures, and Remove raises an error on the creature it was, which is gone

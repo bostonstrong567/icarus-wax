@@ -846,6 +846,15 @@ local function on_map_change()
         entry.owners, entry.count = {}, 0
         let_go(entry)
     end
+    -- what is still held keeps the Instance a mod has of it
+    if bank then
+        for _, entry in pairs(entries) do
+            if entry.instance and entry.image then
+                local ok, object = pcall(held_object, entry)
+                if ok and object then pcall(instance.renew, entry.instance, object) end
+            end
+        end
+    end
     forget_applied()
 end
 

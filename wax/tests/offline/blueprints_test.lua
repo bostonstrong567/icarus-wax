@@ -803,14 +803,10 @@ t.test("Spawn reads a place and a turn in each form, and says what is wrong with
     t.eq(alive_actors(), 4)
 end)
 
-t.test("only the host spawns, and only while there is a world", function()
+t.test("spawning needs a world", function()
     fresh()
     local _, mine = mod("MyMod")
     local crate = mine(function() return Blueprints:Define("Crate", { parts = { Body = { mesh = CRATE } } }) end)
-    world_store.AuthorityGameMode = INVALID
-    raises_here(function() crate:Spawn(AT) end,
-        "Crate:Spawn: only the host of a session can spawn things. You have joined someone else's game, and its host decides what is in the world")
-    world_store.AuthorityGameMode = mode
     rawget(viewport, "__props").World = INVALID
     raises_here(function() crate:Spawn(AT) end, "Crate:Spawn: there is no world right now, so nothing can be spawned")
     rawget(viewport, "__props").World = world_now

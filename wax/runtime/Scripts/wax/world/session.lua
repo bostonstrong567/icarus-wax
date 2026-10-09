@@ -509,7 +509,6 @@ local function set_clock(inst, total) inst.Raw:SetTimeOfDay(total) end
 
 -- Set(hour, minute): true when the clock says that time afterwards. The game's clock only goes forward within a day.
 local set_time = public("Time", "Set", function(hour, minute)
-    character.host_only("set the time of day")
     local hours, mins = whole(hour, 0, 23), minute == nil and 0 or whole(minute, 0, 59)
     if not hours or not mins then
         error("game.Time:Set expects an hour from 0 to 23 and, if you like, a minute from 0 to 59: game.Time:Set(20) or game.Time:Set(7, 30)", 0)

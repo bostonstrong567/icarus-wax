@@ -3,28 +3,27 @@
 ---What Wax adds to every character, a player's and a creature's: every Instance whose class is IcarusCharacter or is
 ---built on it. Each field asks the game when it is read. A field is nil when the character has no such value.
 ---
----The host can assign Health and Stamina and call Heal, Kill and Teleport. They act on the machine that runs them, so in
----someone else's game each of them raises an error that says only the host can. game.IsHost says which you are.
+---Health and Stamina can be assigned, and Heal, Kill and Teleport called. They are the game's own calls.
 ---No other field can be assigned.
 ---@class WaxCharacter : WaxCharacterStats
----@field Health integer? Its health now. The host can assign it: the number is rounded, and no more than MaxHealth is set. Below 1 raises an error, because Kill is what kills, and so does assigning it on a character that is dead.
+---@field Health integer? Its health now. It can be assigned: the number is rounded, and no more than MaxHealth is set. Below 1 raises an error, because Kill is what kills, and so does assigning it on a character that is dead.
 ---@field MaxHealth integer? The most health it can have.
 ---@field Armor integer? Its armour now.
 ---@field MaxArmor integer? The most armour it can have.
 ---@field Alive boolean? False once it is dead.
----@field Stamina integer? Its stamina now. The host can assign it: the number is rounded and brought between 0 and MaxStamina.
+---@field Stamina integer? Its stamina now. It can be assigned: the number is rounded and brought between 0 and MaxStamina.
 ---@field MaxStamina integer? The most stamina it can have.
 ---@field Level integer? Its level.
 ---@field XP integer? All the experience it has earned.
 ---@field Biome string? The biome it stands in, as a row name of D_Biomes such as "Conifer". nil while the game names none.
 ---@field Temperature number? The temperature around it, in degrees Celsius.
----@field Position { X: number, Y: number, Z: number } Where it is, in the engine's units: 100 is one metre.
----@field Rotation { Pitch: number, Yaw: number, Roll: number } Which way its body is turned, in degrees.
+---@field Position { X: number, Y: number, Z: number } Where it is, in the engine's units: 100 is one metre. Assign a place to move it there at once: { X = 0, Y = 0, Z = 0 }, { 0, 0, 0 }, an actor or game.Me. When the game finds no room there it raises an error that says so.
+---@field Rotation { Pitch: number, Yaw: number, Roll: number } Which way its body is turned, in degrees. Assign { Yaw = 90 } or { 0, 90, 0 } to turn it. What is left out stays as it is.
 ---@field Velocity { X: number, Y: number, Z: number }? How fast it moves along each axis, in the engine's units a second.
 ---@field MoveSpeed number? Its top walking speed as the game has it set right now, in the engine's units a second.
 ---@field Crouching boolean? True while it crouches.
 ---@field Swimming boolean? True while it swims.
----@field Damaged WaxSignal<fun(who: WaxCharacter, amount: integer, info: WaxDamageInfo)> Fires when the game says this character took damage: the character, the damage of the hit, and what the game knows of it. The game tells it itself, so nothing is looked at meanwhile, and the handler runs in the same frame or the next one. Health that goes down with no hit, as when the host assigns Health, is not damage. Seen on the host of a session. On another player's machine it has not been tried.
+---@field Damaged WaxSignal<fun(who: WaxCharacter, amount: integer, info: WaxDamageInfo)> Fires when the game says this character took damage: the character, the damage of the hit, and what the game knows of it. The game tells it itself, so nothing is looked at meanwhile, and the handler runs in the same frame or the next one. Health that goes down with no hit, as when a mod assigns Health, is not damage. Seen on the host of a session. On another player's machine it has not been tried.
 ---@field Died WaxSignal<fun(who: WaxCharacter, info: WaxDeathInfo)> Fires once when this character is dead. After a hit that left it no health that is the frame of the hit or a moment later, and info says what did it. A death with no hit is seen by looking four times a second while a handler is connected, and info is empty then. A character that lives again and dies again is told again. When the character leaves the world, the handlers of its Damaged and Died are disconnected.
 local Character = {}
 
@@ -49,18 +48,18 @@ local Character = {}
 ---@return number metres
 function Character:DistanceTo(target) end
 
----Gives health back, for the host only. With an amount, that much and never past MaxHealth. Without one, all of it.
+---Gives health back. With an amount, that much and never past MaxHealth. Without one, all of it.
 ---A character that is dead is not brought back: that raises an error.
 ---@param amount? number How much to give back, above 0. It is rounded to a whole number.
 ---@return integer? health Its health afterwards.
 function Character:Heal(amount) end
 
----Kills the character at once, for the host only. A creature killed this way became a corpse one to three seconds
+---Kills the character at once. A creature killed this way became a corpse one to three seconds
 ---later when it was timed. A player's character is refused in this version of Wax: the game's call has only been made on creatures.
 ---@return boolean killed True when it was alive and is dead now. False when it was dead already.
 function Character:Kill() end
 
----Moves the character at once with the engine's own teleport, for the host only. Nothing holds it up afterwards: put
+---Moves the character at once with the engine's own teleport. Nothing holds it up afterwards: put
 ---above the ground it falls. It answers false when the game did not move it.
 ---@param place WaxInstance|WaxMe|{ X: number, Y: number, Z: number } A position in the engine's units, or an actor or game.Me to go to.
 ---@param facing? { Pitch?: number, Yaw?: number, Roll?: number } Which way its body is turned afterwards, in degrees. As it was when omitted.
@@ -68,14 +67,13 @@ function Character:Kill() end
 function Character:Teleport(place, facing) end
 
 ---What Wax adds to a player's character, on top of what every character has: every Instance whose class is
----IcarusPlayerCharacter or is built on it. The host can assign Food, Water and Oxygen as well. In someone else's game
----that raises an error, as it does for Health.
+---IcarusPlayerCharacter or is built on it. Food, Water and Oxygen can be assigned as well.
 ---@class WaxPlayerCharacter : WaxCharacter, WaxPlayerItems
----@field Food integer? How much food it has left. The host can assign it: the number is rounded and brought between 0 and MaxFood.
+---@field Food integer? How much food it has left. It can be assigned: the number is rounded and brought between 0 and MaxFood.
 ---@field MaxFood integer? The most food it can have.
----@field Water integer? How much water it has left. The host can assign it: the number is rounded and brought between 0 and MaxWater.
+---@field Water integer? How much water it has left. It can be assigned: the number is rounded and brought between 0 and MaxWater.
 ---@field MaxWater integer? The most water it can have.
----@field Oxygen integer? How much oxygen it has left. The host can assign it: the number is rounded and brought between 0 and MaxOxygen.
+---@field Oxygen integer? How much oxygen it has left. It can be assigned: the number is rounded and brought between 0 and MaxOxygen.
 ---@field MaxOxygen integer? The most oxygen it can have.
 ---@field Radiation integer? Its radiation level.
 ---@field MaxRadiation integer? The highest its radiation level goes.

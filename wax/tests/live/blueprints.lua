@@ -56,10 +56,6 @@ if not game.InProspect or not game.Character then
     check("a prospect with a character", false, "this test puts things in the world: enter a prospect first")
     return result()
 end
-if not game.IsHost then
-    check("the host of the session", false, "only the host can spawn things")
-    return result()
-end
 local named, who = pcall(function() return game.LocalPlayer.PlayerState.Raw.ActiveCharacter.CharacterName:ToString() end)
 local kept, set = pcall(function() return dofile(Wax.root .. "/saved/wax.tests.lua") end)
 local allowed = kept and type(set) == "table" and type(set.test_character) == "string" and set.test_character or nil

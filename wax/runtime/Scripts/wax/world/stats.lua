@@ -344,7 +344,7 @@ end
 local fields = { Stats = all_stats, HealthRegen = named("HealthRegen"), StaminaRegen = named("StaminaRegen") }
 local methods = { GetStat = get_stat, GetModifiers = get_modifiers, HasModifier = has_modifier }
 
--- putting a modifier on and taking it off. Both act on the machine that runs them, so only the host may
+-- putting a modifier on and taking it off. Both are the game's own calls, made on this machine
 
 M.FUNCTIONS = "IcarusFunctionLibrary"
 M.MODIFIERS_NAME = "D_ModifierStates"
@@ -385,7 +385,6 @@ local function remove_state(raw, row, id) return library():RemoveModifierState(r
 
 -- AddModifier(name, seconds) or AddModifier(name, { seconds = n }). Answers the number the game gave it, or nil when it is not on.
 local function add_modifier(self, raw, name, options)
-    character.host_only("put a modifier on a character")
     modifier_row(name, "AddModifier")
     local seconds = options
     if type(options) == "table" then
@@ -411,7 +410,6 @@ end
 
 -- RemoveModifier(name) takes every modifier of that name off, RemoveModifier(record) the one GetModifiers listed. Answers how many went.
 local function remove_modifier(self, raw, what)
-    character.host_only("take a modifier off a character")
     local name, id = what, nil
     if type(what) == "table" then name, id = rawget(what, "Name"), rawget(what, "Id") end
     local key = modifier_row(name, "RemoveModifier")

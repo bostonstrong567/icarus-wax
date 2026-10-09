@@ -707,16 +707,11 @@ t.test("RemoveModifier takes every modifier of a name off, or the one a record n
     t.eq(actions.untried, 0, table.concat(actions.log, " | "))
 end)
 
-t.test("a client cannot put a modifier on or take one off, game.Me can, and a table that cannot be read is said", function()
+t.test("game.Me can put a modifier on and take one off, and a table that cannot be read is said", function()
     stats.flush()
     actions.host(true)
     local who = hero()
     more.modifier(who, "Berry", { uid = 300 })
-    actions.host(false)
-    local before = asked()
-    t.raises(function() who.instance:AddModifier("Berry", 20) end, "only the host can put a modifier on a character")
-    t.raises(function() who.instance:RemoveModifier("Berry") end, "only the host can take a modifier off a character")
-    t.eq(asked(), before)
     t.eq(who.instance:HasModifier("Berry"), true)
     actions.host(true)
 

@@ -42,8 +42,7 @@ local Blueprint = {}
 ---such as K2_GetActorLocation gives. `rotation` is a turn in degrees, { Pitch = 0, Yaw = 90, Roll = 0 } or { 0, 90, 0 },
 ---with what is left out being 0. `data` is a table of your own that the thing keeps as its Data.
 ---
----Only the host of a session can spawn: on a client it raises an error that says so, as it does while there is no
----world. A mistake while the thing is put together raises an error and leaves nothing standing. Whether the other
+---While there is no world it raises an error that says so. A mistake while the thing is put together raises an error and leaves nothing standing. Whether the other
 ---players of a session see a thing has not been tried.
 ---
 ---The game's own part of making a thing with two mesh parts took about half a millisecond.

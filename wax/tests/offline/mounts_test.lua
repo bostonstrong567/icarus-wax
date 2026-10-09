@@ -240,9 +240,6 @@ t.test("SpawnMount says why nothing was made", function()
     world.ground = { X = 0, Y = 0, Z = 0 }
     world.spawned = nil
     t.raises(function() api:SpawnMount("Mount_Nothing") end, "made nothing")
-    Wax.game.IsHost = false
-    t.raises(function() api:SpawnMount("Mount_Moa") end, "only the host")
-    Wax.game.IsHost = true
     t.raises(function() api.SpawnMount({}, "Mount_Moa") end, "with a colon")
     t.raises(function() api:SpawnMount("Mount_Moa", { nmae = "x" }) end, "no option 'nmae'")
 end)

@@ -38,9 +38,6 @@ it in. A mod Wax has not seen before is listed switched off until you switch it 
 so whether it came from the button, from a zip or from a copy by hand, and whether the game was running or
 closed.
 
-If you play with other people, read
-[Multiplayer and fair play](https://wax-icarus.duckdns.org/docs/multiplayer/) first.
-
 ## What it does on your computer
 
 Nothing is hidden, and each part can be checked in this repository.

@@ -537,7 +537,7 @@ M.feed({
     },
 })
 
--- what a mod does to a character. Each acts on the machine that runs it, so only the host may
+-- what a mod does to a character. Each is the game's own call, made on this machine
 
 M.KILL_PLAYERS = false      -- true lets Kill() kill a player's character too: the game's call was only made on creatures so far
 
@@ -548,14 +548,6 @@ local function described(value)
     if instance.is_instance(value) then return "an Instance" end
     if type(value) == "number" then return tostring(value) end
     return type(value)
-end
-
--- Raises unless this player hosts the session. `doing` finishes "only the host can ...".
-function M.host_only(doing)
-    game_root = game_root or Wax.import("engine.game").root
-    if game_root.IsHost == true then return end
-    error(("only the host can %s. You are in someone else's game, where its server decides. game.IsHost says which you are")
-        :format(doing), 0)
 end
 
 local function finite(value) return type(value) == "number" and value == value and value ~= huge and value ~= -huge end
@@ -597,7 +589,6 @@ local SETTERS = {
 local function vital(field, property, most_property, least)
     local call = SETTERS[field]
     return function(self, raw, value)
-        M.host_only("set " .. field)
         local wanted = whole(value, field)
         local state, is_alive = living_state(self, raw, field)
         local now, most = number(state[property]), number(state[most_property])
@@ -617,7 +608,6 @@ local function end_life(state) state:Kill() end
 
 -- Heal(amount) gives that much health back, Heal() all of it. Answers the health afterwards.
 local function heal(self, raw, amount)
-    M.host_only("heal a character")
     local by = amount ~= nil and whole(amount, "Heal") or nil
     if by and by <= 0 then
         error("Heal expects how much health to give back, a number above 0. To lower health assign Health, and to kill call Kill()", 0)
@@ -637,7 +627,6 @@ end
 
 -- Kill() answers true when the character was alive and is dead now.
 local function kill(self, raw)
-    M.host_only("kill a character")
     local state, is_alive = living_state(self, raw, "Kill")
     if not is_alive then return false end
     if not M.KILL_PLAYERS and self:IsA(M.PLAYER) then
@@ -662,16 +651,52 @@ end
 
 local function teleport_to(raw, at, turn) return raw:K2_TeleportTo(at, turn) end
 
+-- A place a mod gave: { 5, 5, 5 } as well as what place_of takes.
+local function spot_of(target, what)
+    if type(target) == "table" and not rawequal(target, Me) and not instance.is_instance(target) and target.X == nil
+        and type(target[1]) == "number" and type(target[2]) == "number" and type(target[3]) == "number" then
+        return target[1], target[2], target[3]
+    end
+    return place_of(target, what)
+end
+
+-- character.Position = place
+local function set_position(_, raw, value)
+    local x, y, z = spot_of(value, "Position")
+    if not (finite(x) and finite(y) and finite(z)) then error("Position expects a place whose X, Y and Z are numbers", 0) end
+    if ask("moving a character", teleport_to, raw, { X = x, Y = y, Z = z }, rotation(nil, raw)) ~= true then
+        error(("the game did not move the character to %g, %g, %g: it found no room for it there"):format(x, y, z), 0)
+    end
+end
+
+local function control(raw, turn) raw.Controller:SetControlRotation(turn) end
+
+-- character.Rotation = { Yaw = 90 }: what is left out stays as it is.
+local function set_rotation(_, raw, value)
+    if type(value) ~= "table" or instance.is_instance(value) or rawequal(value, Me) then
+        error("Rotation expects a turn in degrees, such as { Yaw = 90 } or { 0, 90, 0 }, got " .. described(value), 0)
+    end
+    local now = rotation(nil, raw)
+    local pitch, yaw, roll = value.Pitch or value[1] or now.Pitch, value.Yaw or value[2] or now.Yaw, value.Roll or value[3] or now.Roll
+    if not (finite(pitch) and finite(yaw) and finite(roll)) then error("Rotation expects Pitch, Yaw and Roll in degrees, each a number", 0) end
+    local turn = { Pitch = pitch, Yaw = yaw, Roll = roll }
+    local x, y, z = place(raw)
+    if ask("turning a character", teleport_to, raw, { X = x, Y = y, Z = z }, turn) ~= true then
+        error("the game did not turn the character", 0)
+    end
+    pcall(control, raw, turn)
+end
+
 -- Teleport(place, facing) answers true when the game moved the character.
 local function teleport(_, raw, target, facing)
-    M.host_only("move a character")
-    local x, y, z = place_of(target, "Teleport")
+    local x, y, z = spot_of(target, "Teleport")
     if not (finite(x) and finite(y) and finite(z)) then error("Teleport expects a place whose X, Y and Z are numbers", 0) end
     local turn = facing_of(facing, raw)
     return ask("moving a character", teleport_to, raw, { X = x, Y = y, Z = z }, turn) == true
 end
 
-local character_setters = { Health = vital("Health", "Health", "MaxHealth", 1), Stamina = vital("Stamina", "Stamina", "MaxStamina", 0) }
+local character_setters = { Health = vital("Health", "Health", "MaxHealth", 1), Stamina = vital("Stamina", "Stamina", "MaxStamina", 0),
+    Position = set_position, Rotation = set_rotation }
 local player_setters = { Food = vital("Food", "FoodLevel", "MaxFood", 0), Water = vital("Water", "WaterLevel", "MaxWater", 0),
     Oxygen = vital("Oxygen", "OxygenLevel", "MaxOxygen", 0) }
 character_methods.Heal, character_methods.Kill, character_methods.Teleport = heal, kill, teleport

@@ -948,7 +948,7 @@ local function blueprint_of(self, name, arguments)
     return blueprint
 end
 
--- Puts one in the world. Only the host of a session can.
+-- Puts one in the world.
 function blueprint_members:Spawn(position, rotation, data)
     local blueprint = blueprint_of(self, "Spawn", "position, rotation, data")
     local name = blueprint.name
@@ -969,10 +969,6 @@ function blueprint_members:Spawn(position, rotation, data)
     end
     local game = Wax.game
     if not (game and game.World) then error(("%s:Spawn: there is no world right now, so nothing can be spawned"):format(name), 2) end
-    if not game.IsHost then
-        error(("%s:Spawn: only the host of a session can spawn things. You have joined someone else's game, and its host decides what is in the world")
-            :format(name), 2)
-    end
     if live_count >= M.MAX_THINGS then
         error(("%s:Spawn: %d things are in the world already, and that is as many as Wax keeps. Destroy some first"):format(name, live_count), 2)
     end

@@ -691,6 +691,52 @@ convert.unwrap = function(value)
     return rawget(value, OBJ)
 end
 
+-- Position and Rotation of any actor or scene component whose class has no member of that name.
+local PLACED = {
+    Position = { keys = { "X", "Y", "Z" }, example = "{ X = 0, Y = 0, Z = 0 } or { 0, 0, 0 }",
+        Actor = { get = function(o) return o:K2_GetActorLocation() end, set = function(o, v) o:K2_SetActorLocation(v, false, {}, true) end },
+        SceneComponent = { get = function(o) return o:K2_GetComponentLocation() end,
+            set = function(o, v) o:K2_SetWorldLocation(v, false, {}, true) end } },
+    Rotation = { keys = { "Pitch", "Yaw", "Roll" }, example = "{ Pitch = 0, Yaw = 90, Roll = 0 } or { 0, 90, 0 }",
+        Actor = { get = function(o) return o:K2_GetActorRotation() end, set = function(o, v) o:K2_SetActorRotation(v, true) end },
+        SceneComponent = { get = function(o) return o:K2_GetComponentRotation() end,
+            set = function(o, v) o:K2_SetWorldRotation(v, false, {}, true) end } },
+}
+
+local function placed(self, key)
+    local kind = PLACED[key]
+    if not kind then return nil end
+    local ancestors = rawget(self, INFO).ancestors
+    return kind, ancestors.Actor and kind.Actor or ancestors.SceneComponent and kind.SceneComponent or nil
+end
+
+local function read_place(self, kind, how)
+    local ok, value = pcall(how.get, live(self, 3))
+    if not ok then error(("%s could not be read: %s"):format(kind.keys[1] == "X" and "Position" or "Rotation", (tostring(value):match("^[^\r\n]*"))), 3) end
+    local keys = kind.keys
+    return { [keys[1]] = value[keys[1]], [keys[2]] = value[keys[2]], [keys[3]] = value[keys[3]] }
+end
+
+local function write_place(self, key, kind, how, value)
+    local object, keys = live(self, 3), kind.keys
+    if is_instance(value) then
+        local other, from = placed(value, key)
+        if not from then error(("%s expects %s, got a %s"):format(key, kind.example, rawget(value, INFO).name), 3) end
+        value = read_place(value, other, from)
+    end
+    if type(value) ~= "table" then error(("%s expects %s, got %s"):format(key, kind.example, type(value)), 3) end
+    local out = {}
+    for index = 1, 3 do
+        local number = value[keys[index]]
+        if number == nil then number = value[index] end
+        if number == nil and key == "Rotation" then number = 0 end
+        if type(number) ~= "number" or number ~= number then error(("%s expects %s"):format(key, kind.example), 3) end
+        out[keys[index]] = number
+    end
+    local ok, problem = pcall(how.set, object, out)
+    if not ok then error(("%s could not be set on this %s: %s"):format(key, rawget(self, INFO).name, (tostring(problem):match("^[^\r\n]*"))), 3) end
+end
+
 -- Wax's own names first, then what engine.easy gives the class, then the game's own members.
 meta.__index = function(self, key)
     local method = Instance[key]
@@ -707,7 +753,14 @@ meta.__index = function(self, key)
         if given then return given end
     end
     local member = info.members[key]
-    if not member then error(unknown_member(self, key, "a member", true), 2) end
+    if not member then
+        local kind, how = placed(self, key)
+        if how then
+            local at = read_place(self, kind, how)
+            return at
+        end
+        error(unknown_member(self, key, "a member", true), 2)
+    end
     if member.kind == "property" then return read_property(self, key) end
     -- instance:Function(...): return the function that makes the checked call
     local caller = member.caller
@@ -738,6 +791,13 @@ meta.__newindex = function(self, key, value)
         end
     end
     local member = info.members[key]
+    if not member then
+        local kind, how = placed(self, key)
+        if how then
+            write_place(self, key, kind, how, value)
+            return
+        end
+    end
     if not member or member.kind ~= "property" then error(unknown_member(self, key, "a property", true), 2) end
     write_property(self, key, member, value)
 end
@@ -773,6 +833,27 @@ function M.flush()
     parts = {}
     reflect.flush()
     convert.flush()
+end
+
+-- An Instance from before a map change, for an object its holder has just handed over again: it is usable once more.
+function M.renew(self, object)
+    if not is_instance(self) or rawget(self, GONE) or object == nil or not object:IsValid() then return false end
+    local address = object:GetAddress()
+    if address ~= rawget(self, ADDRESS) then return false end
+    local class = object:GetClass()
+    rawset(self, OBJ, object)
+    rawset(self, INFO, reflect.class_info(class))
+    rawset(self, NAME_INDEX, object:GetFName():GetComparisonIndex())
+    rawset(self, CLASS_ADDRESS, class:GetAddress())
+    rawset(self, CHECKED, nil)
+    rawset(self, ASKED, nil)
+    rawset(self, WORLD, generation)
+    if handles then
+        local ok, handle = pcall(handles.take, object)
+        if ok then rawset(self, HANDLE, handle) else unplug(handle) end
+    end
+    cache[address] = self
+    return true
 end
 
 -- Plugs in what can say an object is gone without asking the object: take(object) gives a handle (or nil), alive(handle) true or false.

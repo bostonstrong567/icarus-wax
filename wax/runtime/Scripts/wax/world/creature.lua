@@ -434,7 +434,7 @@ end
 M.fields = { Kind = kind, Variant = variant, DisplayName = display_name, Epic = epic, Behaviour = behaviour, Action = action,
              Target = target, Stance = stance, IsJuvenile = is_juvenile, IsTamed = is_tamed, CanBeTamed = can_be_tamed }
 
--- what the host does to a creature. Each acts on the machine that runs it, so only the host may
+-- what a mod does to a creature. Each is the game's own call, made on this machine
 
 -- true also acts on tamed animals and IcarusPawns, spawns tamed variants and aims Attack at any actor: never tried in the game
 M.ACT_UNTRIED = false
@@ -536,7 +536,6 @@ local function make_angry(moods, raw, target) moods:MakeNPCAngry(raw, target, FN
 
 local function set_level(self, raw, level)
     local character = characters()
-    character.host_only("set a creature's level")
     local wanted = character.whole(level, "SetLevel")
     if wanted < 1 or wanted > M.MOST_LEVEL then
         error(("SetLevel expects a level from 1 to %d, the highest the game's own zones give, got %d"):format(M.MOST_LEVEL, wanted), 0)
@@ -561,7 +560,6 @@ end
 
 local function freeze(self, raw)
     local character = characters()
-    character.host_only("freeze a creature")
     if frozen_or_not(self, raw, "Freeze", "it cannot be frozen") then return false end
     character.ask("freezing a creature", freeze_npc, raw)
     return raw.bIsNPCFrozen == true
@@ -569,7 +567,6 @@ end
 
 local function unfreeze(self, raw)
     local character = characters()
-    character.host_only("unfreeze a creature")
     if not frozen_or_not(self, raw, "Unfreeze", "there is nothing to unfreeze") then return false end
     character.ask("unfreezing a creature", unfreeze_npc, raw)
     return raw.bIsNPCFrozen ~= true
@@ -577,7 +574,6 @@ end
 
 local function remove(self, raw)
     local character = characters()
-    character.host_only("take a creature out of the world")
     tried(self, "Remove")
     character.ask("removing a creature", end_soon, raw)
     return true
@@ -627,7 +623,6 @@ end
 
 local function set_behaviour(self, raw, value)
     local character = characters()
-    character.host_only("change a creature's behaviour")
     tried(self, "Assigning Behaviour")
     if not able(raw).team then
         error(("this %s is on no team the game lets be changed"):format(self.ClassName), 0)
@@ -652,7 +647,6 @@ end
 
 local function attack(self, raw, target)
     local character = characters()
-    character.host_only("make a creature attack")
     tried(self, "Attack")
     local who = target
     if rawequal(target, character.me) then
@@ -804,7 +798,6 @@ end
 -- Spawn(kind, place, options). Inside a task it answers once the game has given the creature its level, else at once.
 function M.spawn(kind, place, options)
     local character = characters()
-    character.host_only("spawn a creature")
     if type(kind) ~= "string" or kind == "" then
         error("Spawn expects the kind of creature as its first value, such as \"Deer\" or \"Conifer_Wolf\", got " .. type(kind), 0)
     end

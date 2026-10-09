@@ -113,7 +113,7 @@ function Inventory:Where(item) end
 ---when it was measured, so use it when something has to be exact at once, not every frame.
 function Inventory:Refresh() end
 
----Puts items into the inventory, for the host only: in someone else's game it raises an error that says so. They go
+---Puts items into the inventory. They go
 ---onto the stacks of that item first, then into empty slots that the game says take that kind of item, a full stack to
 ---a slot. What does not fit is not given, and nothing is dropped on the ground. A tool comes as the game makes a new
 ---one, with its full durability. Count, Has and List follow in the same frame, the weight a moment later.
@@ -124,7 +124,7 @@ function Inventory:Refresh() end
 ---@return string? why Why not all of them, in plain words, when fewer went in: "there was no room for 3 of the 10".
 function Inventory:Give(item, count) end
 
----Takes items out of the inventory, for the host only. They are gone, not dropped, and the last stack of the item goes
+---Takes items out of the inventory. They are gone, not dropped, and the last stack of the item goes
 ---first. It has been tried on a player's backpack and hotbar.
 ---@param item string|WaxItemStack|WaxItemFacts
 ---@param count? integer How many, from 1 to 100000. One when omitted.
@@ -132,7 +132,7 @@ function Inventory:Give(item, count) end
 ---@return string? why Says how many there were, when there were fewer than asked for.
 function Inventory:Take(item, count) end
 
----Gives the inventory this many slots, for the host only. Slots are added and taken at its end. A slot that holds
+---Gives the inventory this many slots. Slots are added and taken at its end. A slot that holds
 ---something is never taken, nor any slot before it: the inventory then keeps as many as it needs, and the second value
 ---says so. Size, List and the others follow in the same frame.
 ---It lasts as long as the inventory does: one the game makes anew, as on a map change, has the number of its row of
@@ -173,7 +173,7 @@ function PlayerItems:Has(item, count) end
 ---@return WaxItemStack[]
 function PlayerItems:List() end
 
----Gives the character items into its backpack, for the host only, as the backpack's own Give does. What does not fit
+---Gives the character items into its backpack, as the backpack's own Give does. What does not fit
 ---in the backpack is not given: nothing goes to the hotbar and nothing is dropped.
 ---@param item string|WaxItemStack|WaxItemFacts
 ---@param count? integer How many, from 1 to 100000. One when omitted.
@@ -181,7 +181,7 @@ function PlayerItems:List() end
 ---@return string? why Why not all of them, when fewer went in.
 function PlayerItems:Give(item, count) end
 
----Takes items away from the character, for the host only: out of its backpack first, then out of its hotbar. What it
+---Takes items away from the character: out of its backpack first, then out of its hotbar. What it
 ---wears and what its other inventories hold is left alone. Take from one of those with the inventory's own Take.
 ---@param item string|WaxItemStack|WaxItemFacts
 ---@param count? integer How many, from 1 to 100000. One when omitted.

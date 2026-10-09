@@ -247,7 +247,6 @@ local function wears(self) return find(self) ~= nil end
 local attacks = {}
 local function strike(self, raw)
     local game = Wax.game
-    if not game.IsHost then error("only the host of a session can make a mount strike", 0) end
     if not raw.ChildActor_Seat:IsValid() then error("Strike is for a mount: a tamed animal that can be ridden", 0) end
     local playing = raw.Mesh:GetAnimInstance():GetCurrentActiveMontage()
     if playing:IsValid() then return false, "it is in the middle of another move" end
@@ -296,7 +295,6 @@ function M.spawn(kind, place, options)
         error("the option saddle of SpawnMount is an item such as \"Saddle_Standard\", or false for none", 0)
     end
     local game = Wax.game
-    if not game.IsHost then error("only the host of a session can make a mount", 0) end
     if not game.Me.Exists then error("you are not in the world, so there is nowhere to make a mount", 0) end
     local row = kind
     local info = nil

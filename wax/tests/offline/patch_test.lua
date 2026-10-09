@@ -1700,58 +1700,6 @@ t.test("a mod that is loading again has a moment to make its changes again befor
     patch.loaded = loaded
 end)
 
-t.test("in a game someone else hosts, the player hears once for each mod that its table changes are only on this PC", function()
-    local client, notes = false, {}
-    local is_client = patch.is_client
-    patch.is_client = function() return client end
-    rawset(Wax, "ui", { Notify = function(text, options) notes[#notes + 1] = options.title .. ": " .. text end })
-    local function said() return warnings("changes the game's tables on this PC") end
-    local function second() for _ = 1, 80 do frame() end end
-    local before = said()
-    as(A, function() crafts:Set("Stool", "Count", 3) end)
-    second()
-    t.eq(said(), before, "as the host, or alone: nothing")
-    -- the player joins a friend's game with the change standing
-    client = true
-    game.root.MapChanged:Fire("Terrain_030")
-    second()
-    t.eq(said(), before + 1)
-    t.eq(notes[1], "Mods: ModA changes the game's tables on this PC. In this game the host decides what really happens.")
-    as(A, function() crafts:Set("Stool", "Note", "joined") end)
-    second()
-    t.eq(#notes, 1, "not again for the next change")
-    -- a mod that makes its first change in the joined game
-    as(B, function() crafts:Set("Chair", "Count", 8) end)
-    second()
-    t.eq(#notes, 2)
-    t.ok(notes[2]:find("ModB changes the game's tables", 1, true), notes[2])
-    -- nothing at the title screen, and once more for each mod in the next game that is joined
-    game.root.MapChanged:Fire("TitleScreen")
-    second()
-    t.eq(#notes, 2)
-    game.root.MapChanged:Fire("Terrain_031")
-    second()
-    t.eq(#notes, 4)
-    t.eq(said(), before + 4)
-    -- hosting again: nothing. And when it cannot be told who hosts, nothing is said and nothing is stopped
-    client = false
-    game.root.MapChanged:Fire("Terrain_032")
-    second()
-    patch.is_client = function() error("there is no world") end
-    game.root.MapChanged:Fire("Terrain_033")
-    as(A, function() crafts:Set("Stool", "Count", 4) end)
-    second()
-    t.eq(stool().Count, 4)
-    t.eq(#notes, 4)
-    as(A, function() crafts:Reset() end)
-    as(B, function() crafts:Reset() end)
-    patch.is_client = is_client
-    rawset(Wax, "ui", nil)
-    game.root.MapChanged:Fire("Terrain_016")
-    frame()
-    t.eq(#Data:Changes(), 0)
-end)
-
 t.test("a Load that is under way still returns the rows a change made it forget", function()
     Data:Flush()
     frame()
@@ -1838,14 +1786,6 @@ t.test("adding rows is behind its own switch, and a new row's name and start are
     as(mod("Made"), function()
         t.raises(function() recipes:Add("Made_01", {}, { like = "Bone_Knife" }) end, "ProcessorRecipes already has a row named Made_01")
     end)
-    -- in a game someone else hosts the host's game would not have the row
-    local is_client = patch.is_client
-    patch.is_client = function() return true end
-    as(A, function()
-        t.raises(function() recipes:Add("ModA_Quick_Knife", {}, { like = "Bone_Knife" }) end,
-            "a row cannot be added in a game that someone else hosts")
-    end)
-    patch.is_client = is_client
     t.eq(fake.rows_added, 0, "none of that reached the game")
     t.eq(fake.crashes, 0)
 end)

@@ -128,7 +128,6 @@ data.clock = function() return now end
 data.start()
 local patch = Wax.import("data.patch")
 patch.clock = function() return now end
-patch.is_client = function() return false end
 patch.start()
 workshop.start()
 local Workshop = game.root.Workshop
@@ -1210,10 +1209,6 @@ t.test("nodes are added one at a time through a category, and a node that is wro
     local window = scope.new("window", K)
     t.raises(function() as(window, function() Workshop:Define(described()) end) end,
         "the rows of this store are named after Kit, and this code runs as window. A store is added by its own mod's code")
-    -- in a game someone else hosts the host would not have the rows
-    patch.is_client = function() return true end
-    t.raises(function() as(K, function() Workshop:Define(described()) end) end, "the store was not added: a row cannot be added in a game that someone else hosts")
-    patch.is_client = function() return false end
     unload("Kit")
     frames(3)
     patch.WRITES.rows = false

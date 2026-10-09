@@ -619,20 +619,12 @@ local player_fields = { HotbarSlot = hotbar_slot, HeldItem = held_item }
 for i = 1, #CARRIED do player_fields[CARRIED[i].name] = carried_field(CARRIED[i].property) end
 local player_methods = { Count = character_count, Has = character_has, List = character_list }
 
--- giving and taking: the game's own calls. They act on the machine that runs them, so only the host may
+-- giving and taking: the game's own calls. They are made on this machine
 
 M.STATIC_NAME = "D_ItemsStatic"
 M.MOST = 100000         -- more than this in one call is refused
 local GIVE_TO = 1       -- a character is given items into its backpack
 local TAKE_FROM = { 1, HOTBAR }     -- and they are taken from its backpack, then from its hotbar
-
-local function host_only(doing)
-    local loaded, character = pcall(Wax.import, "world.character")
-    if loaded and type(character.host_only) == "function" then return character.host_only(doing) end
-    if Wax.import("engine.game").root.IsHost == true then return end
-    error(("only the host can %s. You are in someone else's game, where its server decides. game.IsHost says which you are")
-        :format(doing), 0)
-end
 
 -- One call of the game's own. A function this version of the game lacks is said in plain words.
 local function ask(what, fn, ...)
@@ -771,7 +763,6 @@ local function taken_answer(taken, wanted)
 end
 
 local function give(self, raw, item, amount)
-    host_only("give items")
     local key, facts = facts_for(item, "Give")
     local wanted = how_many(amount, "Give")
     local given, why = put(self, raw, key, facts, wanted)
@@ -779,14 +770,12 @@ local function give(self, raw, item, amount)
 end
 
 local function take(self, raw, item, amount)
-    host_only("take items")
     local key = key_of(item, "Take")
     local wanted = how_many(amount, "Take")
     return taken_answer(remove(self, raw, key, wanted), wanted)
 end
 
 local function character_give(self, raw, item, amount)
-    host_only("give items")
     local key, facts = facts_for(item, "Give")
     local wanted = how_many(amount, "Give")
     local live = part(raw, CARRIED[GIVE_TO].property)
@@ -798,7 +787,6 @@ local function character_give(self, raw, item, amount)
 end
 
 local function character_take(self, raw, item, amount)
-    host_only("take items")
     local key = key_of(item, "Take")
     local wanted = how_many(amount, "Take")
     local taken = 0
@@ -818,7 +806,6 @@ local function remove_slots(raw, fewer) raw:RemoveSlots(fewer) end
 
 -- Slots come and go at the end. A slot that holds something is never taken, nor any slot before it.
 local function resize(self, raw, wanted)
-    host_only("resize an inventory")
     if math.type(wanted) ~= "integer" or wanted < 1 or wanted > M.MOST_SLOTS then
         error(("Resize expects how many slots, a whole number from 1 to %d, got %s"):format(M.MOST_SLOTS,
             type(wanted) == "number" and tostring(wanted) or described(wanted)), 0)

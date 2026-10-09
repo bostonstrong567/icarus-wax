@@ -174,8 +174,7 @@ function Layout:GetLimits() end
 ---Every change is a change of the game's tables made through game.Data. It is checked first, belongs to the mod, and is put back when the mod unloads.
 ---After a change Wax asks the game's store to refresh, and asks each changed node on the store's screen to read its row and its store item again.
 ---In the game that was seen to bring a node's place and price up to date while the store was not showing. With the store open it has not been looked at yet.
----In a game someone else hosts a change is made in the tables on this PC only, as game.Data tells the player. The store is paid from each
----player's own account, so other players are expected to keep their own store. That has not been tried with two PCs.
+---The store is paid from each player's own account.
 ---What cannot be undone is what a player did while a change stood: what they researched is saved in their account under the node's row name,
 ---whatever it cost then, and Wax pays nothing back and takes nothing away when a price or a requirement changes or goes back.
 ---Row names are matched without regard to letter case. What is returned is a new table each time, yours to change.

@@ -766,14 +766,6 @@ t.test("wrong values, a client, a missing clock and the title screen are refused
     world.static[CLOCK] = kept
     session.flush()
 
-    actions.prospect(enter({ host = false }))
-    t.eq(game.IsHost, false)
-    err = t.raises(function()
-        line = debug.getinfo(1, "l").currentline + 1
-        game.Time:Set(20)
-    end, "only the host can set the time of day. You are in someone else's game, where its server decides")
-    at(err, line)
-    t.eq(game.Time.Hour, 11, "reading goes on working")
 
     more.travel("TitleScreen")
     frames(1)

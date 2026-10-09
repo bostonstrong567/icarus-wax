@@ -242,7 +242,13 @@ t.test("a field that has no setter cannot be assigned, and the error names the m
     end, "MaxHealth is read-only")
     at(err, line)
     t.eq(who.state_store.MaxHealth, 102)
-    t.raises(function() wolf.Position = { X = 0, Y = 0, Z = 0 } end, "Position is read-only")
+    wolf.Position = { 5, 6, 7 }
+    t.eq(wolf.Position.Y, 6, "a place can be assigned")
+    wolf.Position = { X = 1, Y = 2, Z = 3 }
+    t.eq(wolf.Position.Z, 3)
+    wolf.Rotation = { Yaw = 30 }
+    t.eq(wolf.Rotation.Yaw, 30)
+    t.raises(function() wolf.Position = "here" end, "Position expects an actor, game.Me or a position")
     t.raises(function() wolf.DistanceTo = 1 end, "DistanceTo is read-only")
 end)
 
@@ -1109,32 +1115,6 @@ t.test("Teleport moves a character with the engine's own call: to a place, to an
     t.raises(function() me:Teleport({ X = 1, Y = 1, Z = 1 }, { Yaw = "north" }) end, "Teleport expects Pitch, Yaw and Roll in degrees")
     t.eq(me.Position.X, 500)
     t.eq(values.silent, silent)
-    possess(nil)
-end)
-
-t.test("a client is told that only the host can, in plain words, and the game is asked for nothing", function()
-    actions.host(true)
-    local who = hero()
-    possess(who)
-    local wolf = instance.wrap(kit.creature().actor)
-    actions.host(false)
-    t.eq(game.IsHost, false)
-    local before = asked()
-    local line
-    local err = t.raises(function()
-        line = debug.getinfo(1, "l").currentline + 1
-        game.Me.Health = 50
-    end, "only the host can set Health. You are in someone else's game, where its server decides. game.IsHost says which you are")
-    at(err, line)
-    t.raises(function() game.Me.Food = 1 end, "only the host can set Food")
-    t.raises(function() wolf.Stamina = 1 end, "only the host can set Stamina")
-    t.raises(function() wolf:Heal() end, "only the host can heal a character")
-    t.raises(function() wolf:Kill() end, "only the host can kill a character")
-    t.raises(function() game.Me:Teleport({ X = 0, Y = 0, Z = 0 }) end, "only the host can move a character")
-    t.eq(asked(), before)
-    t.eq(who.state_store.Health, 300)
-    t.eq(game.Me.Health, 300, "reading goes on working")
-    actions.host(true)
     possess(nil)
 end)
 

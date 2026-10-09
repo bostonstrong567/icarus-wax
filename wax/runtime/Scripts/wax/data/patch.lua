@@ -76,8 +76,7 @@ local torn = false          -- set when a write failed and the game was left hol
 local rows_due, rows_check, title_due, at_title = false, false, false, false
 local dirty = { list = {}, by = {}, tables = {} }
 local fresh, summary_at = {}, 0
-local told = {}             -- mods the player was told about in the game they joined
-local timers = { retry_due = 0 }        -- the tasks that wait: hold, retry, lost, join and summary
+local timers = { retry_due = 0 }        -- the tasks that wait: hold, retry, lost and summary
 local flush_thread, flush_frame, flush_begun, flush_watch = nil, 0, false, nil
 local announced_at = 0
 local standing = { ranks = nil, frame = nil, signature = nil }      -- each mod's place in the load order, worked out once a frame
@@ -1024,12 +1023,6 @@ function M.loaded(name)
     return false
 end
 
--- True when this player is in a game that someone else hosts. Replaced in tests.
-function M.is_client()
-    local game = Wax.import("engine.game").root
-    return game.World ~= nil and not game.IsHost
-end
-
 local flush
 
 -- Makes sure the changes are looked at when this frame ends.
@@ -1179,25 +1172,6 @@ local function touched(group, table_name, row, field, owner)
     schedule()
 end
 
-local function joined()
-    if at_title then return false end
-    local ok, answer = pcall(M.is_client)
-    return ok and answer == true
-end
-
--- In a game someone else hosts, the player hears once for each mod that its table changes are only on this PC.
-local function tell(names)
-    for _, name in ipairs(names) do
-        if owners[name] and not told[name] then
-            told[name] = true
-            local text = ("%s changes the game's tables on this PC. In this game the host decides what really happens."):format(name)
-            log:warn("%s", text)
-            local ui = rawget(Wax, "ui")
-            if ui and ui.Notify then pcall(ui.Notify, text, { title = "Mods", kind = "warn", seconds = 8 }) end
-        end
-    end
-end
-
 local function say()
     timers.summary = nil
     if M.clock() < summary_at then
@@ -1219,7 +1193,6 @@ local function say()
         log:info("%s changed %d %s of %d %s in %s", owner, made.fields, made.fields == 1 and "field" or "fields", rows,
             rows == 1 and "row" or "rows", count == 1 and where or (count .. " tables"))
     end
-    if #names > 0 and joined() then tell(names) end
 end
 
 -- Tells whoever listens what changed in this frame: Patched for each field, then Changed once for each table.
@@ -1925,10 +1898,6 @@ local ADD_OPTIONS = { "like" }
 function M.add(self, name, values, options)
     local owner = owner_of()
     if not M.WRITES.rows then error("adding rows to the game's tables is switched off in this version of Wax", 0) end
-    if joined() then
-        error("a row cannot be added in a game that someone else hosts, because the host's game would not have it. "
-            .. "game.IsHost says whether this player is the host", 0)
-    end
     local record, object, plan = table_of(self)
     if type(name) ~= "string" then error(("a row name is a string such as \"%s_Quick_Axe\", got %s"):format(owner, type(name)), 0) end
     if values ~= nil and type(values) ~= "table" then
@@ -2125,20 +2094,11 @@ function M.count(group) return journal.count(group) end
 
 local function on_map(name)
     at_title = name == M.TITLE
-    told = {}
     -- a put-back that failed is tried again on every new map
     requeue(true)
     if at_title then
         title_due = true
         schedule()
-    elseif not timers.join then
-        -- once the new game has settled: is it someone else's?
-        local previous = scope.enter(nil)
-        timers.join = task.delay(M.summary_seconds, function()
-            timers.join = nil
-            if joined() then tell(journal.owners()) end
-        end)
-        scope.leave(previous)
     end
 end
 

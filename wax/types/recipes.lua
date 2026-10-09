@@ -51,9 +51,6 @@
 ---that. As soon as the player cannot pay what the recipe takes, the making is dropped without a message, and nothing is
 ---lost. So change recipes when the mod loads if a player should never see one change while it is being made.
 ---
----In a game someone else hosts, a change is made on this PC only. The host works from its own tables and decides what is
----taken, what is made and how long it takes.
----
 ---Names of items, benches, recipes and nodes are matched without regard to letter case. A name the game does not have
 ---raises an error that suggests the nearest ones.
 ---

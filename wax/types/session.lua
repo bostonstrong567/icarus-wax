@@ -1,7 +1,7 @@
 ---@meta _
 
 ---The time of day in the prospect, game.Time. Each field asks the game when it is read. Every field is nil while you
----are not in a prospect. No field can be assigned: the host moves the clock with Set.
+---are not in a prospect. No field can be assigned: Set moves the clock.
 ---@class WaxTime
 ---@field Hour integer? The hour of the game's clock, from 0 to 23.
 ---@field Minute integer? The minute within the hour, from 0 to 59.
@@ -12,8 +12,7 @@
 ---@field HourChanged WaxSignal<fun(hour: integer, previous: integer)> Fires when the hour is not what it was at the last look. Looked at twice a second, and only while a handler is connected. It does not fire for the hour that is found when you connect, nor for the first hour found on another map.
 local Time = {}
 
----Moves the game's clock forward to a time later today, for the host only: in someone else's game it raises an error
----that says so. The game's clock only goes forward within a day. It would count an earlier time as the next day, and
+---Moves the game's clock forward to a time later today. The game's clock only goes forward within a day. It would count an earlier time as the next day, and
 ---Wax does not do that yet, so an earlier time raises an error that says what the clock shows. The minute the clock is
 ---already in changes nothing.
 ---@param hour integer From 0 to 23.

@@ -145,8 +145,6 @@ function DataTable:Meta() end
 function DataTable:Stamp() end
 
 ---Gives one field of a row a new value in the game. It is written before Set returns, so whatever the game reads from the row next is the new value.
----In a game someone else hosts, this changes the tables on this PC only: the host works from its own tables and decides what
----really happens. The player is told so once for each mod, in each game they join. `game.IsHost` says which it is.
 ---`field` is a whole field of the row, such as "Inputs", not a path into one.
 ---The value is whole: a struct with each of its fields, a list with each of its entries, as Change hands it to its function.
 ---Row gives the same, except that it leaves an enum inside a struct out until that enum's own path is named
@@ -201,7 +199,6 @@ function DataTable:Change(row, field, fn) end
 ---lists. The game still makes it when something asks for it by name. A row of another table is left as it is.
 ---A row that could not be switched off like that in this version is refused as the row to start from, with an error that says why.
 ---A row of the game is never replaced or removed.
----In a game someone else hosts, Add raises an error, because the host's game would not have the row.
 ---While adding rows is switched off in a version of Wax, Add raises an error that says so.
 ---@param name string
 ---@param values? table<string, any> Fields of the new row, each as Set takes it.
