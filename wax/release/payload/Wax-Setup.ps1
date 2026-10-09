@@ -607,7 +607,7 @@ function Install-Wax {
     Write-Host 'Next:'
     Write-Host '  1. Start ICARUS.'
     Write-Host '  2. Press F8 in the game to open the Wax menu.'
-    Write-Host '  3. Put your mods in this folder, one folder per mod. Prospector''s Codex is there already.'
+    Write-Host '  3. Add mods on the Browse page of the menu, or put your own in this folder, one folder per mod.'
     Write-Host ('       ' + (Combine $wax 'mods'))
     Write-Host ''
     Write-Host "Docs: $DocsUrl"

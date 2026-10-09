@@ -3,10 +3,9 @@
 .SYNOPSIS
   Builds the player download for Wax: build\Wax-<version>.zip, and the signed list of the release's files.
 .DESCRIPTION
-  The zip holds a "game" folder (the UE4SS build Wax is tested on, with Wax at ue4ss\Mods\Wax and the mod that
-  comes with it, Prospector's Codex, at ue4ss\Mods\Wax\mods\RecipeBrowser), the installer files from wax\release\payload, README.txt and the licences.
+  The zip holds a "game" folder (the UE4SS build Wax is tested on, with Wax at ue4ss\Mods\Wax and an empty mods
+  folder), the installer files from wax\release\payload, README.txt and the licences.
   UE4SS goes in as its own zip has it, except that its cheat and console mods are switched off in mods.txt and mods.json.
-  Prospector's Codex gets a wax.origin file with its version, which is what lets Wax update it from the catalogue.
   Everything in it is a real file: no junctions are followed or copied. The version comes from wax\VERSION.
   Every Lua file that goes in is compiled with tools\lua\lua54\lua.exe first, and the build fails if one does not.
 
@@ -28,7 +27,6 @@ param([switch]$KeepStage, [switch]$Unsigned)
 $ue4ssZip = Join-Path $ToolsDir 'ue4ss\UE4SS_v3.0.1-1152-ge3ba1016.zip'
 $runtime  = Join-Path $Root 'wax\runtime'
 $payload  = Join-Path $Root 'wax\release\payload'
-$bundled  = Join-Path $Root 'luamods\RecipeBrowser'
 $lua      = Join-Path $ToolsDir 'lua\lua54\lua.exe'
 # UE4SS's own mods that open the game's console and cheat commands. Wax needs none of them.
 $cheatMods = 'CheatManagerEnablerMod', 'ConsoleCommandsMod', 'ConsoleEnablerMod'
@@ -36,13 +34,9 @@ $cheatMods = 'CheatManagerEnablerMod', 'ConsoleCommandsMod', 'ConsoleEnablerMod'
 $version = (Get-Content (Join-Path $Root 'wax\VERSION') -Raw).Trim()
 if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "wax\VERSION should hold a version like 0.1.0, not '$version'." }
 foreach ($needed in $ue4ssZip, (Join-Path $runtime 'Scripts\main.lua'), (Join-Path $runtime 'bin\waxco.dll'), (Join-Path $runtime 'bin\waxnet.dll'),
-        (Join-Path $bundled 'init.lua'), (Join-Path $bundled 'mod.lua'), $lua) {
+        $lua) {
     if (-not (Test-Path -LiteralPath $needed)) { throw "Missing: $needed" }
 }
-# The mod that comes with Wax is also in the catalogue. Its version is written beside it, so Wax can tell when a newer one is out.
-$bundledVersion = [regex]::Match((Get-Content -LiteralPath (Join-Path $bundled 'mod.lua') -Raw), '(?m)^\s*version\s*=\s*"([0-9A-Za-z][0-9A-Za-z._+-]{0,31})"').Groups[1].Value
-if (-not $bundledVersion) { throw 'luamods\RecipeBrowser\mod.lua gives no version.' }
-
 # The installer that ships looks at the project's own releases and nowhere else. A copy changed for a test must never go out.
 $key = Get-ReleaseKey
 $installer = Get-Content -LiteralPath (Join-Path $payload 'Wax-Setup.ps1') -Raw
@@ -102,15 +96,9 @@ foreach ($item in Get-ChildItem -LiteralPath $runtime -Force) {
     Copy-Item -LiteralPath $item.FullName -Destination $wax -Recurse
     $copied += $item.Name
 }
-foreach ($folder in 'saved', 'run\in', 'run\out', 'mods\RecipeBrowser') { New-Item -ItemType Directory -Force (Join-Path $wax $folder) | Out-Null }
+foreach ($folder in 'saved', 'run\in', 'run\out', 'mods') { New-Item -ItemType Directory -Force (Join-Path $wax $folder) | Out-Null }
 if (-not (Test-Path -LiteralPath (Join-Path $wax 'enabled.txt'))) { Set-Content -LiteralPath (Join-Path $wax 'enabled.txt') -Value '' }
 [System.IO.File]::WriteAllText((Join-Path $wax 'VERSION'), "$version`r`n", [System.Text.Encoding]::ASCII)
-
-# The mod that comes with Wax, without editor files that point into this workspace.
-foreach ($item in Get-ChildItem -LiteralPath $bundled -Force | Where-Object { -not $_.Name.StartsWith('.') }) {
-    Copy-Item -LiteralPath $item.FullName -Destination (Join-Path $wax 'mods\RecipeBrowser') -Recurse
-}
-[System.IO.File]::WriteAllText((Join-Path $wax 'mods\RecipeBrowser\wax.origin'), "id=RecipeBrowser`r`nversion=$bundledVersion`r`n", [System.Text.Encoding]::ASCII)
 
 $links = @(Get-ChildItem -LiteralPath $stage -Recurse -Force -Attributes ReparsePoint)
 if ($links.Count) { throw "Links ended up in the release: $($links.FullName -join ', ')" }
@@ -174,7 +162,7 @@ try {
         'game/ue4ss/Mods/Wax/VERSION', 'game/ue4ss/Mods/Wax/Scripts/main.lua', 'game/ue4ss/Mods/Wax/bin/waxco.dll',
         'game/ue4ss/Mods/Wax/bin/waxnet.dll', 'game/ue4ss/Mods/Wax/Scripts/wax/mods/update.lua',
         'game/ue4ss/Mods/Wax/Scripts/selfswap.lua', 'game/ue4ss/Mods/Wax/Scripts/wax/mods/selfupdate.lua',
-        'game/ue4ss/Mods/Wax/mods/RecipeBrowser/init.lua', 'game/ue4ss/Mods/Wax/mods/RecipeBrowser/wax.origin',
+        'game/ue4ss/Mods/Wax/mods/',
         'game/ue4ss/Mods/Wax/saved/', 'game/ue4ss/Mods/Wax/run/in/',
         'game/ue4ss/Mods/Wax/run/out/'
     $missing = @($must | Where-Object { $_ -notin $names })

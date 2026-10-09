@@ -158,7 +158,7 @@ function Test-Closed([string]$Label, [string]$Wax) {
     Check "${Label}: the folder above Wax is as it was: it still takes its rules from the game folder" (-not $above.AreAccessRulesProtected -and (Get-Rules (Split-Path $Wax)) -eq '')
 }
 
-$playerFiles = "$waxPath\mods\MyMod\init.lua", "$waxPath\mods\MyMod\mod.lua", "$waxPath\mods\RecipeBrowser\init.lua",
+$playerFiles = "$waxPath\mods\MyMod\init.lua", "$waxPath\mods\MyMod\mod.lua",
     "$waxPath\saved\MyMod.settings.lua", "$waxPath\saved\wax.interface.lua", 'ue4ss\Mods\OtherMod\Scripts\main.lua'
 
 function Add-PlayerFiles([string]$Win64) {
@@ -166,7 +166,6 @@ function Add-PlayerFiles([string]$Win64) {
     New-Item -ItemType Directory -Force (Join-Path $wax 'mods\MyMod'), (Join-Path $Win64 'ue4ss\Mods\OtherMod\Scripts') | Out-Null
     Set-Content -LiteralPath (Join-Path $wax 'mods\MyMod\init.lua') -Value 'print("mine")'
     Set-Content -LiteralPath (Join-Path $wax 'mods\MyMod\mod.lua') -Value 'return { name = "MyMod" }'
-    Add-Content -LiteralPath (Join-Path $wax 'mods\RecipeBrowser\init.lua') -Value '-- changed by the player'
     Set-Content -LiteralPath (Join-Path $wax 'saved\MyMod.settings.lua') -Value 'return { on = true }'
     Set-Content -LiteralPath (Join-Path $wax 'saved\wax.interface.lua') -Value 'return { scale = 1.25 }'
     Set-Content -LiteralPath (Join-Path $wax 'run\session.log') -Value 'what happened last time'
@@ -214,12 +213,11 @@ function Test-Cycle([string]$Label, [string[]]$Locate, [string]$Win64, [hashtabl
     Check "${Label}: install says what to do next" ($run.Text -match 'Press F8' -and $run.Text.Contains('https://wax-icarus.duckdns.org/'))
     Test-Installed "$Label install" $Win64 $Expected
     $diff = Compare-Tree $Expected (Get-Tree $Win64 -Skip 'Icarus-Win64-Shipping.exe', 'tbb12.dll', "$waxPath\run\links.txt")
-    Check "${Label}: a first install is the zip's game folder exactly, UE4SS settings and Prospector's Codex included" ($diff.Count -eq 0) (($diff | Select-Object -First 5) -join '; ')
-    Check "${Label}: Prospector's Codex is there" (Test-Path -LiteralPath (Join-Path $wax 'mods\RecipeBrowser\init.lua'))
+    Check "${Label}: a first install is the zip's game folder exactly, UE4SS settings included" ($diff.Count -eq 0) (($diff | Select-Object -First 5) -join '; ')
+    Check "${Label}: no mod comes with Wax" (@(Get-ChildItem -LiteralPath (Join-Path $wax 'mods') -Force).Count -eq 0)
     Check "${Label}: the installed copy is free to update itself: it has a VERSION file and no dev.txt" ((Test-Path -LiteralPath (Join-Path $wax 'VERSION')) -and
         -not (Test-Path -LiteralPath (Join-Path $wax 'dev.txt')))
-    Check "${Label}: Prospector's Codex is marked as a mod from the catalogue, and the helper that updates it is installed" ((Test-Path -LiteralPath (Join-Path $wax 'mods\RecipeBrowser\wax.origin')) -and
-        (Test-Path -LiteralPath (Join-Path $wax 'bin\waxnet.dll')))
+    Check "${Label}: the helper that updates mods is installed" (Test-Path -LiteralPath (Join-Path $wax 'bin\waxnet.dll'))
     Check "${Label}: the version file says $version" ((Get-Content -LiteralPath (Join-Path $wax 'VERSION') -Raw).Trim() -eq $version)
     Check "${Label}: nothing was backed up on a clean game" (-not (Test-Path (Join-Path $Win64 'ue4ss-backup-*')))
     Check "${Label}: the install asked about the `"Add to game`" button, and Enter alone left Windows as it was" ($run.Text -match 'Windows has to hand links that start with' -and
@@ -379,13 +377,7 @@ foreach ($item in Get-ChildItem -LiteralPath $runtime -Force | Where-Object { $_
 }
 $diff = Compare-Tree $waxSource (Get-Tree (Join-Path $package "game\$waxPath") -Skip 'mods\*', 'VERSION')
 Check "Wax in the zip is wax\runtime, file for file ($($waxSource.Count) files)" ($diff.Count -eq 0) (($diff | Select-Object -First 5) -join '; ')
-$bundledSource = Get-Tree (Join-Path $Root 'luamods\RecipeBrowser') -Skip '.*', 'wax.origin'
-$diff = Compare-Tree $bundledSource (Get-Tree (Join-Path $package "game\$waxPath\mods\RecipeBrowser") -Skip 'wax.origin')
-Check 'the mod in the zip is luamods\RecipeBrowser without editor files' ($diff.Count -eq 0) ($diff -join '; ')
-$origin = Join-Path $package "game\$waxPath\mods\RecipeBrowser\wax.origin"
-$modVersion = [regex]::Match((Get-Content -LiteralPath (Join-Path $Root 'luamods\RecipeBrowser\mod.lua') -Raw), '(?m)^\s*version\s*=\s*"([^"]+)"').Groups[1].Value
-Check "the mod in the zip is marked as coming from the catalogue at version $modVersion, so Wax can update it" ($modVersion -and (Test-Path -LiteralPath $origin) -and
-    [System.IO.File]::ReadAllText($origin) -ceq "id=RecipeBrowser`r`nversion=$modVersion`r`n")
+Check 'the zip holds no mod' (@(Get-ChildItem -LiteralPath (Join-Path $package "game\$waxPath\mods") -Force).Count -eq 0)
 Check 'the zip has both helpers and the updater' ((Test-Path -LiteralPath (Join-Path $package "game\$waxPath\bin\waxco.dll")) -and
     (Test-Path -LiteralPath (Join-Path $package "game\$waxPath\bin\waxnet.dll")) -and (Test-Path -LiteralPath (Join-Path $package "game\$waxPath\Scripts\wax\mods\update.lua")))
 Check 'UE4SS loads Wax through enabled.txt' (Test-Path -LiteralPath (Join-Path $package "game\$waxPath\enabled.txt"))
@@ -760,9 +752,11 @@ Check 'and by an uninstall of this copy' ($run.Code -eq 0 -and (Get-Link) -ceq $
 
 # Uninstall in each of its three states: Wax is a folder, Wax is already gone, Wax is a link (that one is with the other link tests above).
 $null = Invoke-Setup (@('-Action', 'Install', '-ModLinks', 'Yes') + $askArgs)
+New-Item -ItemType Directory -Force (Join-Path $askWax 'mods/Mine') | Out-Null
+Set-Content -LiteralPath (Join-Path $askWax 'mods/Mine/init.lua') -Value 'print(1)'
 $run = Invoke-Setup (@('-Action', 'Uninstall', '-RemoveMyFiles', 'No', '-RemoveUE4SS', 'No') + $askArgs)
 Check 'uninstall takes the registration away with Wax, also when the player''s mods and UE4SS stay' ($run.Code -eq 0 -and (Get-Link) -eq '' -and $run.Text -match 'The registry entry for them is removed' -and
-    (Test-Path -LiteralPath (Join-Path $askWax 'mods\RecipeBrowser\init.lua'))) "$(Get-Link) $($run.Text)"
+    (Test-Path -LiteralPath (Join-Path $askWax 'mods/Mine/init.lua'))) "$(Get-Link) $($run.Text)"
 $null = Invoke-Setup (@('-Action', 'Install', '-ModLinks', 'Yes') + $askArgs)
 Remove-Item -LiteralPath $askWax -Recurse -Force
 $run = Invoke-Setup (@('-Action', 'Uninstall', '-RemoveUE4SS', 'No') + $askArgs)

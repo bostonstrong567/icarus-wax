@@ -30,7 +30,7 @@ Wax is for ICARUS on Steam, on Windows.
 The extension needs Wax in your game. Wax comes as one zip.
 
 1. Open the [install page](https://wax-icarus.duckdns.org/docs/install/) and download the zip. Its name carries
-   the version, for example `Wax-0.3.9.zip`.
+   the version, for example `Wax-0.3.10.zip`.
 2. Close ICARUS and unzip the whole file.
 3. Double-click `Install Wax.cmd`. It finds the game through Steam and copies the files.
 4. Start ICARUS and press **F8**. The Wax menu opens.
@@ -48,7 +48,7 @@ You can also install by hand. Copy the contents of the zip's `game` folder into
 | `game` | Everything that goes into `Binaries\Win64`: `dwmapi.dll` and the `ue4ss` folder. |
 
 UE4SS, the script loader Wax runs on, is in the zip, so you install nothing else. Wax itself is at
-`ue4ss\Mods\Wax`, and the mod that comes with it, Prospector's Codex, is at `ue4ss\Mods\Wax\mods\RecipeBrowser`.
+`ue4ss\Mods\Wax`, and your mods go in `ue4ss\Mods\Wax\mods`.
 
 Installing again over an old copy updates Wax. It keeps your own mods (`Wax\mods`) and your settings (`Wax\saved`).
 

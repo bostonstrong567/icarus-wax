@@ -56,14 +56,13 @@ Nothing starts with Windows. Wax runs inside the game and only while the game ru
 sends no usage data.
 
 In the game, Wax uses the network for updates and for the list of mods you open yourself, and for nothing else. It asks the catalogue at
-`wax-icarus.duckdns.org` whether a newer Wax is out, and, when a mod from the mods page is installed (Prospector's
-Codex, which comes with Wax, is one), whether that mod has a newer version. It asks shortly after the game
+`wax-icarus.duckdns.org` whether a newer Wax is out, and, when a mod from the mods page is installed, whether that mod has a newer version. It asks shortly after the game
 starts, then every six hours. A newer version is downloaded file by file. The list of its files must carry
 the signature described below, and each file must match the list. Only then is anything replaced. The
 version before is kept. What is sent is the name and version of what is fetched and the version of Wax,
 nothing about you or your game. A mod you wrote or copied in yourself is never asked about and never
 changed: Wax only updates a folder that holds a `wax.origin` file. The "Add to game" button writes that
-file, and the Prospector's Codex in the download comes with one.
+file.
 The Browse page of the Wax menu asks the catalogue for its list of mods when you open it, and for a mod's
 description and pictures when you open that mod. A mod you add there is fetched the same signed way and stays
 switched off until you switch it on.
@@ -120,7 +119,7 @@ PowerShell that check a zip against the list and the key:
 | [`wax/cli`](wax/cli) | Command-line tools that talk to the running game: run Lua, read the log, measure frame time. They need developer mode, see below. |
 | [`wax/release`](wax/release) | The installer and its tests. |
 | [`wax/tests`](wax/tests) | Tests that run without the game (`offline`) and tests that are sent to the running game (`live`). |
-| [`luamods`](luamods) | Two mods to read: `RecipeBrowser`, which is Prospector's Codex, the mod that comes with the download (it was called Recipe Browser before 0.3.0), and `EntityESP`. |
+| [`luamods`](luamods) | Two mods to read: `RecipeBrowser`, which is Prospector's Codex (it was called Recipe Browser before 0.3.0), and `EntityESP`. |
 | [`wax/examples`](wax/examples) | `Hello`, a small mod to start from. |
 | [`scripts`](scripts) | The build and test scripts. |
 

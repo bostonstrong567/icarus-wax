@@ -84,17 +84,15 @@ Mods go in this folder, one folder per mod:
 
   ...\Binaries\Win64\ue4ss\Mods\Wax\mods
 
-A mod is a folder with an init.lua in it. One mod comes with Wax:
-Prospector's Codex, which shows every item with its recipes and every
-creature beside your inventory. Before Wax 0.3.0 it was called Recipe
-Browser, and its folder is still named RecipeBrowser. The docs explain how
-to write your own.
+A mod is a folder with an init.lua in it. No mod comes with Wax: add one on
+the Browse page of the Wax menu or on the Wax site. The docs explain how to
+write your own.
 
 A mod is code. Once it is switched on it can do what any program on your PC
 can do. Only add mods from people you trust.
 
 Mods added with the "Add to game" button on the Wax site keep themselves up to
-date, and so does Prospector's Codex. While the game runs, Wax asks the mod
+date. While the game runs, Wax asks the mod
 catalogue at wax-icarus.duckdns.org whether a newer version is out, downloads
 it and puts it in. The version before stays in the mods folder, under a name
 that starts with ".removed-". A mod you wrote or copied in yourself is never
@@ -225,9 +223,8 @@ With the installer:
 By hand:
   Download the newest zip and copy the contents of "game" into Win64 again.
   Say yes when Windows asks to replace files. Your own mods and your settings
-  are not in the zip, so they stay. Two things are replaced by the copies from
-  the zip: mods\RecipeBrowser, and the UE4SS settings files (UE4SS-settings.ini,
-  mods.txt, mods.json).
+  are not in the zip, so they stay. The UE4SS settings files are replaced by
+  the copies from the zip (UE4SS-settings.ini, mods.txt, mods.json).
 
 
 REMOVE
