@@ -907,7 +907,7 @@ t.test("init: a view plugged in is started once, in a task, with what any view n
     t.eq(got.given, got.app, "it is given what the mod gives other mods")
     ticks(5)
     local app = got.app
-    for _, name in ipairs({ "text", "settings", "save", "job", "rows", "search", "format", "favourites", "history", "set_key",
+    for _, name in ipairs({ "text", "settings", "save", "job", "rows", "search", "format", "favourites", "history",
         "read_at_start", "failed" }) do
         t.ok(app[name] ~= nil, "the view is given " .. name)
     end
@@ -916,10 +916,9 @@ t.test("init: a view plugged in is started once, in a task, with what any view n
     t.eq(#got.refreshed, 0)
     t.eq(app.job.stage(), 0)
     t.eq(#got.hotkeys, 1)
-    t.eq(got.hotkeys[1].key, "F7")
+    t.eq(got.hotkeys[1].key, "F10")
     t.eq(got.hotkeys[1].in_menu, true, "the key also closes, so it works while the menu is open")
-    t.eq(got.keys[1], "F7", "the view is told the key, to show it")
-    t.eq(got.notices[1], "Press F7 to open the Prospector's Codex.")
+    t.eq(got.notices[1], "Press F10 to open the Prospector's Codex.")
     t.eq(got.saved.settings.welcomed, true, "said once")
     -- the view asks for the tables, as it would when it first shows
     app.job.want()
@@ -945,40 +944,6 @@ t.test("init: a view plugged in is started once, in a task, with what any view n
     t.eq(got.world.stats.budgets[asked + 1], 4)
     got.owner:destroy()
     t.eq(#guard.errors(), 0, guard.errors()[1] and guard.errors()[1].trace or "")
-end)
-
-t.test("init: the open key is kept in the settings, the key of the Wax menu is refused, and the view is told each time", function()
-    local got = start_mod({ saved = { settings = { welcomed = true } } })
-    ticks(3)
-    local app = got.app
-    t.eq(#got.notices, 0, "the welcome was said before")
-    t.eq(app.set_key("F8"), false, "the menu's own key")
-    t.eq(app.settings.key, "F7")
-    t.eq(got.keys[#got.keys], "F7 refused")
-    t.eq(#got.hotkeys, 1)
-    t.eq(app.set_key("F9"), true)
-    t.eq(got.saved.settings.key, "F9")
-    t.eq(got.hotkeys[1].on, false, "the old key is let go")
-    t.eq(got.hotkeys[2].key, "F9")
-    t.eq(got.keys[#got.keys], "F9")
-    -- the player gives the Wax menu that key afterwards: the mod's key is off until one of the two changes
-    got.menu_key = "F9"
-    got.key_changed:Fire("F9")
-    t.eq(got.hotkeys[2].on, false)
-    t.eq(#got.hotkeys, 2)
-    t.eq(app.hotkey, nil)
-    t.eq(got.keys[#got.keys], "F9 refused")
-    got.menu_key = "F8"
-    got.key_changed:Fire("F8")
-    t.eq(got.hotkeys[3].key, "F9")
-    t.eq(got.hotkeys[3].on, true)
-    t.eq(got.keys[#got.keys], "F9")
-    got.owner:destroy()
-    -- the key from the settings is the one bound the next time
-    local later = start_mod({ saved = got.saved })
-    ticks(3)
-    t.eq(later.hotkeys[1].key, "F9")
-    later.owner:destroy()
 end)
 
 t.test("init: the read starts by itself when the setting says so, and again when game.Data says it changed", function()
@@ -1400,7 +1365,7 @@ if exists(folder .. "/creature_view.lua") then
         t.eq(shows(p.star), true, "the star keeps it on the shelf")
         t.eq(app.history:top().creature, "horse")
         t.eq(app.history:top().mode, "about")
-        t.eq(fake.last(p.previous.widget, "SetIsEnabled")[2], false, "nothing was looked at before it")
+        t.eq(p.previous.disabled, true, "nothing was looked at before it")
         -- a group no taming row names has that tab switched off
         click(p.back)
         frames(2)
@@ -1408,7 +1373,7 @@ if exists(folder .. "/creature_view.lua") then
         t.eq(shows(p.grid), true, "one press and the list is back")
         t.eq(app.history:count(), 0)
         press(p.grid, creature("forest_deer"))
-        t.eq(fake.last(p.tabs.taming.widget, "SetIsEnabled")[2], false)
+        t.eq(p.tabs.taming.disabled, true)
         t.eq(shows(p.variants[1]), true, "the deer and the large deer")
         t.eq(#guard.errors(), 0, guard.errors()[1] and guard.errors()[1].trace or "")
     end)
@@ -1486,7 +1451,7 @@ if exists(folder .. "/creature_view.lua") then
         repeat
             for _, part in ipairs(p.sections) do found = found + #slots_of(part) end
             turned = turned + 1
-            local more = fake.last(p.turn.forth.widget, "SetIsEnabled")[2] == true and shows(p.turn.row)
+            local more = p.turn.forth.disabled == false and shows(p.turn.row)
             if more then
                 click(p.turn.forth)
                 frames(2)
@@ -1515,7 +1480,7 @@ if exists(folder .. "/creature_view.lua") then
         t.eq(app.history:count(), 2, "the deer, then the leather")
         t.eq(shows(view.sides.row), false, "an item's page has its back row where the two tabs were")
         t.eq(view.sides.back_to, "Bestiary", "and its back button reads the list it goes to")
-        t.eq(fake.last(view.sides.previous.widget, "SetIsEnabled")[2], true, "the deer can be stepped back to")
+        t.eq(view.sides.previous.disabled, false, "the deer can be stepped back to")
         -- Backspace: the thing looked at before, item or creature
         fake.keys.BackSpace = true
         frames(1)
@@ -1563,7 +1528,7 @@ if exists(folder .. "/creature_view.lua") then
         t.eq(p.variants[2]:GetLook(9) ~= nil, true)
         t.eq(text_of(p.word), "Friendly")
         t.eq(text_of(p.facts), "From the Workshop")
-        t.eq(fake.last(p.tabs.taming.widget, "SetIsEnabled")[2], true)
+        t.eq(p.tabs.taming.disabled, false)
         click(p.tabs.taming)
         frames(2)
         t.eq(text_of(p.sections[1].text), "It comes tamed from the Workshop.")
@@ -1612,7 +1577,7 @@ if exists(folder .. "/creature_view.lua") then
         frames(2)
         t.eq(beasts.page(), "bear")
         t.eq(app.history:count(), 3)
-        t.eq(fake.last(p.previous.widget, "SetIsEnabled")[2], true)
+        t.eq(p.previous.disabled, false)
         -- the game changes and the bear is gone from the creatures
         local c = app.beasts.model
         local bear = c.entries.bear
@@ -1699,7 +1664,7 @@ if exists(folder .. "/creature_view.lua") then
                             t.ok(L.beast_head + L.beast_extra(false, variants, pager) + tall <= L.room,
                                 where .. ": " .. tall .. " units of sections with " .. variants .. " lines of variants")
                             drawn = drawn + 1
-                            local more = pager and fake.last(p.turn.forth.widget, "SetIsEnabled")[2] == true
+                            local more = pager and p.turn.forth.disabled == false
                             if more then
                                 click(p.turn.forth)
                                 frames(1)
@@ -1736,7 +1701,7 @@ if exists(folder .. "/creature_view.lua") then
                 end
             end
             turned = turned + 1
-            local more = not found and shows(p.turn.row) and fake.last(p.turn.forth.widget, "SetIsEnabled")[2] == true
+            local more = not found and shows(p.turn.row) and p.turn.forth.disabled == false
             if more then
                 click(p.turn.forth)
                 frames(1)
@@ -1779,7 +1744,7 @@ if exists(folder .. "/creature_view.lua") then
         fake.keys[name] = nil
         frames(2)
     end
-    local function turned_on(button) return fake.last(button.widget, "SetIsEnabled")[2] == true end
+    local function turned_on(button) return button.disabled == false end
 
     -- What the tab of the open creature says over all its pages: a table a section, as the controls hold it.
     local function tab_drawn()
@@ -2502,7 +2467,7 @@ if exists(folder .. "/creature_view.lua") then
         end
         frames(3)
         t.eq(app.beasts.off(), true)
-        t.eq(fake.last(view.sides.beasts.widget, "SetIsEnabled")[2], false, "the tab is switched off")
+        t.eq(view.sides.beasts.disabled, true, "the tab is switched off")
         click(view.sides.beasts)
         frames(2)
         t.eq(beasts.visible(), false, "and pressing it changes nothing")
@@ -3032,7 +2997,7 @@ if exists(folder .. "/creature_view.lua") then
             local variants = (shows(q.variants[1]) and 1 or 0) + (shows(q.variants[2]) and 2 or 0)
             local used = L.beast_head + L.beast_extra(true, variants, shows(q.turn.row)) + 2 * L.beast_heights.small + sections_tall(q, L)
             t.ok(used <= L.room, "page " .. pages_seen .. ": " .. used .. " of " .. L.room)
-            local more = shows(q.turn.row) and fake.last(q.turn.forth.widget, "SetIsEnabled")[2] == true
+            local more = shows(q.turn.row) and q.turn.forth.disabled == false
             if more then
                 click(q.turn.forth)
                 frames(1)
@@ -3166,7 +3131,7 @@ if exists(folder .. "/creature_view.lua") then
                     t.ok(used <= L.room, where .. ": " .. used .. " of " .. L.room)
                     drawn = drawn + 1
                     if page > 1 then later = later + 1 end
-                    local more = pager and fake.last(q.turn.forth.widget, "SetIsEnabled")[2] == true
+                    local more = pager and q.turn.forth.disabled == false
                     if more then
                         click(q.turn.forth)
                         frames(1)
@@ -3310,7 +3275,7 @@ if exists(folder .. "/creature_view.lua") then
         changed_map:Fire("Outpost_DEV")
         frames(3)
         t.eq(shows(q.map_row), true)
-        t.eq(fake.last(q.map_only.widget, "SetIsEnabled")[2], false, "switched off")
+        t.eq(q.map_only.disabled, true, "switched off")
         t.eq(shows(q.no_map), true)
         t.eq(text_of(q.no_map), "No creature list for this map.")
         t.eq(#app.rows.wrap(text_of(q.no_map), 212 * 0.94, 10), 1, "one line")
@@ -3331,7 +3296,7 @@ if exists(folder .. "/creature_view.lua") then
         changed_map:Fire("Terrain_021")
         frames(3)
         t.eq(shows(q.map_row), true)
-        t.eq(fake.last(q.map_only.widget, "SetIsEnabled")[2], true)
+        t.eq(q.map_only.disabled, false)
         t.eq(table.concat(listed(q.grid), " "), "bee dog")
         -- a creature's page hides the band, the list brings it back
         press(q.grid, creature("bee"))
@@ -3449,14 +3414,14 @@ if exists(folder .. "/creature_view.lua") then
         end
         t.eq(q.order:Get(), "Most health", "the order chosen before")
         t.eq(table.concat(listed(q.grid), " "), "dog bear horse forest_deer forest_wolf", "what the outpost has, the most health first")
-        t.eq(fake.last(q.order.widget, "SetIsEnabled")[2], true, "the order can be chosen")
+        t.eq(q.order.disabled, false, "the order can be chosen")
         run.owner:destroy()
         frames(2)
         -- a game that refuses map and curve fields: the game's order, and the dropdown cannot be opened
         local plain, r = with_bestiary({ saved = { settings = { welcomed = true, beast_order = "health" } } })
         frames(30)
         t.eq(r.order:Get(), "Game order")
-        t.eq(fake.last(r.order.widget, "SetIsEnabled")[2], false)
+        t.eq(r.order.disabled, true)
         t.eq(table.concat(listed(r.grid), " "), "forest_wolf forest_deer horse bear bee dog alpha_wolf_boss")
         t.eq(cell_of(r.grid, creature("bear")).count, nil)
         t.eq(plain.saved.settings.beast_order, "health", "what was chosen is kept for a game that serves them")

@@ -65,7 +65,12 @@ function Control:Destroy()
 end
 
 function Control:SetVisible(shown)
-    (self.cell or self.widget):SetVisibility(shown and V.Visible or V.Collapsed)
+    self.hidden = not shown
+    if self.cell then
+        self.cell:SetVisibility(shown and V.Visible or V.Collapsed)
+    else
+        self.widget:SetVisibility(shown and (self.disabled and V.HitTestInvisible or V.Visible) or V.Collapsed)
+    end
     -- in a row, what is hidden leaves its width to the others: text fitted to a share of the row is fitted again
     local share = self.share
     if share and (share.hidden or false) ~= not shown then
@@ -76,9 +81,11 @@ function Control:SetVisible(shown)
     end
 end
 
+-- A control that is off keeps its shape and size: it is dimmer and takes no clicks. The engine's own disabled look washes boxes out.
 function Control:SetEnabled(enabled)
-    self.widget:SetIsEnabled(enabled and true or false)
-    self.widget:SetRenderOpacity(enabled and 1 or 0.45)
+    self.disabled = not enabled
+    if self.cell or not self.hidden then self.widget:SetVisibility(enabled and V.Visible or V.HitTestInvisible) end
+    self.widget:SetRenderOpacity(enabled and 1 or 0.5)
     -- no hand cursor over a control that cannot be pressed
     if self.source and self.pointer ~= false then
         self.source:SetCursor(enabled and style.Cursor.Hand or style.Cursor.Default)

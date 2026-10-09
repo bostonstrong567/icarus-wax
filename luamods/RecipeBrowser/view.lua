@@ -1917,9 +1917,9 @@ function view.start(app)
             station_at = now
             check_station()
         end
-        -- with the Wax menu they come up too, but not over the escape menu: the column would cover its buttons
+        -- the Wax menu does not bring them up: that is the open key's work. Never over the escape menu
         local escape = play and name == "UMG_EscapeMenu"
-        local there = state.on and (state.bare or near or (play and not escape and (ui.IsOpen() or ui.IsPreview())))
+        local there = state.on and (state.bare or near or (play and not escape and ui.IsPreview()))
         state.there = there == true
         swap()
         favourites:SetVisible(there and not state.replace)

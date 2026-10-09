@@ -704,11 +704,11 @@ t.test("the Mods page has the updater's button, a switch on the card of each mod
     state.checking = true
     refresh()
     t.eq(text_of(shown.line), "Checking ...")
-    t.eq(fake.count(shown.check.widget, "SetIsEnabled"), 0)
+    t.eq(shown.check.disabled or false, false)
     state.stopped = true
     refresh()
-    t.eq(fake.last(shown.check.widget, "SetIsEnabled")[2], false, "without the helper the button is disabled")
-    t.eq(fake.last(panel.card("Hello").auto.widget, "SetIsEnabled")[2], false, "and so is the mod's switch")
+    t.eq(shown.check.disabled, true, "without the helper the button is disabled")
+    t.eq(panel.card("Hello").auto.disabled, true, "and so is the mod's switch")
     -- a mod that did not come from the catalogue has no switch
     state.mods = {}
     refresh()
@@ -754,29 +754,29 @@ t.test("the Mods page has one switch for looking for updates: off, Check now and
     t.ok(shown.look, "the switch is there")
     t.eq(shown.look:Get(), true, "and on, as the setting is")
     refresh()
-    t.eq(fake.count(auto().widget, "SetIsEnabled"), 0, "while it is on nothing is greyed")
+    t.eq(auto().disabled or false, false, "while it is on nothing is greyed")
     t.eq(text_of(shown.line), "Not checked yet.")
 
     click(shown.look.source)
     frames(1)
     t.eq(looked[1], false, "the switch tells the updater")
     refresh()
-    t.eq(fake.last(auto().widget, "SetIsEnabled")[2], false, "the mod's Auto Update is greyed")
-    t.eq(fake.last(shown.check.widget, "SetIsEnabled")[2], false, "and so is Check now")
-    t.eq(fake.count(shown.look.widget, "SetIsEnabled"), 0, "the switch itself stays in reach")
+    t.eq(auto().disabled, true, "the mod's Auto Update is greyed")
+    t.eq(shown.check.disabled, true, "and so is Check now")
+    t.eq(shown.look.disabled or false, false, "the switch itself stays in reach")
     t.eq(text_of(shown.line), "Not looking for updates. Nothing is asked of the catalogue.")
 
     state.look = true
     refresh()
     t.eq(shown.look:Get(), true, "it follows the setting when that is changed elsewhere")
-    t.eq(fake.last(auto().widget, "SetIsEnabled")[2], true)
-    t.eq(fake.last(shown.check.widget, "SetIsEnabled")[2], true)
+    t.eq(auto().disabled, false)
+    t.eq(shown.check.disabled, false)
     t.eq(text_of(shown.line), "Not checked yet.")
 
     -- without the helper the switch does nothing either
     state.stopped = true
     refresh()
-    t.eq(fake.last(shown.look.widget, "SetIsEnabled")[2], false)
+    t.eq(shown.look.disabled, true)
 
     ui.SetPreview(false)
     panel.stop()
@@ -792,12 +792,12 @@ t.test("the Mods page has one switch for looking for updates: off, Check now and
     shown = panel.updates
     t.eq(shown.look:Get(), false)
     refresh()
-    t.eq(fake.last(auto().widget, "SetIsEnabled")[2], false)
-    t.eq(fake.last(shown.check.widget, "SetIsEnabled")[2], false)
+    t.eq(auto().disabled, true)
+    t.eq(shown.check.disabled, true)
     -- a card that is built again while nothing is looked for starts greyed too
     state.available.Hello = "0.2.0"
     refresh()
-    t.eq(fake.last(auto().widget, "SetIsEnabled")[2], false)
+    t.eq(auto().disabled, true)
     ui.SetPreview(false)
     panel.stop()
     Wax.update = nil
@@ -1926,6 +1926,59 @@ t.test("every window has an owner with a key of its own: Wax's panel, and each m
     Wax.game = nil
 end)
 
+t.test("a mod's named key runs on its key, can be changed by the player, and a clash is said and not refused", function()
+    Wax.game = { LocalPlayer = { Raw = fake.new_object("PlayerController") } }
+    local codex, lamp = mod("Codex", "The Codex"), mod("Lamp")
+    local opened, lit = 0, 0
+    local open, light
+    scope.run(codex.scope, function() open = ui.Bind("Open", "F10", function() opened = opened + 1 end, { label = "Open the panels" }) end)
+    scope.run(lamp.scope, function() light = ui.Bind("Light", "L", function() lit = lit + 1 end) end)
+    t.eq(open:Get(), "F10")
+    press("F10")
+    frames(1)
+    t.eq(opened, 1)
+    local list = ui.Keys.Binds("Codex")
+    t.eq(#list, 1)
+    t.eq(list[1].Label, "Open the panels")
+    t.eq(list[1].Key, "F10")
+    t.eq(#ui.Keys.Binds(), 2)
+    t.eq(#ui.Keys.Clashes(), 0)
+    t.raises(function() scope.run(codex.scope, function() ui.Bind("Open", "F9", function() end) end) end, "already has a key named 'Open'")
+    -- the same key as another mod's is taken, and both sides are told
+    t.eq(ui.Keys.SetBind("Lamp", "Light", "F10"), true)
+    t.eq(light:Get(), "F10")
+    t.eq(#ui.Keys.Clashes(), 1)
+    t.ok(ui.Keys.Clashes("Lamp")[1]:find("F10 is also used by The Codex (Open the panels)", 1, true), ui.Keys.Clashes("Lamp")[1])
+    t.ok(ui.Keys.Clashes("Codex")[1]:find("Lamp (Light)", 1, true))
+    press("F10")
+    frames(1)
+    t.eq(opened, 2)
+    t.eq(lit, 1, "one press acts on both")
+    -- the Wax menu's key clashes too
+    open:Set("F8")
+    t.ok(ui.Keys.Clashes("Codex")[1]:find("the Wax menu", 1, true), ui.Keys.Clashes("Codex")[1])
+    ui.Keys.SetBind("Codex", "Open", nil)
+    t.eq(open:Get(), nil, "no key at all")
+    t.eq(#ui.Keys.Clashes(), 0)
+    codex.scope:destroy()
+    lamp.scope:destroy()
+    t.eq(#ui.Keys.Binds(), 0)
+    -- a mod that has not run yet: the keys its mod.lua names are known all the same
+    local sleeper = mod("Sleeper")
+    sleeper.manifest.key, sleeper.manifest.keys = "F9", { "F11: Wake up", "not a key line" }
+    local named = ui.Keys.Binds("Sleeper")
+    t.eq(#named, 1)
+    t.eq(named[1].Name, "Wake up")
+    t.eq(named[1].Key, "F11")
+    t.eq(named[1].Declared, true)
+    t.eq(ui.Keys.Get("Sleeper"), "F9", "and the key of its windows")
+    local woke, wake = 0, nil
+    scope.run(sleeper.scope, function() wake = ui.Bind("Wake up", nil, function() woke = woke + 1 end) end)
+    t.eq(wake:Get(), "F11", "ui.Bind with no key takes the one mod.lua names")
+    sleeper.scope:destroy()
+    Wax.game = nil
+end)
+
 t.test("a key is chosen for an owner with ui.Keys.Set: one that is taken is refused and says who has it", function()
     Wax.game = { LocalPlayer = { Raw = fake.new_object("PlayerController") } }
     ui.Notifications.Clear()
@@ -2432,17 +2485,17 @@ t.test("the Mods page: a mod from the catalogue has its own Auto Update on its c
     state.look = false
     refresh()
     card = panel.card("Hello")
-    t.eq(fake.last(card.auto.widget, "SetIsEnabled")[2], false)
-    t.eq(fake.last(shown.check.widget, "SetIsEnabled")[2], false)
+    t.eq(card.auto.disabled, true)
+    t.eq(shown.check.disabled, true)
     state.look = true
     refresh()
-    t.eq(fake.last(card.auto.widget, "SetIsEnabled")[2], true)
+    t.eq(card.auto.disabled, false)
     -- a card that is built while nothing is looked for starts greyed
     state.look = false
     refresh()
     state.available.Hello = nil
     refresh()
-    t.eq(fake.last(panel.card("Hello").auto.widget, "SetIsEnabled")[2], false)
+    t.eq(panel.card("Hello").auto.disabled, true)
     state.look = true
     refresh()
 
@@ -3730,7 +3783,7 @@ do
         small:SetIcon("chevron-right")
         small:SetEnabled(false)
         t.eq(fake.last(small.source, "SetCursor")[2], style.Cursor.Default)
-        t.eq(fake.last(small.widget, "SetIsEnabled")[2], false)
+        t.eq(small.disabled, true)
         local plain = host:Button(nil, function() end, { icon = "chevron-left" })
         t.ok(rawequal(plain.widget, plain.source), "without a size it is the button it always was")
         local worded = host:Button("Go", function() end, { icon = "play", size = 24 })

@@ -431,6 +431,7 @@ function Debug.Show() end
 ---the key of its windows.
 ---@class WaxKeys
 ---@field Changed WaxSignal<fun(owner: string, key: string?)> Fires with the owner and its new key when a key is changed.
+---@field BindChanged WaxSignal<fun(owner: string, name: string, key: string?)> Fires when a named key of a mod is given another key.
 local Keys = {}
 
 ---The key of an owner: "Wax" or a mod's id. Left out, it is the mod that asks.
@@ -448,6 +449,32 @@ function Keys.Set(owner, key) end
 ---Every owner that has a window, Wax first.
 ---@return WaxKeyOwner[]
 function Keys.Owners() end
+
+---One named key of a mod, as ui.Keys.Binds lists it.
+---@class WaxKeyBind
+---@field Id string The mod's id.
+---@field Name string The name the mod gave the key.
+---@field Label string What the mod's card calls it.
+---@field Key string? The key it has now. nil when the player left it without one.
+---@field Default string? The key the mod asked for.
+---@field Declared boolean? true when the mod is not running and the key is known from its mod.lua.
+
+---The named keys mods made with ui.Bind. With a mod's id, only that mod's, and for a mod that is not running the keys its mod.lua names.
+---@param owner? string
+---@return WaxKeyBind[]
+function Keys.Binds(owner) end
+
+---Gives a named key of a mod another key, or none with nil, and remembers it for that player. A key somebody else uses is taken all the same: a notification says who else has it, and ui.Keys.Clashes lists it.
+---@param owner string A mod's id.
+---@param name string The name the mod gave the key.
+---@param key string? An engine key name such as "F10" or "Ctrl+K".
+---@return boolean changed
+function Keys.SetBind(owner, name, key) end
+
+---The keys that more than one owner acts on, one line of text for each: the Wax panel's key, the key of each mod's windows, every named key and every plain hotkey of a mod. With an owner, only the clashes that owner is part of, said from its side. An empty list when nothing clashes.
+---@param owner? string "Wax" or a mod's id.
+---@return string[]
+function Keys.Clashes(owner) end
 
 ---The GUI library: the menu (windows you click), overlays (panels you only read) and notifications.
 ---@class WaxUI
@@ -631,6 +658,37 @@ function Hotkey:SetKey(key) end
 ---@param options? WaxHotkeyOptions
 ---@return WaxHotkey
 function ui.Hotkey(key, callback, options) end
+
+---A named key of your mod, as ui.Bind returns it.
+---@class WaxBind
+---@field Changed WaxSignal<fun(key: string?)> Fires with the new key when the player, or your mod, changes it.
+local Bind = {}
+
+---The key it has now. nil when the player left it without one.
+---@return string?
+function Bind:Get() end
+
+---Gives it another key, or none with nil, as the player does on the mod's card.
+---@param key string?
+---@return boolean changed
+function Bind:Set(key) end
+
+---Takes the key away from your mod. It also goes when the mod unloads.
+function Bind:Disconnect() end
+
+---The options of ui.Bind.
+---@class WaxBindOptions
+---@field label? string What the mod's card calls the key. The name when omitted.
+---@field in_menu? boolean true lets it run while the menu is open as well.
+---@field typing? boolean true lets it run while a text box has the keyboard.
+
+---A hotkey with a name. It runs callback when its key is pressed, like ui.Hotkey, and it is listed on your mod's card of the Mods page, where the player can give it another key. The player's choice is remembered and used the next time, so `key` is only where it starts. When two mods act on one key both still run, and the Mods page says which keys clash. Use it for every key a player might want to change.
+---@param name string A name for the key that stays the same between versions, such as "Open". One mod cannot have two of one name.
+---@param key string? The key it starts with, such as "F10" or "Ctrl+K". nil takes the key mod.lua names for it in `keys`, or none until the player gives one.
+---@param callback fun()
+---@param options? WaxBindOptions
+---@return WaxBind
+function ui.Bind(name, key, callback, options) end
 
 ---True while the key is held down, as the game's own input reports it for the local player. It takes the key names
 ---ui.Hotkey takes. A name with Ctrl, Shift or Alt ("Ctrl+K") is true only while the key is down with exactly those

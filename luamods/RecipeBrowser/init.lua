@@ -20,7 +20,7 @@ local format, search = require(mod.format), require(mod.search)
 local loading = require(mod.load)
 local creatures = require(mod.creatures)
 
-local settings = storage.Load("settings", { key = "F7", internal_names = false, welcomed = false })
+local settings = storage.Load("settings", { internal_names = false, welcomed = false })
 
 -- What a view is given.
 local app = { text = text, settings = settings, search = search, format = format, failed = loading.FAILED, needs = NEEDS }
@@ -82,38 +82,24 @@ app.beasts = require(mod.creature_load).new({ data = data, source = source, crea
 -- items kept from before a reload tell nobody that they are there
 app.beasts.items_changed()
 
--- A key the Wax menu uses cannot be the open key as well: one press would open and close again.
-local function bind(key)
-    if app.hotkey then
-        app.hotkey.Disconnect()
-        app.hotkey = nil
+-- The key that shows and hides the panels. The player changes it on the mod's card of the Mods page.
+local OPEN_KEY = "F10"
+local function toggle() if view and view.toggle then view.toggle() end end
+local function bind()
+    if ui.Bind then
+        app.hotkey = ui.Bind("Show or hide the panels", OPEN_KEY, toggle, { in_menu = true })
+    else
+        app.hotkey = ui.Hotkey(OPEN_KEY, toggle, { in_menu = true })
     end
-    local refused = key == nil or key == ui.GetToggleKey()
-    if not refused then
-        app.hotkey = ui.Hotkey(key, function() if view and view.toggle then view.toggle() end end, { in_menu = true })
-    end
-    if view and view.key then view.key(key, refused) end
 end
-
--- Changes the open key. False when the key is the Wax menu's: the key then stays what it was.
-function app.set_key(key)
-    if key == ui.GetToggleKey() then
-        if view and view.key then view.key(settings.key, true) end
-        return false
-    end
-    settings.key = key
-    app.save()
-    bind(key)
-    return true
-end
+local function open_key() return app.hotkey and app.hotkey.Get and app.hotkey:Get() or OPEN_KEY end
 
 -- The view is the panels beside the game's screens (view.lua). Its start runs in a task and gives back refresh(),
 -- toggle() and showing(), and may give key(key, refused).
 task.spawn(function()
     view = require(mod.view).start(app) or {}
     app.view = view
-    bind(settings.key)
-    ui.KeyChanged:Connect(function() bind(settings.key) end)
+    bind()
     data.Changed:Connect(function(name)
         details()
         app.job.data_changed(name)
@@ -122,7 +108,7 @@ task.spawn(function()
     if not settings.welcomed then
         settings.welcomed = true
         app.save()
-        if app.hotkey then ui.Notify(text.first_load(settings.key), { icon = "book-open", seconds = 8 }) end
+        if app.hotkey then ui.Notify(text.first_load(open_key()), { icon = "book-open", seconds = 8 }) end
     end
     if app.read_at_start() then task.delay(loading.START_DELAY, app.job.want) end
 end)

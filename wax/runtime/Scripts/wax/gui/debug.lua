@@ -287,6 +287,7 @@ local function mod_list_signature(list, updates, keyed)
             .. ":" .. (newer or "") .. (newer and updates.installing[mod.id] and "+" or "")
             .. (from_catalogue(updates, mod.id) and ":catalogue" or "") .. (keyed[mod.id] and ":window" or "")
     end
+    parts[#parts + 1] = "keys" .. ui.Keys.BindsStamp()
     return table.concat(parts, "|")
 end
 
@@ -475,7 +476,19 @@ local function rebuild_mods(list, updates, keyed)
                 row.keybind = section:Keybind("Open key", keyed[mod.id].key, function(key)
                     if not ui.Keys.Set(mod.id, key) and not row.keybind.destroyed then row.keybind:Set(ui.Keys.Get(mod.id)) end
                 end)
+            elseif mod.status ~= "loaded" and ui.Keys.Get(mod.id) then
+                -- not running: its key is shown, and can be changed once the mod is on
+                section:Keybind("Open key", ui.Keys.Get(mod.id), function() end):SetEnabled(false)
             end
+            -- the keys the mod named: each can be changed here, and a clash with somebody else's key is said under them
+            row.binds = {}
+            for _, bound in ipairs(ui.Keys.Binds(mod.id)) do
+                row.binds[bound.Name] = section:Keybind(bound.Label, bound.Key, function(key) ui.Keys.SetBind(mod.id, bound.Name, key) end)
+                if bound.Declared then row.binds[bound.Name]:SetEnabled(false) end
+            end
+            row.clash_text = ""
+            row.clash = section:Label("", { color = style.theme.warn, size = style.theme.small_size })
+            row.clash:SetVisible(false)
             local tools = section:Row()
             local reload = tools:Button("Reload", function() Wax.mods.request_reload(mod.id) end, { icon = "refresh-cw", spin = true })
             if off then reload:SetEnabled(false) end
@@ -701,6 +714,34 @@ local function refresh()
         if row.auto and listed and row.auto:Get() ~= listed.auto then row.auto:Set(listed.auto) end
         if row.keybind and owner and row.keybind:Get() ~= owner.key then row.keybind:Set(owner.key) end
     end
+    if scan_tick % 20 == 0 then
+        for _, row in ipairs(mod_rows) do
+            if row.binds and next(row.binds) then
+                for _, bound in ipairs(ui.Keys.Binds(row.mod.id)) do
+                    local control = row.binds[bound.Name]
+                    if control and not control.destroyed and control:Get() ~= bound.Key then control:Set(bound.Key) end
+                end
+            end
+            if row.clash and not row.clash.destroyed then
+                local text = table.concat(ui.Keys.Clashes(row.mod.id), "\n")
+                if text ~= row.clash_text then
+                    row.clash_text = text
+                    row.clash:Set(text)
+                    row.clash:SetVisible(text ~= "")
+                end
+            end
+        end
+        local banner = panel.clash
+        if banner and not banner.label.destroyed then
+            local lines = ui.Keys.Clashes()
+            local text = #lines > 0 and ("Keys that clash: " .. table.concat(lines, " ") .. " Change one on its mod's card.") or ""
+            if text ~= banner.text then
+                banner.text = text
+                banner.label:Set(text)
+                banner.label:SetVisible(text ~= "")
+            end
+        end
+    end
     if updates and not shown.line.destroyed then
         local text = os.clock() < shown.hold and shown.text or update_line(updates)
         if text ~= shown.text then
@@ -803,6 +844,8 @@ function panel.start()
         end)
         mod_tools:Button(nil, function() Wax.mods.request_sync(true) end, { icon = "refresh-cw", spin = true })
         mods_note = mods_page:Label("", { dim = true })
+        panel.clash = { text = "", label = mods_page:Label("", { color = style.theme.warn, size = style.theme.small_size }) }
+        panel.clash.label:SetVisible(false)
         -- mods that were added from the catalogue: each has its own Auto Update on its card. Here, whether to look at all, and a button to ask now
         local updates = update_state()
         if updates then

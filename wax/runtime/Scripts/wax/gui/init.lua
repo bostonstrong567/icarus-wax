@@ -78,6 +78,8 @@ local function name_of(id)
     return type(name) == "string" and name:find("%S") and name or id
 end
 
+local declared_key      -- the key a mod's mod.lua gives for its windows: set further down
+
 -- A key as one text, however its Ctrl, Shift and Alt were ordered or spelt. nil for what is not a key.
 local function key_id(key)
     if type(key) ~= "string" or key == "" then return nil end
@@ -414,7 +416,7 @@ function ui.Keys.Get(id)
     if owner and owner.count > 0 then return owner.key end
     local chosen = saved.keys[id]
     if chosen == false then return nil end
-    return type(chosen) == "string" and chosen or saved.default_keys[id]
+    return type(chosen) == "string" and chosen or declared_key(id) or saved.default_keys[id]
 end
 
 -- Gives an owner another key (nil: none). A key somebody has already is refused: false and who has it, and a notice says so.
@@ -467,6 +469,7 @@ function ui.Window(options)
     local asked = type(options) == "table" and options.key or nil
     if asked ~= nil and not key_id(asked) then error("key is a key name such as \"F6\" or \"Ctrl+K\"", 2) end
     local id = caller()
+    if asked == nil and id ~= WAX then asked = declared_key(id) end
     local owner = owner_of(id)
     local first = owner.count == 0
     local window = window_module.create(options, id)
@@ -565,6 +568,226 @@ function ui.Hotkey(key, callback, options)
         entry.key, entry.writes = new_key, writes(new_key)
         yield_defaults(new_key)
     end }
+end
+
+-- A mod's named keys: the player sees each on the mod's card and can change it there.
+local binds, binds_stamp = {}, 0
+ui.Keys.BindChanged = sched.Signal.new("BindChanged")
+
+local function bind_key(record)
+    local of = type(saved.binds) == "table" and saved.binds[record.owner] or nil
+    local chosen = nil
+    if type(of) == "table" then chosen = of[record.name] end
+    if chosen == false then return nil end
+    if type(chosen) == "string" and key_id(chosen) then return chosen end
+    return record.default
+end
+
+local function bind_apply(record)
+    local key, entry, listed = bind_key(record), record.entry, false
+    record.key = key
+    for index = #hotkeys, 1, -1 do
+        if hotkeys[index] == entry then
+            listed = true
+            if not key then table.remove(hotkeys, index) end
+        end
+    end
+    if not key then return end
+    entry.key, entry.writes = key, writes(key)
+    if not listed then hotkeys[#hotkeys + 1] = entry end
+    yield_defaults(key)
+end
+
+local function manifest_of(id)
+    local mods = Wax.mods
+    local mod = mods and mods.get and mods.get(id)
+    return mod and type(mod.manifest) == "table" and mod.manifest or nil, mod
+end
+
+-- The keys a mod's mod.lua names: keys = { "F10: Show or hide the panels" }. Known before the mod has run.
+local function declared(id)
+    local manifest = manifest_of(id)
+    local list = manifest and manifest.keys
+    local out = {}
+    if type(list) ~= "table" then return out end
+    for index = 1, #list do
+        local key, name = tostring(list[index]):match("^%s*([^:]-)%s*:%s*(.-)%s*$")
+        if name and name ~= "" and key_id(key) then
+            local record = { owner = id, name = name, label = name, default = key }
+            record.key = bind_key(record)
+            out[#out + 1] = record
+        end
+    end
+    return out
+end
+
+-- The key mod.lua gives for the mod's windows: key = "F6".
+function declared_key(id)
+    local manifest = manifest_of(id)
+    local key = manifest and manifest.key
+    return key_id(key) and key or nil
+end
+
+local function find_bind(id, name)
+    for index = 1, #binds do
+        if binds[index].owner == id and binds[index].name == name then return binds[index], index end
+    end
+    return nil
+end
+
+-- Everything that acts on a key, grouped by key: the Wax menu, each mod's windows, each named key, each plain hotkey of a mod.
+local function key_users()
+    local groups, seen = {}, {}
+    local function add(key, owner, what)
+        local id = key_id(key)
+        if not id or seen[id .. "|" .. owner .. "|" .. what] then return end
+        seen[id .. "|" .. owner .. "|" .. what] = true
+        local group = groups[id]
+        if not group then
+            group = { key = key, users = {}, owners = {}, count = 0 }
+            groups[id] = group
+        end
+        group.users[#group.users + 1] = { owner = owner, what = what }
+        if not group.owners[owner] then group.owners[owner], group.count = true, group.count + 1 end
+    end
+    if toggle_key then add(toggle_key, WAX, "the Wax menu") end
+    for id, owner in pairs(owners) do
+        if id ~= WAX and owner.count > 0 and owner.key then add(owner.key, id, name_of(id) .. " (its windows)") end
+    end
+    for index = 1, #hotkeys do
+        local entry = hotkeys[index]
+        if entry.bind then
+            add(entry.key, entry.owner, ("%s (%s)"):format(name_of(entry.owner), entry.bind.label))
+        elseif not entry.hover and entry.owner ~= WAX then
+            add(entry.key, entry.owner, name_of(entry.owner))
+        end
+    end
+    -- a mod that is not running: the keys its mod.lua names, so a clash shows before it is switched on
+    local mods = Wax.mods
+    local listed, list = pcall(function() return mods.list() end)
+    if listed and type(list) == "table" then
+        for index = 1, #list do
+            local mod = list[index]
+            if mod.status ~= "loaded" then
+                local id = mod.id
+                local chosen = saved.keys[id]
+                local windows = chosen ~= false and (type(chosen) == "string" and chosen or declared_key(id)) or nil
+                if windows then add(windows, id, name_of(id) .. " (its windows)") end
+                for _, record in ipairs(declared(id)) do
+                    if record.key then add(record.key, id, ("%s (%s)"):format(name_of(id), record.label)) end
+                end
+            end
+        end
+    end
+    return groups
+end
+
+-- The keys more than one owner acts on, as lines of text. With an id, only that owner's, said from its side.
+function ui.Keys.Clashes(id)
+    if id == ui.Keys then error("write ui.Keys.Clashes(...) with a dot, not a colon", 2) end
+    local out = {}
+    for _, group in pairs(key_users()) do
+        if group.count > 1 and (id == nil or group.owners[id]) then
+            local names = {}
+            for _, user in ipairs(group.users) do
+                if user.owner ~= id then names[#names + 1] = user.what end
+            end
+            table.sort(names)
+            if id then
+                out[#out + 1] = ("%s is also used by %s. One press acts on both: change one of them."):format(group.key, table.concat(names, " and "))
+            else
+                out[#out + 1] = ("%s is used by %s."):format(group.key, table.concat(names, " and "))
+            end
+        end
+    end
+    table.sort(out)
+    return out
+end
+
+-- The named keys of one mod, or of every mod: { Id, Name, Label, Key, Default }.
+function ui.Keys.Binds(id)
+    if id == ui.Keys then error("write ui.Keys.Binds(...) with a dot, not a colon", 2) end
+    local out = {}
+    for index = 1, #binds do
+        local record = binds[index]
+        if id == nil or record.owner == id then
+            out[#out + 1] = { Id = record.owner, Name = record.name, Label = record.label, Key = record.key, Default = record.default }
+        end
+    end
+    if id ~= nil and #out == 0 then
+        for _, record in ipairs(declared(id)) do
+            out[#out + 1] = { Id = id, Name = record.name, Label = record.label, Key = record.key, Default = record.default, Declared = true }
+        end
+    end
+    return out
+end
+
+-- Goes up whenever a named key comes or goes.
+function ui.Keys.BindsStamp() return binds_stamp end
+
+-- Gives a named key of a mod another key (nil: none). A key somebody else uses is taken all the same, and a notice says who has it.
+function ui.Keys.SetBind(id, name, key)
+    if id == ui.Keys then error("write ui.Keys.SetBind(...) with a dot, not a colon", 2) end
+    if type(id) ~= "string" or type(name) ~= "string" then error("ui.Keys.SetBind expects a mod's id and the name of one of its keys", 2) end
+    if key ~= nil and not key_id(key) then error("ui.Keys.SetBind expects a key name such as \"F6\" or \"Ctrl+K\", or nil for none", 2) end
+    if type(saved.binds) ~= "table" then saved.binds = {} end
+    if type(saved.binds[id]) ~= "table" then saved.binds[id] = {} end
+    saved.binds[id][name] = key or false
+    remember()
+    local record = find_bind(id, name)
+    if record then
+        bind_apply(record)
+        record.changed:Fire(record.key)
+    end
+    ui.Keys.BindChanged:Fire(id, name, key)
+    if key and record then
+        local lines = ui.Keys.Clashes(id)
+        local wanted = key_id(key)
+        for _, line in ipairs(lines) do
+            if key_id(line:match("^(%S+) is also")) == wanted then
+                notify.show(line, { title = "Key clash", kind = "warn", seconds = 7 })
+                break
+            end
+        end
+    end
+    return true
+end
+
+-- ui.Bind("Open", "F10", fn, { label = "Open the panels", in_menu = true }): a hotkey with a name, which the player can change.
+function ui.Bind(name, key, callback, options)
+    if type(name) ~= "string" or name == "" then error("ui.Bind expects a name for the key, such as \"Open\"", 2) end
+    if key ~= nil and not key_id(key) then error("ui.Bind expects a key name such as \"F10\" or \"Ctrl+K\", or nil for no key until the player gives one", 2) end
+    if type(callback) ~= "function" then error("ui.Bind expects a function to run", 2) end
+    if options ~= nil and type(options) ~= "table" then error("the options of ui.Bind are a table such as { label = \"Open the panels\" }", 2) end
+    local owner = caller()
+    if find_bind(owner, name) then error(("this mod already has a key named '%s'"):format(name), 2) end
+    local label = options and options.label
+    if type(label) ~= "string" or label == "" then label = name end
+    if key == nil then
+        for _, named in ipairs(declared(owner)) do
+            if named.name == name then key = named.default end
+        end
+    end
+    local record = { owner = owner, name = name, label = label, default = key, changed = sched.Signal.new("Changed") }
+    record.entry = { key = key, run = guard.wrap("key " .. name, function() sched.task.spawn(callback) end),
+        in_menu = options and options.in_menu or false, typing = options and options.typing or false, hover = false,
+        writes = false, owner = owner, bind = record }
+    binds[#binds + 1] = record
+    binds_stamp = binds_stamp + 1
+    bind_apply(record)
+    local function disconnect()
+        local found, index = find_bind(owner, name)
+        if found ~= record then return end
+        table.remove(binds, index)
+        binds_stamp = binds_stamp + 1
+        for at = #hotkeys, 1, -1 do
+            if hotkeys[at] == record.entry then table.remove(hotkeys, at) end
+        end
+    end
+    scope.own(disconnect)
+    return { Changed = record.changed, Disconnect = disconnect,
+        Get = function() return record.key end,
+        Set = function(_, new_key) return ui.Keys.SetBind(owner, name, new_key) end }
 end
 
 -- True while the key is held, by the names ui.Hotkey takes. It asks the game each time, so it is for a loop that runs while something is held.
@@ -847,6 +1070,7 @@ local function recover()
     events.forget_all()
     input.forget()
     hotkeys, size_followers = {}, {}
+    binds, binds_stamp = {}, binds_stamp + 1
     menu_open, preview, layer_animation, layer_shown, recheck_at = false, false, nil, false, nil
     for _, owner in pairs(owners) do owner.open, owner.bare, owner.count = false, false, 0 end
     root.abandon()
@@ -986,6 +1210,7 @@ end
 function ui.stop()
     pcall(close_menu)
     hotkeys = {}
+    binds, binds_stamp = {}, binds_stamp + 1
     window_module.destroy_all()
     overlay_module.destroy_all()
     model.stop()
