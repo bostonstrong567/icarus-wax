@@ -1,4 +1,5 @@
-# Sends the player zip from a published release to the Nexus Mods file page.
+# Sends the manual player zip from a published release to the Nexus Mods file page.
+# The setup program and the scripted installer stay on GitHub. A script in the download is what Nexus quarantines.
 # Pinned to v1.0.0-beta.10, which is v1.0.0-beta.9 plus the changelog field.
 # A pre-release, including the kept UE4SS build, is left alone.
 name: Upload to Nexus Mods
@@ -24,10 +25,10 @@ jobs:
           version="${tag#v}"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           for attempt in 1 2 3 4 5 6; do
-            gh release download "$tag" --repo "${GITHUB_REPOSITORY}" --pattern "Wax-${version}.zip" --output "Wax-${version}.zip" && break
+            gh release download "$tag" --repo "${GITHUB_REPOSITORY}" --pattern "Wax-${version}-manual.zip" --output "Wax-${version}-manual.zip" && break
             sleep 10
           done
-          test -s "Wax-${version}.zip"
+          test -s "Wax-${version}-manual.zip"
           python3 - <<'PY'
           import json, os
           event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
@@ -47,7 +48,7 @@ jobs:
           api_key: ${{ secrets.NEXUSMODS_API_KEY }}
           file_id: ${{ vars.NEXUSMODS_FILE_ID }}
           mod_id: ${{ vars.NEXUSMODS_MOD_ID }}
-          filename: Wax-${{ steps.release.outputs.version }}.zip
+          filename: Wax-${{ steps.release.outputs.version }}-manual.zip
           display_name: Wax ${{ steps.release.outputs.version }}
           version: ${{ steps.release.outputs.version }}
           category: main
