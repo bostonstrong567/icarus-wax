@@ -1,46 +1,75 @@
-# Sends the manual player zip from a published release to the Nexus Mods file page.
-# The setup program and the scripted installer stay on GitHub. A script in the download is what Nexus quarantines.
+# Sends the files zip from a published release to the Nexus Mods file page.
+# Wax Setup.exe stays on GitHub, in Wax-Setup-<version>.zip. A script in the Nexus download is what gets that
+# download quarantined, so this refuses a zip that holds the install scripts or the setup program.
 # Pinned to v1.0.0-beta.10, which is v1.0.0-beta.9 plus the changelog field.
 # A pre-release, including the kept UE4SS build, is left alone.
+# workflow_dispatch sends a release that is already published. The release event does not fire again for it.
 name: Upload to Nexus Mods
 
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to send, such as v0.3.12
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
   upload:
-    if: ${{ !github.event.release.prerelease && startsWith(github.event.release.tag_name, 'v') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (!github.event.release.prerelease && startsWith(github.event.release.tag_name, 'v')) }}
     runs-on: ubuntu-latest
     steps:
       - name: Download the release zip
         id: release
         env:
           GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          tag="${GITHUB_REF_NAME}"
+          set -euo pipefail
+          if [ -n "${INPUT_TAG}" ]; then tag="${INPUT_TAG}"; else tag="${GITHUB_REF_NAME}"; fi
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "The tag must look like v0.3.12, not: $tag" >&2
+            exit 1
+          fi
           version="${tag#v}"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          names="$(gh release view "$tag" --repo "${GITHUB_REPOSITORY}" --json assets --jq '.assets[].name')"
+          printf '%s\n' "$names" | grep -qx "Wax-Setup-${version}.zip" || {
+            echo "The release has no Wax-Setup-${version}.zip, so Nexus is left as it is." >&2
+            exit 1
+          }
           for attempt in 1 2 3 4 5 6; do
             gh release download "$tag" --repo "${GITHUB_REPOSITORY}" --pattern "Wax-${version}-manual.zip" --output "Wax-${version}-manual.zip" && break
             sleep 10
           done
           test -s "Wax-${version}-manual.zip"
-          python3 - <<'PY'
-          import json, os
-          event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
-          notes = ((event.get("release") or {}).get("body") or "").strip()[:65535]
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
-              handle.write("notes<<EOF\n")
-              if notes:
-                  handle.write(notes)
-                  if not notes.endswith("\n"):
-                      handle.write("\n")
-              handle.write("EOF\n")
+          python3 - "$version" <<'PY'
+          import sys, zipfile
+          version = sys.argv[1]
+          names = set(zipfile.ZipFile(f"Wax-{version}-manual.zip").namelist())
+          banned = [
+              "Install Wax.cmd", "Update Wax.cmd", "Uninstall Wax.cmd", "Wax-Setup.ps1",
+              "game/ue4ss/Mods/Wax/Wax-Import.ps1", "Wax Setup.exe",
+          ]
+          found = [name for name in banned if name in names]
+          if found:
+              raise SystemExit("This zip is not the Nexus download. It holds: " + ", ".join(found))
+          if not any(name.startswith("game/") and not name.endswith("/") for name in names):
+              raise SystemExit("This zip has no game folder.")
           PY
+          notes="$(gh release view "$tag" --repo "${GITHUB_REPOSITORY}" --json body --jq '.body // ""')"
+          notes="$(printf '%s' "$notes" | head -c 65535)"
+          delim="WAXNOTES$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+          {
+            echo "notes<<${delim}"
+            printf '%s\n' "$notes"
+            echo "${delim}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Upload to Nexus Mods
         uses: Nexus-Mods/upload-action@v1.0.0-beta.10
@@ -52,6 +81,7 @@ jobs:
           display_name: Wax ${{ steps.release.outputs.version }}
           version: ${{ steps.release.outputs.version }}
           category: main
+          description: Close ICARUS, extract this zip, and copy everything inside the game folder into Icarus\Binaries\Win64. Wax Setup.exe is in Wax-Setup-${{ steps.release.outputs.version }}.zip on the GitHub release. That program finds the game and copies these files. It does not run a script.
           changelog: ${{ steps.release.outputs.notes }}
           primary_mod_manager_download: true
           allow_mod_manager_download: true
