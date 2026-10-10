@@ -174,7 +174,76 @@ try {
 }
 if (-not $KeepStage) { Remove-Item -LiteralPath $stage -Recurse -Force }
 
+# Nexus holds a download that contains a script. This copy is the same files without the five
+# install scripts, and its readme only tells a player to copy the game folder.
+$manual = Join-Path $BuildDir "Wax-$version-manual.zip"
+if (Test-Path -LiteralPath $manual) { Remove-Item -LiteralPath $manual -Force }
+Copy-Item -LiteralPath $zip -Destination $manual
+$manualArchive = [System.IO.Compression.ZipFile]::Open($manual, 'Update')
+try {
+    foreach ($name in 'Install Wax.cmd', 'Update Wax.cmd', 'Uninstall Wax.cmd', 'Wax-Setup.ps1', 'game/ue4ss/Mods/Wax/Wax-Import.ps1') {
+        $entry = $manualArchive.GetEntry($name)
+        if (-not $entry) { throw "The release zip has no $name, so the manual download cannot be made from it." }
+        $entry.Delete()
+    }
+    $oldReadme = $manualArchive.GetEntry('README.txt')
+    if (-not $oldReadme) { throw 'The release zip has no README.txt.' }
+    $oldReadme.Delete()
+    $readme = @"
+Wax $version for ICARUS
+
+This download is the files. It has no installer.
+
+Close ICARUS first. Extract the whole zip.
+
+Copy everything inside the `"game`" folder into
+
+  ...\steamapps\common\Icarus\Icarus\Binaries\Win64\
+
+Right-click ICARUS in Steam, choose Manage, then Browse local files.
+Open Icarus, then Binaries, then Win64. When you are done, dwmapi.dll
+and the ue4ss folder sit next to Icarus-Win64-Shipping.exe.
+
+Start the game and press F8.
+
+To update, download the newest zip and copy the `"game`" folder in again.
+Say yes when Windows asks to replace files. Your mods and your settings
+stay. They are not in the zip.
+
+To remove Wax, delete dwmapi.dll and the ue4ss folder from that Win64
+folder. That also removes your mods and your settings.
+
+The key's fingerprint is
+
+  $fingerprint
+
+Compare it with the fingerprint on the Wax site:
+  https://wax-icarus.duckdns.org/docs/security
+
+A separate program, Wax Setup, is on the GitHub release. It finds the
+game and copies these files. This zip does not include it.
+"@
+    $readme = ($readme -replace "`r`n", "`n" -replace "`r", "`n").Replace("`n", "`r`n")
+    if ($readme -match '[^\x09\x0A\x0D\x20-\x7E]') { throw 'The manual readme has a character that is not plain ASCII.' }
+    $created = $manualArchive.CreateEntry('README.txt')
+    $writer = [System.IO.StreamWriter]::new($created.Open(), [System.Text.Encoding]::ASCII)
+    try { $writer.Write($readme) } finally { $writer.Dispose() }
+} finally { $manualArchive.Dispose() }
+
+# The setup program copies the files itself. It does not start PowerShell.
+& (Join-Path $PSScriptRoot 'Build-WaxSetup.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'Build-WaxSetup.ps1 failed.' }
+$setupExe = Join-Path $BuildDir 'setup\Wax Setup.exe'
+if (-not (Test-Path -LiteralPath $setupExe)) { throw "Build-WaxSetup.ps1 did not leave $setupExe." }
+$setupZip = Join-Path $BuildDir "Wax-Setup-$version.zip"
+if (Test-Path -LiteralPath $setupZip) { Remove-Item -LiteralPath $setupZip -Force }
+$setupArchive = [System.IO.Compression.ZipFile]::Open($setupZip, 'Create')
+try { [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($setupArchive, $setupExe, 'Wax Setup.exe', 'Optimal') }
+finally { $setupArchive.Dispose() }
+
 Write-Host "Built $zip ($([math]::Round((Get-Item $zip).Length / 1MB, 2)) MB, $files files, $($luaFiles.Count) Lua files compiled)"
+Write-Host "Built $manual ($([math]::Round((Get-Item $manual).Length / 1MB, 2)) MB, no install scripts)"
+Write-Host "Built $setupZip ($([math]::Round((Get-Item $setupZip).Length / 1MB, 2)) MB)"
 Write-Host "Top level: $($top -join ', ')"
 Write-Host "From wax\runtime: $($copied -join ', ')"
 Write-Host "UE4SS mods left out: $($brought -join ', ')"
@@ -194,7 +263,7 @@ if (-not (Test-Path -LiteralPath $tool)) {
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw "$unsignedNote node is not installed or not on PATH, and the signing tool needs it." }
 $extension = (Get-Content (Join-Path $Root 'wax\vscode\package.json') -Raw | ConvertFrom-Json).version
 $vsix = Join-Path $BuildDir "wax-icarus-$extension.vsix"
-$released = @($zip) + @($vsix | Where-Object { Test-Path -LiteralPath $_ })
+$released = @($zip, $manual, $setupZip) + @($vsix | Where-Object { Test-Path -LiteralPath $_ })
 & node $tool sign-release @released --version $version --out $BuildDir
 if ($LASTEXITCODE -ne 0) {
     throw "$unsignedNote The signing tool stopped, and its message is above. It needs the owner's key file (wax\market\.wax-signing-key.pem), which is on the owner's PC only."

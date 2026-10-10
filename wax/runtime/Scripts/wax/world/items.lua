@@ -455,8 +455,15 @@ local function usable(self, raw, what)
     return copy
 end
 
+-- Where a stack was read from, for Equip and Activate. Kept beside the table, so pairs does not see it.
+local stack_methods = {}
+local stack_meta = { __index = stack_methods }
+local homes = setmetatable({}, { __mode = "k" })
+local activated = nil       -- game.Me.Activated, once start() has made it
+
 -- A record to hand out: the mod's own, so changing it changes nothing here.
-local function export(record, inventory)
+-- `home` is { inventory = the Inventory, character = the character }, when the stack was read from one.
+local function export(record, inventory, home)
     local out = { Item = record.Item, Count = record.Count, Slot = record.Slot, Durability = record.Durability, Inventory = inventory }
     local properties = record.Properties
     if properties then
@@ -464,12 +471,13 @@ local function export(record, inventory)
         for key, value in pairs(properties) do mine[key] = value end
         out.Properties = mine
     end
-    return out
+    if home then homes[out] = home end
+    return setmetatable(out, stack_meta)
 end
 
-local function export_all(list, inventory, into)
+local function export_all(list, inventory, into, home)
     local out = into or {}
-    for i = 1, #list do out[#out + 1] = export(list[i], inventory) end
+    for i = 1, #list do out[#out + 1] = export(list[i], inventory, home) end
     return out
 end
 
@@ -505,7 +513,7 @@ local function weight(_, raw)
     return grams / M.GRAMS
 end
 
-local function list(self, raw) return export_all(usable(self, raw, "List").list) end
+local function list(self, raw) return export_all(usable(self, raw, "List").list, nil, nil, { inventory = self }) end
 
 local function slot(self, raw, number)
     local copy = usable(self, raw, "Slot")
@@ -516,7 +524,7 @@ local function slot(self, raw, number)
         error(("this inventory has %d slots, counted from 1, so it has no slot %d"):format(copy.size, number), 0)
     end
     local record = copy.at[number]
-    return record and export(record) or nil
+    return record and export(record, nil, { inventory = self }) or nil
 end
 
 local function count(self, raw, item)
@@ -534,7 +542,7 @@ local function where(self, raw, item)
     local key = key_of(item, "Where")
     local all, out = usable(self, raw, "Where").list, {}
     for i = 1, #all do
-        if lower(all[i].Item) == key then out[#out + 1] = export(all[i]) end
+        if lower(all[i].Item) == key then out[#out + 1] = export(all[i], nil, { inventory = self }) end
     end
     return out
 end
@@ -567,7 +575,7 @@ local function carried(self, raw)
     for i = 1, #CARRIED do
         local live = part(raw, CARRIED[i].property)
         local inventory = live and wrap(live)
-        if inventory then found[#found + 1] = { name = CARRIED[i].name, copy = look(inventory, live) } end
+        if inventory then found[#found + 1] = { name = CARRIED[i].name, inventory = inventory, copy = look(inventory, live) } end
     end
     carriers[self] = { frame = frame, looked = now, list = found }
     return found
@@ -594,7 +602,9 @@ end
 local function character_list(self, raw)
     local all, out = carried(self, raw), {}
     for i = 1, #all do
-        if not all[i].copy.broken then export_all(all[i].copy.list, all[i].name, out) end
+        if not all[i].copy.broken then
+            export_all(all[i].copy.list, all[i].name, out, { inventory = all[i].inventory, character = self })
+        end
     end
     return out
 end
@@ -612,11 +622,115 @@ local function held_item(self, raw)
     if not hotbar then return nil end
     local copy = look(hotbar, live)
     local record = not copy.broken and copy.at[number]
-    return record and export(record, CARRIED[HOTBAR].name) or nil
+    return record and export(record, CARRIED[HOTBAR].name, { inventory = hotbar, character = self }) or nil
 end
 
-local player_fields = { HotbarSlot = hotbar_slot, HeldItem = held_item }
+-- The dropship whose GetAssignedPlayer is this character's controller, and its DropShip_Equipment hold.
+-- FindAll searches every object, so the list is kept for a second and dropped on a map change.
+local SHIP_CLASS, SHIP_KIND, SHIP_PACE = "BP_DropShip_C", "DropShip_Equipment", 1
+local ship_cache = { at = -1e9, ships = nil, by = {} }
+
+local function address_of(value)
+    if value == nil then return nil end
+    if instance.is_instance(value) then
+        local ok, raw = pcall(function() return value.Raw end)
+        if not ok then return nil end
+        value = raw
+    end
+    if value == nil then return nil end
+    local ok, address = pcall(function()
+        if not value:IsValid() then return nil end
+        return value:GetAddress()
+    end)
+    return ok and address or nil
+end
+
+local function ships_now()
+    local now = sched.clock()
+    if ship_cache.ships and now - ship_cache.at < SHIP_PACE then return ship_cache end
+    ship_cache.at, ship_cache.by = now, {}
+    local ok, found = pcall(function() return Wax.import("engine.game").root:FindAll(SHIP_CLASS) end)
+    ship_cache.ships = ok and type(found) == "table" and found or {}
+    return ship_cache
+end
+
+local function each_id(ids, consider)
+    if type(ids) == "userdata" and type(ids.ForEach) == "function" then
+        ids:ForEach(function(_, element)
+            local ok, value = pcall(function() return element:get() end)
+            if ok then consider(value) end
+        end)
+        return
+    end
+    if type(ids) ~= "table" then return end
+    if #ids > 0 then
+        for i = 1, #ids do consider(ids[i]) end
+    else
+        for _, id in pairs(ids) do consider(id) end
+    end
+end
+
+local function equipment_of(ship)
+    local ok, component = pcall(function() return ship.Inventory end)
+    if not ok or not component then return nil end
+    local ids_ok, ids = pcall(function() return component:GetInventoryIds() end)
+    if not ids_ok then return nil end
+    local found = nil
+    local function consider(id)
+        if found or id == nil then return end
+        local got, inventory = pcall(function() return component:GetInventory(id) end)
+        if not got or not inventory then return end
+        local inst = instance.is_instance(inventory) and inventory or wrap(inventory)
+        if not inst then return end
+        local kind_ok, kind = pcall(function() return inst.Kind end)
+        if kind_ok and kind == SHIP_KIND then found = inst end
+    end
+    pcall(each_id, ids, consider)
+    return found
+end
+
+local function ship_for(controller)
+    local addr = address_of(controller)
+    if not addr then return nil end
+    local cache = ships_now()
+    local kept = cache.by[addr]
+    if kept ~= nil then return kept or nil end
+    local found = nil
+    local ships = cache.ships
+    for i = 1, #ships do
+        local ship = ships[i]
+        local ok, assigned = pcall(function() return ship:GetAssignedPlayer() end)
+        if ok and address_of(assigned) == addr then
+            found = equipment_of(ship)
+            break
+        end
+    end
+    cache.by[addr] = found or false
+    return found
+end
+
+local function ship_inventory(_, raw)
+    local ok, controller = pcall(function() return raw.Controller end)
+    if not ok or not address_of(controller) then
+        controller = nil
+        local root_ok, root = pcall(function() return Wax.import("engine.game").root end)
+        local who = nil
+        if root_ok then
+            local who_ok, found = pcall(function() return root.Character end)
+            who = who_ok and found or nil
+        end
+        if who and rawequal(who.Raw, raw) then
+            local player_ok, player = pcall(function() return root.LocalPlayer end)
+            controller = player_ok and player and player.Raw or nil
+        end
+    end
+    if not controller then return nil end
+    return ship_for(controller)
+end
+
+local player_fields = { HotbarSlot = hotbar_slot, HeldItem = held_item, ShipInventory = ship_inventory }
 for i = 1, #CARRIED do player_fields[CARRIED[i].name] = carried_field(CARRIED[i].property) end
+player_fields.Inventory = player_fields.Backpack
 local player_methods = { Count = character_count, Has = character_has, List = character_list }
 
 -- giving and taking: the game's own calls. They are made on this machine
@@ -858,6 +972,7 @@ function M.flush()
     copies, by_address = {}, {}
     carriers = setmetatable({}, { __mode = "k" })
     counts.copies = 0
+    ship_cache.at, ship_cache.ships, ship_cache.by = -1e9, nil, {}
 end
 
 -- what the game tells of its inventories: the copies follow at once, and a mod hears what was added, removed and changed
@@ -928,7 +1043,7 @@ local function caught_item(_, inventory_value, slot_value)
 end
 
 -- Adds what a slot held (sign -1) or holds (sign 1) to what its item gained in all. `name` is the inventory, for game.Me.
-local function tally(gains, order, record, sign, name)
+local function tally(gains, order, record, sign, name, inventory)
     if not record then return end
     local key = lower(record.Item)
     local gain = gains[key]
@@ -938,28 +1053,37 @@ local function tally(gains, order, record, sign, name)
         order[#order + 1] = gain
     end
     gain.amount = gain.amount + sign * record.Count
-    if sign > 0 then gain.now, gain.now_name = record, name else gain.before, gain.before_name = record, name end
+    if sign > 0 then
+        gain.now, gain.now_name, gain.now_inventory = record, name, inventory
+    else
+        gain.before, gain.before_name, gain.before_inventory = record, name, inventory
+    end
 end
 
 -- Tells what one frame did: each slot that holds something else now, then what went, then what came.
+local function handed(record, name, inventory)
+    if not record then return nil end
+    return export(record, name, inventory and { inventory = inventory } or nil)
+end
+
 local function announce(voice, changes, order)
     if voice.ItemChanged.count > 0 then
         for i = 1, #changes do
             local change = changes[i]
-            voice.ItemChanged:Fire(change.now and export(change.now, change.name) or nil,
-                change.previous and export(change.previous, change.name) or nil)
+            voice.ItemChanged:Fire(handed(change.now, change.name, change.inventory),
+                handed(change.previous, change.name, change.inventory))
         end
     end
     for i = 1, #order do
         local gain = order[i]
         if gain.amount < 0 and voice.ItemRemoved.count > 0 then
-            voice.ItemRemoved:Fire(gain.item, -gain.amount, gain.before and export(gain.before, gain.before_name) or nil)
+            voice.ItemRemoved:Fire(gain.item, -gain.amount, handed(gain.before, gain.before_name, gain.before_inventory))
         end
     end
     for i = 1, #order do
         local gain = order[i]
         if gain.amount > 0 and voice.ItemAdded.count > 0 then
-            voice.ItemAdded:Fire(gain.item, gain.amount, gain.now and export(gain.now, gain.now_name) or nil)
+            voice.ItemAdded:Fire(gain.item, gain.amount, handed(gain.now, gain.now_name, gain.now_inventory))
         end
     end
 end
@@ -984,13 +1108,13 @@ local function settle()
             local position = positions[p]
             local previous, now = before[position] or false, ear.seen[position] or false
             if not alike(previous, now) then
-                changes[#changes + 1] = { now = now, previous = previous }
-                tally(gains, order, previous, -1)
-                tally(gains, order, now, 1)
+                changes[#changes + 1] = { now = now, previous = previous, inventory = ear.inventory }
+                tally(gains, order, previous, -1, nil, ear.inventory)
+                tally(gains, order, now, 1, nil, ear.inventory)
                 if name then
-                    pool[#pool + 1] = { now = now, previous = previous, name = name }
-                    tally(pool_gains, pool_order, previous, -1, name)
-                    tally(pool_gains, pool_order, now, 1, name)
+                    pool[#pool + 1] = { now = now, previous = previous, name = name, inventory = ear.inventory }
+                    tally(pool_gains, pool_order, previous, -1, name, ear.inventory)
+                    tally(pool_gains, pool_order, now, 1, name, ear.inventory)
                 end
             end
         end
@@ -1146,6 +1270,123 @@ local function events_start()
     scope.leave(previous)
 end
 
+-- The character that can put this stack in its hand: the one it was read from, the inventory's owner, or the local one.
+local function player_of(inventory, hint)
+    if instance.is_instance(hint) and hint:IsA("IcarusPlayerCharacter") then return hint end
+    if instance.is_instance(inventory) then
+        local ok, parent = pcall(function() return inventory.Parent end)
+        if ok and instance.is_instance(parent) and parent:IsA("IcarusPlayerCharacter") then return parent end
+    end
+    local ok, who = pcall(function() return Wax.import("world.character").current() end)
+    if ok and instance.is_instance(who) and who:IsA("IcarusPlayerCharacter") then return who end
+    return nil
+end
+
+local function controller_of(who)
+    if not who then return nil end
+    local ok, controller = pcall(function() return who.Raw.Controller end)
+    if ok and address_of(controller) then return instance.is_instance(controller) and controller or wrap(controller) end
+    local root_ok, root = pcall(function() return Wax.import("engine.game").root end)
+    if not root_ok then return nil end
+    local mine_ok, mine = pcall(function() return root.Character end)
+    if mine_ok and mine and rawequal(mine.Raw, who.Raw) then
+        local player_ok, player = pcall(function() return root.LocalPlayer end)
+        if player_ok then return player end
+    end
+    return nil
+end
+
+-- A row of D_Uses, as the struct the game's use call takes.
+local function use_struct(name)
+    local ok, lib = pcall(function() return Wax.import("engine.game").root:Library("UsesLibrary") end)
+    if not ok then error("Activate: the game's uses cannot be read right now (" .. clean(lib) .. ")", 0) end
+    local valid_ok, valid = pcall(function() return lib:IsValidName(name) end)
+    if valid_ok and valid == false then
+        error(("Activate: '%s' is not a use the game has. A use is a row of D_Uses, such as \"Consume\" or \"Place\"")
+            :format(name), 0)
+    end
+    local struct_ok, enum = pcall(function() return lib:NameToStruct(name) end)
+    if not struct_ok or enum == nil then
+        error(("Activate: '%s' could not be read as a use (%s)"):format(name, struct_ok and "the game gave none" or clean(enum)), 0)
+    end
+    return enum
+end
+
+local function prepare_stack(self, name)
+    if type(self) ~= "table" or math.type(rawget(self, "Slot")) ~= "integer" then
+        error(("call %s with a colon: stack:%s()"):format(name, name), 0)
+    end
+    local home = homes[self]
+    local inventory = home and home.inventory
+    if not instance.is_instance(inventory) then
+        error(("%s needs a stack from an inventory, such as one that Hotbar, Slot, List or HeldItem gave"):format(name), 0)
+    end
+    local who = player_of(inventory, home.character)
+    if not who then error(name .. " needs a player's character to put this stack in hand", 0) end
+    return home, inventory, who
+end
+
+function stack_methods:Equip()
+    local ok, home, inventory, who = pcall(prepare_stack, self, "Equip")
+    if not ok then error(clean(home), 2) end
+    local called, problem = pcall(function() who:OnServer_FocusItem(inventory, rawget(self, "Slot") - 1) end)
+    if not called then error("Equip did not work in this version of the game: " .. clean(problem), 2) end
+end
+
+function stack_methods:Activate(use)
+    local equipped, problem = pcall(stack_methods.Equip, self)
+    if not equipped then error(clean(problem), 2) end
+    if use ~= nil then
+        if type(use) ~= "string" or use == "" then
+            error("Activate expects the name of a use, such as \"Consume\", or no name at all", 2)
+        end
+        local home = homes[self]
+        local controller = controller_of(player_of(home.inventory, home.character))
+        if not controller then error("Activate: this character has no controller to use the item", 2) end
+        local got, enum = pcall(use_struct, use)
+        if not got then error(clean(enum), 2) end
+        local called, failed = pcall(function() controller:OnServer_UseItemAuto(home.inventory, rawget(self, "Slot") - 1, enum) end)
+        if not called then error("Activate did not work in this version of the game: " .. clean(failed), 2) end
+    end
+    if activated then activated:Fire(self, use) end
+end
+
+-- What is in the hotbar slot the game says is in hand: { slot, item name }. false where there is none.
+local function held_key(_, raw)
+    local ok, number = pcall(hotbar_slot, nil, raw)
+    if not ok or type(number) ~= "number" then return { false, false } end
+    local live_inv = part(raw, CARRIED[HOTBAR].property)
+    local hotbar = live_inv and wrap(live_inv)
+    if not hotbar then return { number, false } end
+    local copy_ok, copy = pcall(look, hotbar, live_inv)
+    if not copy_ok or copy.broken then return { number, false } end
+    local record = copy.at[number]
+    return { number, record and record.Item or false }
+end
+
+local equipped_ready = false
+
+local function equip_signals(character)
+    if equipped_ready or type(character.feed) ~= "function" or type(character.provide) ~= "function" then return end
+    equipped_ready = true
+    character.feed({
+        name = "Equipped",
+        every = 0.25,
+        read = held_key,
+        outlets = {
+            { "Equipped", function(signal, _, previous)
+                if previous == nil then return end
+                local who = character.current()
+                local stack = who and held_item(who, who.Raw) or nil
+                local before = previous[2]
+                signal:Fire(stack, before ~= false and before or nil)
+            end },
+        },
+    })
+    activated = sched.Signal.new("game.Me.Activated")
+    character.provide("Activated", activated)
+end
+
 local connection = nil
 
 function M.start()
@@ -1157,6 +1398,8 @@ function M.start()
     local loaded, character = pcall(Wax.import, "world.character")
     if loaded then
         character.extend("player", spec, "items")
+        local signals_ok, signals_problem = pcall(equip_signals, character)
+        if not signals_ok then log:warn("what a character holds in its hand could not be told: %s", clean(signals_problem)) end
     else
         log:warn("world.character did not load, so game.Me does not know what a character carries: %s", clean(character))
         easy.class(M.PLAYER, spec, "items")

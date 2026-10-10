@@ -22,8 +22,12 @@ You can read every file that ends up in your game, and build the download yourse
    about the "Add to game" button. Press Enter alone for no.
 4. Start ICARUS and press **F8**. The Wax menu opens.
 
-The zip holds everything Wax needs, including UE4SS, the script loader it runs on. `README.txt` in the zip
-explains how to install by hand, how to update and how to remove Wax.
+The same release has `Wax-<version>-manual.zip`, the same files with no installer, and
+`Wax-Setup-<version>.zip`, which holds `Wax Setup.exe`. The manual zip is the one on
+[Nexus Mods](https://www.nexusmods.com/icarus/mods/354). `Wax-<version>.zip` is the one the updater checks.
+
+The full zip holds everything Wax needs, including UE4SS, the script loader it runs on. `README.txt` in the
+zip explains how to install by hand, how to update and how to remove Wax.
 
 ## What you get
 

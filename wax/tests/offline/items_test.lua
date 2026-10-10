@@ -352,7 +352,8 @@ t.test("List gives every stack in slot order as plain values of the mod's own, a
         { Item = "WildTea", Count = 3, Slot = 3, Properties = { ItemableStack = 3 } },
         { Item = "Wood", Count = 1, Slot = 4, Properties = { ItemableStack = 1, TransmutableUnits = 150000 } },
     })
-    t.eq(getmetatable(list[1]), nil)
+    t.eq(rawget(list[1], "Equip"), nil, "the fields are the mod's own")
+    t.eq(type(list[1].Equip), "function")
     t.eq(math.type(list[1].Count), "integer")
     list[1].Count, list[1].Properties.ItemableStack, list[2] = 0, 0, nil
     t.eq(pack:List()[1].Count, 64, "changing a record changes nothing here")
@@ -715,7 +716,7 @@ t.test("the character in the station has only what it has, and a creature gets n
     fake.put(worn, 6, "EnviroSuit", 1)
     fake.settle(worn)
     local pawn = instance.wrap(station.actor)
-    for _, name in ipairs({ "Backpack", "Hotbar", "Suit", "Upgrades", "Vision", "HotbarSlot", "HeldItem" }) do
+    for _, name in ipairs({ "Backpack", "Hotbar", "Suit", "Upgrades", "Vision", "HotbarSlot", "HeldItem", "Inventory", "ShipInventory" }) do
         t.eq(pawn[name], nil, name)
     end
     t.eq(pawn.Equipment.Used, 1)
@@ -1276,6 +1277,191 @@ t.test("Resize adds and takes slots at the end, never a slot that holds somethin
     t.raises(function() pack:Resize("many") end, "Resize expects how many slots")
     actions.host(false)
     actions.host(true)
+end)
+
+-- ------------------------------------------------------------------------------------------------ hotbar, tools, dropship
+
+t.test("Inventory is the backpack, and the hotbar can be indexed by slot", function()
+    local who = hero()
+    local me = who.instance
+    t.ok(rawequal(me.Inventory, me.Backpack))
+    t.eq(#me.Hotbar, 12)
+    t.eq(#me.Backpack, me.Backpack.Size)
+    t.eq(me.Hotbar[1], nil, "an empty slot")
+    alike(me.Hotbar[12], { Item = "Player_Fist", Count = 1, Slot = 12, Properties = with_zeros({ ItemableStack = 1 }) })
+    t.eq(me.Hotbar[12].Item, me.Hotbar:Slot(12).Item)
+    local saw = false
+    for key in pairs(me.Hotbar[12]) do
+        if key == "Equip" or key == "Activate" then saw = true end
+    end
+    t.eq(saw, false, "Equip and Activate are not fields of the stack")
+    t.eq(type(me.Hotbar[12].Equip), "function")
+    local line
+    local err = t.raises(function()
+        line = debug.getinfo(1, "l").currentline + 1
+        return me.Hotbar[13]
+    end, "this inventory has 12 slots, counted from 1, so it has no slot 13")
+    at(err, line)
+    t.raises(function() return me.Hotbar[0] end, "no slot 0")
+    possess(who)
+    t.ok(rawequal(game.Me.Inventory, game.Me.Backpack))
+    t.eq(game.Me.ShipInventory, nil, "no dropship is assigned")
+    possess(nil)
+end)
+
+t.test("Equip puts a stack in the hand, Activate runs a use, and the signals follow", function()
+    possess(nil)
+    t.eq(game.Me.Equipped.name, "game.Me.Equipped")
+    t.eq(game.Me.Activated.name, "game.Me.Activated")
+    local who = hero()
+    fake.tool(who.hotbar, 1, "Stone_Pickaxe", 100)
+    local controller_class = values.class("/Script/Icarus.IcarusPlayerControllerSurvival", kit.classes.Actor, {}, {
+        OnServer_UseItemAuto = {
+            { "SourceInventory", "ObjectProperty" }, { "SourceLocation", "IntProperty" },
+            { "Use", "StructProperty", struct = "/Script/Icarus.UsesEnum" },
+            call = function(_, args)
+                fake.uses = fake.uses or {}
+                fake.uses[#fake.uses + 1] = args
+            end,
+        },
+    })
+    local controller = values.actor(controller_class, "Controller_Equip", {})
+    who.store.Controller = controller
+    possess(who)
+    while #fake.focused > 0 do table.remove(fake.focused) end
+    fake.uses = {}
+
+    local seen = {}
+    local equipped = game.Me.Equipped:Connect(function(stack, before)
+        seen[#seen + 1] = { stack and stack.Item, before }
+    end)
+    local used = {}
+    local connection = game.Me.Activated:Connect(function(stack, use)
+        used[#used + 1] = { stack.Item, stack.Slot, use }
+    end)
+    local ok, err = pcall(function()
+        frames(2)
+        t.eq(#seen, 0, "what is already in hand is where the signal starts")
+        local fist = who.instance.Hotbar[12]
+        t.raises(function() fist.Equip() end, "call Equip with a colon: stack:Equip()")
+        fist:Equip()
+        t.eq(#fake.focused, 1)
+        t.eq(fake.focused[1].location, 11)
+        t.eq(fake.focused[1].inventory:GetAddress(), who.hotbar.object:GetAddress())
+        t.eq(fake.focused[1].actor:GetAddress(), who.actor:GetAddress())
+        frames(2)
+        t.eq(#seen, 0, "Equip tells the game, and Equipped follows the slot the game then names")
+        fist:Activate()
+        t.eq(#used, 1)
+        t.eq(used[1][1], "Player_Fist")
+        t.eq(used[1][2], 12)
+        t.eq(used[1][3], nil)
+        t.eq(#fake.uses, 0, "a swing is not a use")
+        who.store.FocusedQuickbarSlot = 0
+        pass(0.4)
+        t.eq(#seen, 1)
+        t.eq(seen[1][1], "Stone_Pickaxe")
+        t.eq(seen[1][2], "Player_Fist")
+
+        values.struct("/Script/Icarus.UsesEnum", nil, { { "Name", "StrProperty" } })
+        local lib_class = values.class("/Script/Icarus.UsesLibrary", kit.classes.Object, {}, {
+            IsValidName = { { "NameValue", "StrProperty" }, returns = "BoolProperty", call = function(_, args)
+                return args.NameValue == "Consume" or args.NameValue == "Place"
+            end },
+            NameToStruct = { { "NameValue", "StrProperty" }, returns = { "StructProperty", struct = "/Script/Icarus.UsesEnum" },
+                call = function(_, args) return values.struct_value("/Script/Icarus.UsesEnum", { Name = args.NameValue }) end },
+        })
+        local lib = values.part(lib_class, "Default__UsesLibrary", {})
+        local previous_find = StaticFindObject
+        StaticFindObject = function(path)
+            if path == "/Script/Icarus.Default__UsesLibrary" then return lib end
+            return previous_find(path)
+        end
+        local use_ok, use_err = pcall(function()
+            who.instance.Hotbar[1]:Activate("Consume")
+            t.eq(#fake.uses, 1)
+            t.eq(fake.uses[1].SourceLocation, 0)
+            t.eq(fake.uses[1].SourceInventory:GetAddress(), who.hotbar.object:GetAddress())
+            t.eq(fake.uses[1].Use.Name, "Consume")
+            t.eq(used[#used][1], "Stone_Pickaxe")
+            t.eq(used[#used][3], "Consume")
+            t.raises(function() who.instance.Hotbar[1]:Activate("Swing") end, "Activate: 'Swing' is not a use the game has")
+            t.raises(function() who.instance.Hotbar[1]:Activate(1) end, "Activate expects the name of a use, such as \"Consume\", or no name at all")
+        end)
+        StaticFindObject = previous_find
+        if not use_ok then error(use_err, 0) end
+    end)
+    equipped:Disconnect()
+    connection:Disconnect()
+    possess(nil)
+    if not ok then error(err, 0) end
+end)
+
+t.test("ShipInventory is the cargo of the dropship assigned to this character", function()
+    local who = hero()
+    local controller = values.actor(values.class("/Script/Icarus.IcarusPlayerControllerSurvival", kit.classes.Actor), "Controller_Ship", {})
+    local other = values.actor(values.class("/Script/Icarus.IcarusPlayerControllerSurvival", kit.classes.Actor), "Controller_Other", {})
+    who.store.Controller = controller
+    values.struct("/Script/Icarus.InventoryIDEnum", nil, { { "Value", "IntProperty" } })
+    local comp_class = values.class("/Script/Icarus.InventoryComponent", kit.classes.ActorComponent, {}, {
+        GetInventoryIds = { returns = { "ArrayProperty", inner = "StructProperty" }, call = function(self)
+            return rawget(self, "__ids")
+        end },
+        GetInventory = { { "InventoryID", "StructProperty", struct = "/Script/Icarus.InventoryIDEnum" }, returns = "ObjectProperty",
+            call = function(self, args) return rawget(self, "__holds")[args.InventoryID.Value] end },
+    })
+    local ship_class = values.class("/Game/BP/DropShip/BP_DropShip.BP_DropShip_C", kit.classes.Actor, { Inventory = "ObjectProperty" }, {
+        GetAssignedPlayer = { returns = "ObjectProperty", call = function(self) return rawget(self, "__assigned") end },
+    })
+    local function ship(assigned, cargo, removed)
+        local actor, store = values.actor(ship_class, "BP_DropShip_C", {})
+        local component = values.part(comp_class, "Inventory", {})
+        store.Inventory = component
+        rawset(actor, "__assigned", assigned)
+        rawset(component, "__ids", {
+            values.struct_value("/Script/Icarus.InventoryIDEnum", { Value = 2 }),
+            values.struct_value("/Script/Icarus.InventoryIDEnum", { Value = 1 }),
+        })
+        rawset(component, "__holds", { [1] = cargo.object, [2] = removed.object })
+        return actor
+    end
+    local function owned(assigned, item)
+        local cargo = fake.inventory("DropShip_Equipment", 15)
+        local removed = fake.inventory("Dropship_RemoveOnly", 5)
+        fake.put(cargo, 1, item, 4)
+        return { actor = ship(assigned, cargo, removed), cargo = cargo }
+    end
+    local mine = owned(controller, "Wood")
+    local theirs = owned(other, "Fiber")
+    local calls = 0
+    local old = FindAllOf
+    FindAllOf = function(name)
+        if name == "BP_DropShip_C" then
+            calls = calls + 1
+            return { theirs.actor, mine.actor }
+        end
+        return old(name)
+    end
+    local ok, err = pcall(function()
+        items.flush()
+        local cargo = who.instance.ShipInventory
+        t.eq(calls, 1)
+        t.eq(cargo.Kind, "DropShip_Equipment")
+        t.eq(cargo.Size, 15)
+        t.eq(cargo:Slot(1).Item, "Wood")
+        t.eq(cargo:Count("Wood"), 4)
+        t.ok(rawequal(who.instance.ShipInventory, cargo), "the ship is kept for a second")
+        t.eq(calls, 1)
+        items.flush()
+        t.eq(who.instance.ShipInventory:Slot(1).Item, "Wood")
+        t.eq(calls, 2)
+        rawset(mine.actor, "__assigned", other)
+        items.flush()
+        t.eq(who.instance.ShipInventory, nil, "a ship assigned to someone else")
+    end)
+    FindAllOf = old
+    items.flush()
+    if not ok then error(err, 0) end
 end)
 
 t.finish("items")

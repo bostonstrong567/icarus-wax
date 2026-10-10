@@ -751,6 +751,8 @@ meta.__index = function(self, key)
         if get then return get(self) end
         local given = added.methods[key]
         if given then return given end
+        -- inventory[n] is inventory:Slot(n). A tail call, so an error names the line that indexed it.
+        if type(key) == "number" and added.methods.Slot then return added.methods.Slot(self, key) end
     end
     local member = info.members[key]
     if not member then
@@ -800,6 +802,18 @@ meta.__newindex = function(self, key, value)
     end
     if not member or member.kind ~= "property" then error(unknown_member(self, key, "a property", true), 2) end
     write_property(self, key, member, value)
+end
+
+-- #instance is Size where a class has that field, as an inventory does, and 0 for anything else.
+meta.__len = function(self)
+    local info = rawget(self, INFO)
+    local added = info and easy_merged[info]
+    if added == nil and info then added = work_out(info) end
+    local get = added and added.fields and added.fields.Size
+    if not get then return 0 end
+    local ok, n = pcall(get, self)
+    if ok and type(n) == "number" then return n end
+    return 0
 end
 
 meta.__tostring = function(self)

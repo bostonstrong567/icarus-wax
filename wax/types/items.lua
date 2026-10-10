@@ -10,7 +10,8 @@
 ---@field MaxDurability integer? Its durability when new. nil for an item the game gives no durability.
 ---@field Icon string? The path of its picture in the game's files. nil when it has none.
 
----One stack in a slot of an inventory, as plain values. The table is yours: changing it changes nothing in the game.
+---One stack in a slot of an inventory. Its fields are plain values, and changing them changes nothing in the game.
+---Equip and Activate are functions: they tell the game to put this stack in a character's hand.
 ---@class WaxItemStack
 ---@field Item string The item's name as the game spells it. The game's own files do not always use the same letter case, so compare two names without it, or ask Count, Has or Where.
 ---@field Count integer How many are in the stack. 1 for an item the game keeps no stack number for.
@@ -18,6 +19,18 @@
 ---@field Durability integer? How much durability it has left. nil for an item the game keeps none for.
 ---@field Properties table<string|integer, integer>? Every number the game keeps for this stack, under the game's own name for it (EDynamicItemProperties): ItemableStack, Durability, GunCurrentMagSize, CurrentAmmoType, MillijoulesRemaining, TransmutableUnits, Fillable_StoredUnits, Fillable_Type, Decayable_CurrentSpoilTime and the others. One this version of Wax has no name for is under its number. nil when the game keeps none.
 ---@field Inventory string? Which inventory of the character it is in: "Backpack", "Hotbar", "Equipment", "Suit", "Upgrades" or "Vision". Only what a character's List and HeldItem give has it.
+local Stack = {}
+
+---Puts this stack into the character's hand. The game focuses this slot of its inventory. The location the game uses is Slot - 1.
+---game.Me.Equipped follows on its next look. A hotbar key does the same kind of change, and Equipped follows that too.
+---The stack has to be one that Slot, List, Where or HeldItem gave.
+function Stack:Equip() end
+
+---Puts this stack into the character's hand, then fires game.Me.Activated with the stack and `use`.
+---With a use name, the game also runs that row of D_Uses. "Consume" and "Place" are two such names. A name the game does not have raises an error.
+---With no name, the stack is in the hand and Activated fires with nil. A tool's swing is the game's fire button.
+---@param use? string The name of a row of D_Uses. Leave it out to put the stack in the hand.
+function Stack:Activate(use) end
 
 ---The kinds of item the game has, and the facts of each. Nothing is read until you ask, and what was read is kept.
 ---An item is named by its row in D_ItemsStatic, such as "Wood" or "Stone_Pickaxe". Letter case, spaces, underscores and
@@ -77,7 +90,7 @@ function Items:Load() end
 ---@field ItemRemoved WaxSignal<fun(item: string, amount: integer, stack: WaxItemStack?)> Fires when the inventory holds fewer of an item than a frame before: the item, how many fewer, and a stack it came out of as that was before.
 ---@field ItemChanged WaxSignal<fun(stack: WaxItemStack?, previous: WaxItemStack?)> Fires for every slot that holds something else than a frame before: what it holds now, nil for nothing, and what it held. A tool that wore and a stack that moved are changes too. A spoil timer that only counts down is not. After a map change the handlers of all three are disconnected.
 ---@field Kind string? What kind of inventory the game says it is: its row of D_InventoryInfo, such as "Backpack", "Quickbar" or "Equipment". It is asked of the game each time it is read.
----@field Size integer? How many slots it has.
+---@field Size integer? How many slots it has. #inventory is this number.
 ---@field Used integer? How many of its slots hold something.
 ---@field Weight number? What everything in it weighs, in kilograms. It is asked of the game each time it is read.
 local Inventory = {}
@@ -87,6 +100,7 @@ local Inventory = {}
 function Inventory:List() end
 
 ---What one slot holds, or nil when it is empty. Slots are counted from 1 to Size, and another number raises an error.
+---inventory[n] is this. An empty slot is nil, so a loop from 1 to #inventory reaches every slot.
 ---@param slot integer
 ---@return WaxItemStack?
 function Inventory:Slot(slot) end
@@ -148,7 +162,9 @@ function Inventory:Resize(slots) end
 ---cannot read is left out of Count, Has and List.
 ---@class WaxPlayerItems
 ---@field Backpack Inventory|WaxInventory? The character's backpack: its BackpackInventory.
----@field Hotbar Inventory|WaxInventory? The character's hotbar: its QuickbarInventory.
+---@field Inventory Inventory|WaxInventory? The character's backpack, the same value as Backpack. On a creature, Inventory stays the inventory the game keeps on it.
+---@field Hotbar Inventory|WaxInventory? The character's hotbar: its QuickbarInventory. hotbar[n] is hotbar:Slot(n), and #hotbar is how many slots it has. An empty slot is nil, so count from 1 to #hotbar to see every slot.
+---@field ShipInventory Inventory|WaxInventory? The cargo of the dropship assigned to this character, the hold the game calls DropShip_Equipment. nil while this character has no assigned dropship, as on the station. Count, Has and List on the character count the six inventories it carries; ask the ship with its own. Wax looks the ship up at most once a second. The hold the game calls Dropship_RemoveOnly is a different inventory.
 ---@field Equipment Inventory|WaxInventory? What the character wears: its EquipmentInventory.
 ---@field Suit Inventory|WaxInventory? The character's EnvirosuitInventory.
 ---@field Upgrades Inventory|WaxInventory? The character's UpgradeInventory.

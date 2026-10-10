@@ -13,7 +13,7 @@
 --   items.settle(me)                               the game's next tick: every weight follows what is held
 --   items.next_frame()                             a new frame, for this file and for fake_tables
 
-local items = { frame = 0, STACK = 7, DURABILITY = 6, TRANSMUTABLE = 9 }
+local items = { frame = 0, STACK = 7, DURABILITY = 6, TRANSMUTABLE = 9, focused = {} }
 ---@type any
 local world, values, tables, kit = nil, nil, nil, nil
 local by_object = setmetatable({}, { __mode = "k" })
@@ -358,6 +358,15 @@ function items.install(the_world, the_values, the_tables, the_kit)
     add("IcarusPlayerCharacterSpace", { MainInventory = OBJECT })
     -- some creature classes of the game keep an inventory under this name
     add("BP_NPC_Wolf_Conifer_Character_C", { Inventory = OBJECT })
+    -- Equip focuses a slot through the character's own call. Each call is kept for the tests.
+    local focus = rawget(classes.IcarusPlayerCharacter, "__functions")
+    focus.OnServer_FocusItem = {
+        { "Inventory", "ObjectProperty" }, { "Location", "IntProperty" },
+        call = function(self, args)
+            local list = items.focused
+            list[#list + 1] = { actor = self, inventory = args.Inventory, location = args.Location }
+        end,
+    }
 
     local table_paths = {}
     local function struct(path, super, fields, options)

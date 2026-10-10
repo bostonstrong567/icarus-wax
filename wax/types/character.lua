@@ -98,6 +98,7 @@ function Character:Teleport(place, facing) end
 ---own function that is made when the first handler connects. A handler never runs inside the game's call: what was
 ---heard is told from the frame loop, in the same frame or the next. All of it was seen on the host of a session. As a
 ---guest in someone else's game it has not been tried.
+---Equipped is looked at four times a second. Activated fires inside stack:Activate, in that call.
 ---@class WaxMe : BP_IcarusPlayerCharacterSurvival_C, WaxPlayerCharacter
 ---@field Character IcarusPlayerCharacter? The character itself, as an Instance. nil while there is none.
 ---@field Exists boolean True while the local player has a character.
@@ -114,6 +115,8 @@ function Character:Teleport(place, facing) end
 ---@field ItemAdded WaxSignal<fun(item: string, amount: integer, stack: WaxItemStack?)> Fires when your character carries more of an item than a frame before, over all its inventories: the item's name as the game spells it, how many more, and a stack it went onto, with its Inventory. The game tells of every slot it changes. What moves from one slot or inventory to another within a frame is not added and not removed.
 ---@field ItemRemoved WaxSignal<fun(item: string, amount: integer, stack: WaxItemStack?)> Fires when your character carries fewer of an item than a frame before: the item, how many fewer, and a stack it came out of as that was before.
 ---@field ItemChanged WaxSignal<fun(stack: WaxItemStack?, previous: WaxItemStack?)> Fires for every slot of what your character carries that holds something else than a frame before: what it holds now, nil for nothing, and what it held, each with its Inventory. A tool that wore and a stack that moved are changes too. A spoil timer that only counts down is not.
+---@field Equipped WaxSignal<fun(stack: WaxItemStack?, previous: string?)> Fires when the hotbar slot in hand, or the item in it, is not what it was at the last look. Looked at four times a second. Your function gets the stack in hand now, or nil when that slot is empty, and the name of the item that was in hand. Bare hands are the item Player_Fist. What was already in hand when you connect is where it starts. A change of durability alone does not fire it.
+---@field Activated WaxSignal<fun(stack: WaxItemStack, use: string?)> Fires inside stack:Activate, with the stack and the use name. The use name is nil when Activate was called with no name.
 ---@field BiomeChanged WaxSignal<fun(biome: string, previous: string)> Fires when the character stands in another biome than at the last look. Looked at once a second.
 ---@field LevelUp WaxSignal<fun(level: integer, previous: integer)> Fires when the character's level went up. Looked at twice a second. Another character with a higher level is not a level up.
 ---@field XPGained WaxSignal<fun(amount: integer, total: integer)> Fires when the character earned experience: how much since the last look, and all it has now. Looked at twice a second.
