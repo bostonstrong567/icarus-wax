@@ -7,6 +7,7 @@ It is for ICARUS on Steam, on Windows.
 
 - Documentation: https://wax-icarus.duckdns.org/
 - Mods: https://wax-icarus.duckdns.org/mods/
+- Nexus Mods: https://www.nexusmods.com/icarus/mods/354
 - Security: https://wax-icarus.duckdns.org/docs/security/
 - Editor support for VS Code: https://marketplace.visualstudio.com/items?itemName=RobertCincotta.wax-icarus
 
