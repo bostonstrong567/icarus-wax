@@ -16,6 +16,8 @@ local drag = Wax.import("gui.drag")
 local guard = Wax.import("core.guard")
 
 local panel = {}
+-- what a card calls the key that brings its mod's interface up, whatever the mod calls it
+local MAIN_KEY = "Show / hide"
 
 local V, H, VA = style.Visibility, style.HAlign, style.VAlign
 -- the grip of a mod's card: where it sits in the card's title line, and the room it takes at the left of the title
@@ -33,6 +35,40 @@ local filters = { error = true, warn = true, info = true }
 local search, follow = "", true
 local log_stamp, last_refresh = nil, 0
 local perf_fields, perf_before = {}, nil
+
+-- One version word from a VERSION file, or nil.
+local function read_version(path)
+    local file = io.open(path, "rb")
+    if not file then return nil end
+    local text = file:read(80)
+    file:close()
+    return text and text:match("^%s*(%S+)")
+end
+
+-- The version of this copy, read once. It sits beside Scripts. The development link is wax\runtime, which keeps
+-- the same file so the game does not have to look outside the link.
+local cached_version = nil
+local function file_version()
+    if cached_version ~= nil then return cached_version or nil end
+    local root = Wax.root
+    local found = nil
+    if type(root) == "string" and root ~= "" then
+        root = root:gsub("\\", "/"):gsub("/+$", ""):gsub("/Scripts/%.%.$", "")
+        found = read_version(root .. "/VERSION") or read_version(root .. "/../VERSION")
+    end
+    cached_version = found or false
+    return found
+end
+
+-- The dim note beside the name: the version, and a short line when a newer one is waiting.
+local function version_note()
+    local self = Wax.selfupdate and Wax.selfupdate.state and Wax.selfupdate.state()
+    local version = (self and type(self.running) == "string" and self.running) or file_version()
+    if not version then return "" end
+    if self and type(self.installer) == "string" then return ("%s  ·  %s needs Update Wax.cmd"):format(version, self.installer) end
+    if self and type(self.ready) == "string" then return ("%s  ·  %s at next start"):format(version, self.ready) end
+    return version
+end
 
 local function in_core_scope(fn)
     local previous = scope.enter(nil)
@@ -471,24 +507,35 @@ local function rebuild_mods(list, updates, keyed)
                 row.auto = section:Toggle("Auto Update", listed.auto, function(on) Wax.update.set_auto(mod.id, on) end)
                 if panel.updates and panel.updates.stopped then row.auto:SetEnabled(false) end
             end
-            -- a mod with a window: the key that shows and hides its windows, and nobody else's
-            if keyed[mod.id] then
-                row.keybind = section:Keybind("Open key", keyed[mod.id].key, function(key)
-                    if not ui.Keys.Set(mod.id, key) and not row.keybind.destroyed then row.keybind:Set(ui.Keys.Get(mod.id)) end
-                end)
-            elseif mod.status ~= "loaded" and ui.Keys.Get(mod.id) then
-                -- not running: its key is shown, and can be changed once the mod is on
-                section:Keybind("Open key", ui.Keys.Get(mod.id), function() end):SetEnabled(false)
+            -- The mod's keys. The one that brings its interface up comes first: the key of its windows, else the first key its
+            -- mod.lua names. With more keys than that one, a line under it sets it apart from the rest.
+            local bound_keys = ui.Keys.Binds(mod.id)
+            local open_key = keyed[mod.id] and "on" or (mod.status ~= "loaded" and ui.Keys.Named(mod.id) and "off") or nil
+            local main_name = not open_key and ui.Keys.Main(mod.id) or nil
+            local main_bound = nil
+            for _, bound in ipairs(bound_keys) do
+                if bound.Name == main_name then main_bound = bound end
             end
-            -- the keys the mod named: each can be changed here, and a clash with somebody else's key is said under them
+            local framed = (open_key or main_bound) and (#bound_keys + (open_key and 1 or 0)) > 1
             row.binds = {}
-            for _, bound in ipairs(ui.Keys.Binds(mod.id)) do
-                row.binds[bound.Name] = section:Keybind(bound.Label, bound.Key, function(key) ui.Keys.SetBind(mod.id, bound.Name, key) end)
+            local function bind_row(bound)
+                row.binds[bound.Name] = section:Keybind(bound == main_bound and MAIN_KEY or bound.Label, bound.Key, function(key) ui.Keys.SetBind(mod.id, bound.Name, key) end)
                 if bound.Declared then row.binds[bound.Name]:SetEnabled(false) end
             end
-            row.clash_text = ""
-            row.clash = section:Label("", { color = style.theme.warn, size = style.theme.small_size })
-            row.clash:SetVisible(false)
+            if open_key == "on" then
+                row.keybind = section:Keybind(MAIN_KEY, keyed[mod.id].key, function(key)
+                    if not ui.Keys.Set(mod.id, key) and not row.keybind.destroyed then row.keybind:Set(ui.Keys.Get(mod.id)) end
+                end)
+            elseif open_key == "off" then
+                -- not running: the key its mod.lua names is shown, and can be changed once the mod is on
+                section:Keybind(MAIN_KEY, ui.Keys.Named(mod.id), function() end):SetEnabled(false)
+            elseif main_bound then
+                bind_row(main_bound)
+            end
+            if framed then section:Separator() end
+            for _, bound in ipairs(bound_keys) do
+                if bound ~= main_bound then bind_row(bound) end
+            end
             local tools = section:Row()
             local reload = tools:Button("Reload", function() Wax.mods.request_reload(mod.id) end, { icon = "refresh-cw", spin = true })
             if off then reload:SetEnabled(false) end
@@ -699,6 +746,41 @@ local function refresh_perf()
     perf_fields.share:Set(total / (seconds / frames))
 end
 
+-- The keys on the cards as they are now: each shows its key, one that somebody else uses too is drawn in the warning
+-- colour, and one line at the top says who shares what. It runs when a key changes, not on a timer.
+local keys_due = false
+local function refresh_keys()
+    keys_due = false
+    local warn, clashing = style.theme.warn, ui.Keys.Clashing()
+    for _, row in ipairs(mod_rows) do
+        local id = row.mod.id
+        if row.keybind and not row.keybind.destroyed then
+            row.keybind:SetTone(clashing(id, row.keybind:Get()) and warn or nil)
+        end
+        if row.binds and next(row.binds) then
+            for _, bound in ipairs(ui.Keys.Binds(id)) do
+                local control = row.binds[bound.Name]
+                if control and not control.destroyed then
+                    if control:Get() ~= bound.Key then control:Set(bound.Key) end
+                    control:SetTone(clashing(id, bound.Key) and warn or nil)
+                end
+            end
+        end
+    end
+    local banner = panel.clash
+    if banner and not banner.label.destroyed then
+        local lines = ui.Keys.Clashes()
+        local text = #lines > 0 and (table.concat(lines, " ") .. " Change one of them.") or ""
+        if text ~= banner.text then
+            banner.text = text
+            banner.label:Set(text)
+            banner.label:SetVisible(text ~= "")
+        end
+    end
+end
+ui.Keys.Changed:Connect(function() keys_due = true end)
+ui.Keys.BindChanged:Connect(function() keys_due = true end)
+
 local function refresh()
     if not window or window.destroyed or not window:IsShowing() then return end
     -- While the Mods page is showing, the folder is looked at every ten seconds. A look takes about 15 ms, which is a
@@ -714,34 +796,9 @@ local function refresh()
         if row.auto and listed and row.auto:Get() ~= listed.auto then row.auto:Set(listed.auto) end
         if row.keybind and owner and row.keybind:Get() ~= owner.key then row.keybind:Set(owner.key) end
     end
-    if scan_tick % 20 == 0 then
-        for _, row in ipairs(mod_rows) do
-            if row.binds and next(row.binds) then
-                for _, bound in ipairs(ui.Keys.Binds(row.mod.id)) do
-                    local control = row.binds[bound.Name]
-                    if control and not control.destroyed and control:Get() ~= bound.Key then control:Set(bound.Key) end
-                end
-            end
-            if row.clash and not row.clash.destroyed then
-                local text = table.concat(ui.Keys.Clashes(row.mod.id), "\n")
-                if text ~= row.clash_text then
-                    row.clash_text = text
-                    row.clash:Set(text)
-                    row.clash:SetVisible(text ~= "")
-                end
-            end
-        end
-        local banner = panel.clash
-        if banner and not banner.label.destroyed then
-            local lines = ui.Keys.Clashes()
-            local text = #lines > 0 and ("Keys that clash: " .. table.concat(lines, " ") .. " Change one on its mod's card.") or ""
-            if text ~= banner.text then
-                banner.text = text
-                banner.label:Set(text)
-                banner.label:SetVisible(text ~= "")
-            end
-        end
-    end
+    refresh_keys()
+    local note = version_note()
+    if window.version ~= note then window:SetVersion(note) end
     if updates and not shown.line.destroyed then
         local text = os.clock() < shown.hold and shown.text or update_line(updates)
         if text ~= shown.text then
@@ -822,7 +879,8 @@ local SECTION_ORDER = { "bridge", "game", "mods", "tasks", "gui", "debug" }
 
 function panel.start()
     in_core_scope(function()
-        window = ui.Window({ title = "Wax", nav = "side", width = 620, height = 440, x = 40, y = 80 })
+        window = ui.Window({ title = "Wax", version = true, nav = "side", width = 620, height = 440, x = 40, y = 80 })
+        window:SetVersion(version_note())
         opened = ui.Opened:Connect(function() Wax.mods.request_sync(true) end)
         -- and when the Mods page is turned to
         window.PageChanged:Connect(function(name)
@@ -1004,6 +1062,7 @@ function panel.step()
     end
     if (held or sorting) and not guard.call("mods drag", step_grips) then pcall(stop_sort) end
     explorer.step()
+    if keys_due and window and mods_page then guard.call("mods keys", refresh_keys) end
     if browse_found then guard.call("browse", browse_view.step) end
     local now = os.clock()
     if now - last_refresh < REFRESH_SECONDS then return end

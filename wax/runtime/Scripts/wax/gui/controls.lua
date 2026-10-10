@@ -1543,11 +1543,26 @@ end
 function Container:Keybind(caption, key, on_change)
     local theme = style.theme
     local row = caption_row(self, caption, 0.46)
-    local button = kit.button(nil, { padding = style.margin(10, 5) })
+    -- The engine's own key picker lies inside the button, unseen and as large as it: it takes the click and then the next
+    -- key itself, so nothing else acts on that key (the game's fullscreen key, a console, another mod). Being inside,
+    -- it leaves the button its look under the mouse.
+    local made, picker = pcall(root.new, "InputKeySelector")
+    if not made then picker = nil end
+    local button = kit.button(nil, { padding = style.margin(0) })
     local shown = kit.label(key or "none", { family = "mono", size = theme.small_size })
-    local content = button:SetContent(shown)
-    content:SetHorizontalAlignment(H.Center)
-    content:SetVerticalAlignment(VA.Center)
+    local waiting = kit.label("Press a key", { size = theme.small_size, color = theme.dim, free = true })
+    waiting:SetVisibility(V.Collapsed)
+    local inside = root.new("Overlay")
+    kit.slot(inside:AddChild(shown), { h = H.Center, v = VA.Center, pad = style.margin(10, 5) })
+    kit.slot(inside:AddChild(waiting), { h = H.Center, v = VA.Center, pad = style.margin(10, 5) })
+    if picker then
+        picker:SetRenderOpacity(0)
+        picker:SetCursor(style.Cursor.Hand)
+        kit.slot(inside:AddChild(kit.sized(picker, 1, 1)), { h = H.Fill, v = VA.Fill })
+    end
+    local content = button:SetContent(inside)
+    content:SetHorizontalAlignment(H.Fill)
+    content:SetVerticalAlignment(VA.Fill)
     kit.slot(row:AddChild(button), { v = VA.Center, fill = 1 })
     place(self, row)
 
@@ -1555,15 +1570,27 @@ function Container:Keybind(caption, key, on_change)
     control.source = button
     local value = key
     local container, index = self, self.count
+    local tone = nil
+    -- the key, or while one is waited for the words that say so, in the grey of a hint
     local function show(text, color)
+        local asking = text == "press a key"
+        waiting:SetVisibility(asking and V.HitTestInvisible or V.Collapsed)
+        shown:SetVisibility(asking and V.Collapsed or V.HitTestInvisible)
+        if asking then return end
         kit.set_text(shown, text)
-        style.tint(shown, "text", color)
+        style.tint(shown, "text", tone or color)
     end
     -- the key's name in the button, which has the row's other half
     local function fit() kit.fit(shown, ((room_of(container, index) or 400) - 10) / 2 - 20 - SLOT) end
     fit_later(self, fit)
     fit()
     function control:Get() return value end
+    -- Draws the key in another colour, as a mark on it (a key somebody else uses too). nil: the usual one.
+    function control:SetTone(color)
+        if color == tone then return end
+        tone = color
+        style.tint(shown, "text", tone or theme.text)
+    end
     function control:Set(new_key)
         value = new_key
         show(value or "none", theme.text)
@@ -1580,6 +1607,39 @@ function Container:Keybind(caption, key, on_change)
             end
         end)
     end)
+    if picker then
+        -- the key the picker holds, by the names Wax uses: "F6", "Ctrl+K". nil while it holds none.
+        local function picked()
+            local chord = picker.SelectedKey
+            local name = chord.Key.KeyName:ToString()
+            if name == "" or name == "None" then return nil end
+            if not (name:find("Control", 1, true) or name:find("Shift", 1, true) or name:find("Alt", 1, true)) then
+                if chord.bAlt == true then name = "Alt+" .. name end
+                if chord.bShift == true then name = "Shift+" .. name end
+                if chord.bCtrl == true then name = "Ctrl+" .. name end
+            end
+            return name
+        end
+        -- The picker says it has stopped waiting before it has the key, and says it has a key once it has stored it.
+        -- So the first only switches the waiting words off, and the second is where the key is read. Escape, or a
+        -- click somewhere else, ends the wait with no key.
+        listen(control, picker, "OnIsSelectingKeyChanged", function()
+            if control.destroyed then return end
+            local asking = picker:GetIsSelectingKey() == true
+            input.taking_key(asking)
+            if asking then show("press a key", theme.accent_hover) else show(value or "none", theme.text) end
+        end)
+        listen(control, picker, "OnKeySelected", function()
+            if control.destroyed then return end
+            local pressed = picked()
+            if pressed == nil or pressed == "Escape" then return end
+            value = pressed
+            show(value, theme.text)
+            call(on_change, value)
+            control.Changed:Fire(value)
+        end)
+        control.disconnects[#control.disconnects + 1] = function() input.taking_key(false) end
+    end
     return control
 end
 

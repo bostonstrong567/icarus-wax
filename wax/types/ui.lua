@@ -439,12 +439,17 @@ local Keys = {}
 ---@return string?
 function Keys.Get(owner) end
 
----Gives an owner another key, or none with nil. A key that another owner has, or that another mod uses as a hotkey, is refused: the key stays what it was, a notification says who has it, and you get false and that name.
+---Gives an owner another key, or none with nil. A key that another owner has, or that another mod uses as a hotkey, is given all the same: a notification says who else has it, the Mods page shows the clash, and the second value is that name.
 ---@param owner string "Wax" or a mod's id.
 ---@param key string? An engine key name such as "F6". It can be held with Ctrl, Shift or Alt: "Ctrl+K".
 ---@return boolean changed
 ---@return string? taken_by
 function Keys.Set(owner, key) end
+
+---The key a mod's mod.lua names for its windows (`key = "F6"`), as the player has it now. nil when mod.lua names none. It is known while the mod is not running.
+---@param owner string A mod's id.
+---@return string?
+function Keys.Named(owner) end
 
 ---Every owner that has a window, Wax first.
 ---@return WaxKeyOwner[]
@@ -536,7 +541,7 @@ function ui.SetPreview(on) end
 ---@return boolean
 function ui.IsPreview() end
 
----Sets the key that shows and hides Wax's own panel, by the engine's key name ("F8"). nil leaves the panel without a key. A key that somebody has is refused, as with ui.Keys.Set. Every mod has a key of its own: see ui.Keys.
+---Sets the key that shows and hides Wax's own panel, by the engine's key name ("F8"). nil leaves the panel without a key. A key that somebody has is given all the same, with a notice, as with ui.Keys.Set. Every mod has a key of its own: see ui.Keys.
 ---@param key string?
 ---@return boolean changed
 ---@return string? taken_by

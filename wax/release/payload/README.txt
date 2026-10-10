@@ -177,21 +177,24 @@ Wax, Wax cannot save its settings there. Run "Install Wax.cmd" from the account
 you play on.
 
 
-UE4SS'S CHEAT AND CONSOLE MODS
+UE4SS'S OWN MODS
 
 UE4SS comes with a few small mods of its own. Three of them open the game's
 developer console and its cheat commands:
 
   CheatManagerEnablerMod, ConsoleCommandsMod, ConsoleEnablerMod
 
-Wax does not need them, so they are switched off in this download. To switch
-one on, open ...\Binaries\Win64\ue4ss\Mods\mods.txt in Notepad and change the
-0 after its name to 1.
+The others load blueprint mods, add keys for UE4SS's own tools, or are
+examples. Wax needs none of them, so none of them is in this download: the
+only thing in ...\Binaries\Win64\ue4ss\Mods is Wax.
 
-Wax 0.2.0 and older left the three switched on. When you install this version
-over one of those and never changed mods.txt, the installer switches them off
-and says so. If you changed mods.txt, it keeps your file and tells you which of
-the three are on in it.
+Earlier versions of Wax installed them. When you install this version over
+one of those and never changed mods.txt, the installer removes them and says
+so. If you changed mods.txt, it keeps your file and the mods, and tells you
+which of the three above are switched on in it.
+
+If you want one of them, get it from UE4SS's own release and list it in
+mods.txt as that release does.
 
 
 UPDATE
@@ -224,7 +227,7 @@ By hand:
   Download the newest zip and copy the contents of "game" into Win64 again.
   Say yes when Windows asks to replace files. Your own mods and your settings
   are not in the zip, so they stay. The UE4SS settings files are replaced by
-  the copies from the zip (UE4SS-settings.ini, mods.txt, mods.json).
+  the copies from the zip (UE4SS-settings.ini, mods.txt).
 
 
 REMOVE

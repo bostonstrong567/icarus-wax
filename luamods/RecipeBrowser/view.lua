@@ -1795,12 +1795,16 @@ function view.start(app)
         if type(value) == "table" and value.creature then return pressed(value, mode) end
         open(keyed(), mode)
     end
-    ui.Hotkey(KEYS.make, function() key_open("make") end, always)
-    ui.Hotkey(KEYS.used, function() key_open("used") end, always)
-    ui.Hotkey(KEYS.favourite, function() favourite_key(KEYS.favourite) end, always)
+    ui.Hotkey(KEYS.make, function() key_open("make") end, { in_menu = true, name = "How to make the item under the mouse" })
+    ui.Hotkey(KEYS.used, function() key_open("used") end, { in_menu = true, name = "What the item under the mouse is used in" })
+    local favourite
+    favourite = ui.Hotkey(KEYS.favourite, function()
+        favourite_key(favourite and favourite.Get and favourite:Get() or KEYS.favourite)
+    end, { in_menu = true, name = "Favourite (hold to sweep)" })
     -- the middle button the same way. Without this its click still marks one item when it comes up
-    if can_hold then ui.Hotkey(MIDDLE, function() favourite_key(MIDDLE) end, { in_menu = true, hover = true }) end
-    ui.Hotkey("BackSpace", function() if (state.detail or beasts.page()) and keys_on() then step_back() end end, always)
+    if can_hold then ui.Hotkey(MIDDLE, function() favourite_key(MIDDLE) end, { in_menu = true, hover = true, name = "Favourite with the mouse" }) end
+    ui.Hotkey("BackSpace", function() if (state.detail or beasts.page()) and keys_on() then step_back() end end,
+        { in_menu = true, name = "Back to the item before" })
     -- The wheel over a panel turns its pages. The panel takes the wheel, so the game's hotbar does not turn with it.
     items.Scrolled:Connect(function(by)
         if not state.detail then

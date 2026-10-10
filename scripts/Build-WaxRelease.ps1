@@ -5,7 +5,7 @@
 .DESCRIPTION
   The zip holds a "game" folder (the UE4SS build Wax is tested on, with Wax at ue4ss\Mods\Wax and an empty mods
   folder), the installer files from wax\release\payload, README.txt and the licences.
-  UE4SS goes in as its own zip has it, except that its cheat and console mods are switched off in mods.txt and mods.json.
+  UE4SS goes in as its own zip has it, without the mods it brings (a console, cheat commands, a blueprint loader, demos): Wax needs none of them.
   Everything in it is a real file: no junctions are followed or copied. The version comes from wax\VERSION.
   Every Lua file that goes in is compiled with tools\lua\lua54\lua.exe first, and the build fails if one does not.
 
@@ -28,8 +28,9 @@ $ue4ssZip = Join-Path $ToolsDir 'ue4ss\UE4SS_v3.0.1-1152-ge3ba1016.zip'
 $runtime  = Join-Path $Root 'wax\runtime'
 $payload  = Join-Path $Root 'wax\release\payload'
 $lua      = Join-Path $ToolsDir 'lua\lua54\lua.exe'
-# UE4SS's own mods that open the game's console and cheat commands. Wax needs none of them.
-$cheatMods = 'CheatManagerEnablerMod', 'ConsoleCommandsMod', 'ConsoleEnablerMod'
+# The mods UE4SS's own zip brings. None of them ships: Wax needs none, and a player gets nothing that is not Wax.
+$stockMods = 'BPML_GenericFunctions', 'BPModLoaderMod', 'CheatManagerEnablerMod', 'ConsoleCommandsMod', 'ConsoleEnablerMod',
+    'Keybinds', 'LineTraceMod', 'SplitScreenMod', 'shared'
 
 $version = (Get-Content (Join-Path $Root 'wax\VERSION') -Raw).Trim()
 if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "wax\VERSION should hold a version like 0.1.0, not '$version'." }
@@ -61,29 +62,24 @@ $game = Join-Path $stage 'game'
 $wax  = Join-Path $game 'ue4ss\Mods\Wax'
 New-Item -ItemType Directory -Force $game | Out-Null
 
-# UE4SS goes in as its release zip has it, settings untouched, except for the mod lists changed below.
+# UE4SS goes in as its release zip has it, settings untouched, without its own mods.
 Expand-Archive -LiteralPath $ue4ssZip -DestinationPath $game
 foreach ($needed in 'dwmapi.dll', 'ue4ss\UE4SS.dll', 'ue4ss\UE4SS-settings.ini', 'ue4ss\Mods\mods.txt') {
     if (-not (Test-Path -LiteralPath (Join-Path $game $needed))) { throw "The UE4SS zip has no $needed." }
 }
 
-# The cheat and console mods ship switched off. A list that no longer names one as switched on stops the build, so a change in UE4SS is seen.
-$modsTxt = Join-Path $game 'ue4ss\Mods\mods.txt'
-$modsJson = Join-Path $game 'ue4ss\Mods\mods.json'
-$list = [System.IO.File]::ReadAllText($modsTxt)
-$json = if (Test-Path -LiteralPath $modsJson) { [System.IO.File]::ReadAllText($modsJson) }
-foreach ($mod in $cheatMods) {
-    $changed = [regex]::Replace($list, "(?m)^($mod\s*:\s*)1", '${1}0')
-    if ($changed -ceq $list) { throw "mods.txt in the UE4SS zip does not switch $mod on any more. Look at what UE4SS ships before releasing." }
-    $list = $changed
-    if ($null -ne $json) {
-        $changed = [regex]::Replace($json, "(`"mod_name`"\s*:\s*`"$mod`"\s*,\s*`"mod_enabled`"\s*:\s*)true", '${1}false')
-        if ($changed -ceq $json) { throw "mods.json in the UE4SS zip does not switch $mod on any more. Look at what UE4SS ships before releasing." }
-        $json = $changed
-    }
-}
-[System.IO.File]::WriteAllText($modsTxt, $list)
-if ($null -ne $json) { [System.IO.File]::WriteAllText($modsJson, $json) }
+# UE4SS's own mods are taken out, and its list of mods to start is left empty. Wax starts by the enabled.txt in its own folder.
+# A mod this build does not know stops it, so a change in what UE4SS brings is seen.
+$modsFolder = Join-Path $game 'ue4ss\Mods'
+$modsTxt = Join-Path $modsFolder 'mods.txt'
+$modsJson = Join-Path $modsFolder 'mods.json'
+$brought = @(Get-ChildItem -LiteralPath $modsFolder -Directory | ForEach-Object { $_.Name })
+$unknown = @($brought | Where-Object { $_ -notin $stockMods })
+if ($unknown.Count) { throw "The UE4SS zip brings a mod this build does not know: $($unknown -join ', '). Decide whether it ships before releasing." }
+foreach ($mod in $brought) { Remove-Item -LiteralPath (Join-Path $modsFolder $mod) -Recurse -Force }
+if (Test-Path -LiteralPath $modsJson) { Remove-Item -LiteralPath $modsJson -Force }
+$list = "; UE4SS starts the mods listed here, one on a line:  Name : 1`r`n; Wax is not listed. It starts by the enabled.txt in its own folder.`r`n"
+[System.IO.File]::WriteAllText($modsTxt, $list, [System.Text.Encoding]::ASCII)
 
 # Wax: everything in wax\runtime except what belongs to one machine (run, saved), the mods junction, and dev.txt,
 # which marks a copy that must never update itself.
@@ -181,7 +177,7 @@ if (-not $KeepStage) { Remove-Item -LiteralPath $stage -Recurse -Force }
 Write-Host "Built $zip ($([math]::Round((Get-Item $zip).Length / 1MB, 2)) MB, $files files, $($luaFiles.Count) Lua files compiled)"
 Write-Host "Top level: $($top -join ', ')"
 Write-Host "From wax\runtime: $($copied -join ', ')"
-Write-Host "UE4SS mods switched off: $($cheatMods -join ', ')"
+Write-Host "UE4SS mods left out: $($brought -join ', ')"
 
 if ($Unsigned) {
     Write-Host 'Not signed (-Unsigned). This zip is for trying out: no updater installs it, and Publish-Release.ps1 does not publish it.'

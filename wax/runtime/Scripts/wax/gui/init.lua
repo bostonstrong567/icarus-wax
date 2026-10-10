@@ -139,7 +139,7 @@ local function resolve(owner)
         local chosen, kept = saved.keys[id], saved.default_keys[id]
         if chosen == false then
             key = nil
-        elseif type(chosen) == "string" and key_id(chosen) and not taken_by(chosen, id) then
+        elseif type(chosen) == "string" and key_id(chosen) then
             key = chosen
         elseif owner.asked and not taken_by(owner.asked, id) then
             key = owner.asked
@@ -419,15 +419,26 @@ function ui.Keys.Get(id)
     return type(chosen) == "string" and chosen or declared_key(id) or saved.default_keys[id]
 end
 
--- Gives an owner another key (nil: none). A key somebody has already is refused: false and who has it, and a notice says so.
+-- The key a mod's mod.lua names for its windows, as the player has it now. nil when mod.lua names none: for a mod that is not running.
+function ui.Keys.Named(id)
+    if id == ui.Keys then error("write ui.Keys.Named(...) with a dot, not a colon", 2) end
+    local named = declared_key(id)
+    if not named then return nil end
+    local chosen = saved.keys[id]
+    if chosen == false then return nil end
+    return type(chosen) == "string" and key_id(chosen) and chosen or named
+end
+
+-- Gives an owner another key (nil: none). A key somebody has already is taken all the same: a notice says who else has it, and the second answer names them.
 function ui.Keys.Set(id, key)
     if id == ui.Keys then error("write ui.Keys.Set(...) with a dot, not a colon", 2) end
     if type(id) ~= "string" or id == "" then error("ui.Keys.Set expects an owner: \"Wax\" or a mod's id", 2) end
     if key ~= nil and not key_id(key) then error("ui.Keys.Set expects a key name such as \"F6\" or \"Ctrl+K\", or nil for none", 2) end
+    -- a key somebody else has is taken all the same: the player is told, and the Mods page shows the clash
     local holder = key and taken_by(key, id)
     if holder then
-        notify.show(("%s is already used by %s."):format(key, holder), { title = "Key not changed", kind = "warn", seconds = 5 })
-        return false, holder
+        notify.show(("%s is also used by %s. One press acts on both: change one of them."):format(key, holder),
+            { title = "Key clash", kind = "warn", seconds = 7 })
     end
     if id == WAX then
         toggle_key = key
@@ -439,7 +450,7 @@ function ui.Keys.Set(id, key)
     remember()
     if id == WAX then ui.KeyChanged:Fire(key) end
     ui.Keys.Changed:Fire(id, key)
-    return true
+    return true, holder or nil
 end
 
 -- Every owner that has a window: { id, name, key, open }, Wax first. open: its windows are up now.
@@ -544,34 +555,64 @@ local function gives_way(key)
     return false
 end
 
+-- Every key a mod makes can be changed by the player on the mod's card: the named ones (ui.Bind) and the plain ones (ui.Hotkey).
+local binds, binds_stamp = {}, 0
+local find_bind, bind_apply
+
 -- Runs callback() when the key ("F6", "K", "MiddleMouseButton" ...) is pressed during play, and in the menu too with options.in_menu.
 function ui.Hotkey(key, callback, options)
     if type(key) ~= "string" or key == "" then error("ui.Hotkey expects a key name such as \"F6\"", 2) end
     if type(callback) ~= "function" then error("ui.Hotkey expects a function to run", 2) end
     -- typing = true lets it run while a text box has the keyboard (a key such as Tab that is meant for the box).
     -- hover = true makes it a key for the slot under the mouse: it is not even looked at while no slot is under it.
+    -- name = what the mod's card calls the key.
+    local owner = caller()
     local entry = { key = key, run = guard.wrap("hotkey " .. key, function() sched.task.spawn(callback) end),
         in_menu = options and options.in_menu or false, typing = options and options.typing or false,
-        hover = options and options.hover or false, writes = writes(key), owner = caller() }
-    hotkeys[#hotkeys + 1] = entry
-    yield_defaults(key)
+        hover = options and options.hover or false, writes = writes(key), owner = owner }
+    local record = nil
+    if owner ~= WAX then
+        -- a mod's key: listed on its card under a name, and what the player chose there is used
+        local name = options and options.name
+        if type(name) ~= "string" or name == "" then name = "Key " .. key end
+        local base, count = name, 1
+        while find_bind(owner, name) do
+            count = count + 1
+            name = ("%s (%d)"):format(base, count)
+        end
+        record = { owner = owner, name = name, label = name, default = key, changed = sched.Signal.new("Changed"), entry = entry }
+        entry.bind = record
+        binds[#binds + 1] = record
+        binds_stamp = binds_stamp + 1
+        bind_apply(record)
+    else
+        hotkeys[#hotkeys + 1] = entry
+        yield_defaults(key)
+    end
     local function disconnect()
-        for index, other in ipairs(hotkeys) do
-            if other == entry then
-                table.remove(hotkeys, index)
-                break
+        for index = #hotkeys, 1, -1 do
+            if hotkeys[index] == entry then table.remove(hotkeys, index) end
+        end
+        if record then
+            for index = #binds, 1, -1 do
+                if binds[index] == record then
+                    table.remove(binds, index)
+                    binds_stamp = binds_stamp + 1
+                end
             end
         end
     end
     scope.own(disconnect)
-    return { Disconnect = disconnect, SetKey = function(_, new_key)
-        entry.key, entry.writes = new_key, writes(new_key)
-        yield_defaults(new_key)
-    end }
+    return { Disconnect = disconnect, Changed = record and record.changed or nil,
+        Get = function() if record then return record.key end return entry.key end,
+        SetKey = function(_, new_key)
+            if record then return ui.Keys.SetBind(owner, record.name, new_key) end
+            entry.key, entry.writes = new_key, writes(new_key)
+            yield_defaults(new_key)
+        end }
 end
 
 -- A mod's named keys: the player sees each on the mod's card and can change it there.
-local binds, binds_stamp = {}, 0
 ui.Keys.BindChanged = sched.Signal.new("BindChanged")
 
 local function bind_key(record)
@@ -583,7 +624,7 @@ local function bind_key(record)
     return record.default
 end
 
-local function bind_apply(record)
+function bind_apply(record)
     local key, entry, listed = bind_key(record), record.entry, false
     record.key = key
     for index = #hotkeys, 1, -1 do
@@ -628,7 +669,7 @@ function declared_key(id)
     return key_id(key) and key or nil
 end
 
-local function find_bind(id, name)
+function find_bind(id, name)
     for index = 1, #binds do
         if binds[index].owner == id and binds[index].name == name then return binds[index], index end
     end
@@ -656,9 +697,11 @@ local function key_users()
     end
     for index = 1, #hotkeys do
         local entry = hotkeys[index]
-        if entry.bind then
+        if entry.hover then
+            -- a key for the slot under the mouse acts nowhere else, so it clashes with nobody
+        elseif entry.bind then
             add(entry.key, entry.owner, ("%s (%s)"):format(name_of(entry.owner), entry.bind.label))
-        elseif not entry.hover and entry.owner ~= WAX then
+        elseif entry.owner ~= WAX then
             add(entry.key, entry.owner, name_of(entry.owner))
         end
     end
@@ -671,7 +714,7 @@ local function key_users()
             if mod.status ~= "loaded" then
                 local id = mod.id
                 local chosen = saved.keys[id]
-                local windows = chosen ~= false and (type(chosen) == "string" and chosen or declared_key(id)) or nil
+                local windows = declared_key(id) and chosen ~= false and (type(chosen) == "string" and chosen or declared_key(id)) or nil
                 if windows then add(windows, id, name_of(id) .. " (its windows)") end
                 for _, record in ipairs(declared(id)) do
                     if record.key then add(record.key, id, ("%s (%s)"):format(name_of(id), record.label)) end
@@ -680,6 +723,98 @@ local function key_users()
         end
     end
     return groups
+end
+
+-- The engine's own keys give way to a key Wax or a mod uses, and come back when nobody uses it any more: the keys that
+-- open the engine's console (a list in the engine's input settings), F11 for fullscreen and Alt+Enter for the same.
+-- The engine asks those settings at every key press, so taking a key out of them is all it takes.
+-- What was taken is kept in a real global, so a reload of the interface still knows what to give back.
+local engine_keys = rawget(_G, "WaxEngineKeys")
+if not engine_keys then
+    engine_keys = { console = {}, said = "" }
+    rawset(_G, "WaxEngineKeys", engine_keys)
+end
+local engine_checked = -1000
+ui.ENGINE_KEYS = true       -- false leaves the engine's keys alone
+
+-- Which plain keys are in use (no Ctrl, Shift or Alt with them), whether F11 is, and whether Alt+Enter is.
+local function keys_in_use()
+    local plain, f11, alt_enter = {}, false, false
+    local function add(key)
+        if type(key) ~= "string" or key == "" then return end
+        local ok, want = pcall(input.parse, key)
+        if not ok or want.key == "" then return end
+        if not (want.ctrl or want.shift or want.alt) then plain[want.key] = true end
+        if want.key == "F11" and not (want.ctrl or want.alt) then f11 = true end
+        if want.key == "Enter" and want.alt then alt_enter = true end
+    end
+    add(toggle_key)
+    for id, owner in pairs(owners) do
+        if id ~= WAX and owner.count > 0 then add(owner.key) end
+    end
+    for index = 1, #hotkeys do
+        if hotkeys[index].owner ~= WAX then add(hotkeys[index].key) end
+    end
+    return plain, f11, alt_enter
+end
+
+local function sync_engine_keys()
+    local plain, f11, alt_enter = keys_in_use()
+    if not ui.ENGINE_KEYS then plain, f11, alt_enter = {}, false, false end
+    local names = {}
+    for name in pairs(plain) do names[#names + 1] = name end
+    table.sort(names)
+    local said = table.concat(names, ",") .. (f11 and "|f11" or "") .. (alt_enter and "|altenter" or "")
+    if said == engine_keys.said then return end
+    local settings = StaticFindObject("/Script/Engine.Default__InputSettings")
+    if not settings:IsValid() then
+        engine_keys.said = said
+        return
+    end
+    local console = settings.ConsoleKeys
+    local count = #console
+    -- a console key that is one of ours is blanked where it stands, and one nobody uses any more gets its name back
+    for index = 1, count do
+        local name = console[index].KeyName:ToString()
+        if plain[name] then
+            console[index].KeyName = FName("None")
+            engine_keys.console[index] = name
+            log:info("%s is a key of the mod manager now, so the game's console no longer opens on it", name)
+        end
+    end
+    for index, name in pairs(engine_keys.console) do
+        if not plain[name] then
+            if index <= count and console[index].KeyName:ToString() == "None" then console[index].KeyName = FName(name) end
+            engine_keys.console[index] = nil
+        end
+    end
+    -- the two fullscreen keys are switches of the same settings
+    if f11 and engine_keys.f11 == nil and settings.bF11TogglesFullscreen == true then
+        settings.bF11TogglesFullscreen = false
+        engine_keys.f11 = true
+    elseif not f11 and engine_keys.f11 then
+        settings.bF11TogglesFullscreen = true
+        engine_keys.f11 = nil
+    end
+    if alt_enter and engine_keys.alt_enter == nil and settings.bAltEnterTogglesFullscreen == true then
+        settings.bAltEnterTogglesFullscreen = false
+        engine_keys.alt_enter = true
+    elseif not alt_enter and engine_keys.alt_enter then
+        settings.bAltEnterTogglesFullscreen = true
+        engine_keys.alt_enter = nil
+    end
+    engine_keys.said = said
+end
+
+-- Looked at a few times a second: the keys in use are few, and the engine is only touched when they changed.
+local function engine_keys_step()
+    if frames - engine_checked < 30 then return end
+    engine_checked = frames
+    local ok, problem = pcall(sync_engine_keys)
+    if not ok and not engine_keys.warned then
+        engine_keys.warned = true
+        log:warn("the engine's own keys could not be looked at, so they stay as they are: %s", (tostring(problem):match("^[^\r\n]*")))
+    end
 end
 
 -- The keys more than one owner acts on, as lines of text. With an id, only that owner's, said from its side.
@@ -696,12 +831,33 @@ function ui.Keys.Clashes(id)
             if id then
                 out[#out + 1] = ("%s is also used by %s. One press acts on both: change one of them."):format(group.key, table.concat(names, " and "))
             else
-                out[#out + 1] = ("%s is used by %s."):format(group.key, table.concat(names, " and "))
+                -- for the whole list, who shares the key is enough: each owner once, by its name
+                local who, seen = {}, {}
+                for _, user in ipairs(group.users) do
+                    if not seen[user.owner] then
+                        seen[user.owner] = true
+                        who[#who + 1] = user.owner == WAX and "the Wax menu" or name_of(user.owner)
+                    end
+                end
+                table.sort(who)
+                local last = table.remove(who)
+                out[#out + 1] = ("%s is used by %s%s and %s."):format(group.key, #who == 1 and "both " or "", table.concat(who, ", "), last)
             end
         end
     end
     table.sort(out)
     return out
+end
+
+-- Who shares a key right now, as one function to ask many times: clashing(id, key) is true when somebody else acts on
+-- that key of that owner too. It answers for the moment it was made.
+function ui.Keys.Clashing()
+    local groups = key_users()
+    return function(id, key)
+        local wanted = key_id(key)
+        local group = wanted and groups[wanted]
+        return group ~= nil and group ~= false and group.count > 1 and group.owners[id] == true
+    end
 end
 
 -- The named keys of one mod, or of every mod: { Id, Name, Label, Key, Default }.
@@ -720,6 +876,13 @@ function ui.Keys.Binds(id)
         end
     end
     return out
+end
+
+-- The name of the key that brings a mod's interface up: the first one its mod.lua names in `keys`. nil when it names none.
+function ui.Keys.Main(id)
+    if id == ui.Keys then error("write ui.Keys.Main(...) with a dot, not a colon", 2) end
+    local first = declared(id)[1]
+    return first and first.name or nil
 end
 
 -- Goes up whenever a named key comes or goes.
@@ -956,16 +1119,22 @@ local function sizes_now()
     return offered, current
 end
 
--- Adds Wax's own settings (the key of its panel, theme, accent, animation, size) to a container, e.g. a "Settings" page.
-function ui.AddSettings(container)
+-- The key that shows and hides Wax's own panel, as a control that follows the key wherever it is changed.
+-- ui.AddSettings adds Wax's own settings (that key, theme, accent, animation, size) to a container, e.g. a "Settings" page.
+function ui.AddPanelKey(container, caption)
     local key_control, follow
-    key_control = container:Keybind("Wax panel key", toggle_key, function(key)
+    key_control = container:Keybind(caption or "Wax panel key", toggle_key, function(key)
         if not ui.Keys.Set(WAX, key) then key_control:Set(toggle_key) end
     end)
     follow = ui.Keys.Changed:Connect(function(id, key)
         if key_control.destroyed then return follow:Disconnect() end
         if id == WAX then key_control:Set(key) end
     end)
+    return key_control
+end
+
+function ui.AddSettings(container)
+    ui.AddPanelKey(container)
     container:Dropdown("Theme", ui.Themes(), style.theme_name, function(name) ui.SetTheme(name) end)
     container:Dropdown("Accent colour", ACCENT_ORDER, accent_choice, function(name)
         accent_choice = name
@@ -1099,6 +1268,7 @@ end
 local function step()
     root.step()
     frames = frames + 1
+    engine_keys_step()
     watch_screen()
     tween.step()
     controls.warm()

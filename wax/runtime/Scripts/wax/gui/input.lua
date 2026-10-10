@@ -11,6 +11,7 @@ local MOUSE_DO_NOT_LOCK = 0
 local key_structs = {}
 local cursor = nil          -- { address, stacked, was_shown } while cursor mode is on
 local capture = nil
+local picking = false      -- true while a key box of the engine's own is taking a key
 local swallow = 0           -- frames left in which a captured key press is not treated as a shortcut
 local capture_alone = nil   -- Ctrl, Shift or Alt pressed during a capture, until another key joins it or it comes up
 
@@ -127,7 +128,13 @@ end
 
 -- callback(key) runs with the next key pressed, or with nil if Escape cancels.
 function input.capture(callback) capture, capture_alone = callback, nil end
-function input.capturing() return capture ~= nil or swallow > 0 end
+function input.capturing() return capture ~= nil or picking or swallow > 0 end
+
+-- While a key box of the engine's own is taking a key: no hotkey acts, and none on the frames right after.
+function input.taking_key(on)
+    if picking and not on then swallow = 3 end
+    picking = on and true or false
+end
 
 -- Stops waiting for a key. Whoever asked is told that none came.
 function input.cancel()
@@ -245,7 +252,7 @@ function input.set_cursor(on)
     return true
 end
 
-function input.forget() cursor, capture, swallow, blocking = nil, nil, 0, false end
+function input.forget() cursor, capture, swallow, blocking, picking = nil, nil, 0, false, false end
 
 -- True while the controller the cursor was switched on for still shows it. When the game has taken it back, the state is forgotten.
 function input.cursor_active()

@@ -39,6 +39,9 @@ $localData = [System.Environment]::GetFolderPath('LocalApplicationData')
 $localTest = Join-Path $localData $localName
 $localReal = Join-Path $localData 'Wax'
 $cheatMods = 'CheatManagerEnablerMod', 'ConsoleCommandsMod', 'ConsoleEnablerMod'
+# The mods UE4SS's own zip brings. None of them is in the download.
+$stockMods = 'BPML_GenericFunctions', 'BPModLoaderMod', 'CheatManagerEnablerMod', 'ConsoleCommandsMod', 'ConsoleEnablerMod',
+    'Keybinds', 'LineTraceMod', 'SplitScreenMod', 'shared'
 if (-not (Test-Path -LiteralPath $zip)) { throw "$zip not found. Run scripts\Build-WaxRelease.ps1 first." }
 
 $script:passed = 0
@@ -225,7 +228,9 @@ function Test-Cycle([string]$Label, [string[]]$Locate, [string]$Win64, [hashtabl
     Check "${Label}: it says who can change Wax's folder now" ($run.Text -match "Wax's folder can now only be changed by your Windows account and by administrators") $run.Text
     Test-Closed "$Label install" $wax
     $installedList = Get-Content -LiteralPath (Join-Path $Win64 'ue4ss\Mods\mods.txt') -Raw
-    Check "${Label}: UE4SS's cheat and console mods are switched off in the game" (-not ($cheatMods | Where-Object { $installedList -notmatch "(?m)^$_ : 0\r?$" }) -and $run.Text -notmatch 'cheat')
+    Check "${Label}: none of UE4SS's own mods is in the game, and its list starts no mod" (
+        @(Get-ChildItem -LiteralPath (Join-Path $Win64 'ue4ss\Mods') -Directory | Where-Object { $_.Name -ne 'Wax' }).Count -eq 0 -and
+        $installedList -notmatch '(?m)^\s*[^;\s]' -and $run.Text -notmatch 'cheat')
 
     Add-PlayerFiles $Win64
     $before = Get-PlayerState $Win64
@@ -351,27 +356,34 @@ Check 'the copy the tests run is the shipped installer with five lines changed: 
 Section 'What the zip installs, against the sources'
 $ue4ssSource = Join-Path $work 'ue4ss-source'
 Expand-Archive -LiteralPath (Join-Path $ToolsDir 'ue4ss\UE4SS_v3.0.1-1152-ge3ba1016.zip') -DestinationPath $ue4ssSource
-$diff = Compare-Tree (Get-Tree $ue4ssSource -Skip 'ue4ss\Mods\mods.txt', 'ue4ss\Mods\mods.json') (Get-Tree (Join-Path $package 'game') -Skip "$waxPath\*", 'ue4ss\Mods\mods.txt', 'ue4ss\Mods\mods.json')
-Check 'UE4SS in the zip is the tested build, file for file, settings included (its two mod lists are looked at below)' ($diff.Count -eq 0) ($diff -join '; ')
+$diff = Compare-Tree (Get-Tree $ue4ssSource -Skip 'ue4ss\Mods\*') (Get-Tree (Join-Path $package 'game') -Skip "$waxPath\*", 'ue4ss\Mods\mods.txt')
+Check 'UE4SS in the zip is the tested build, file for file, settings included, without the mods it brings' ($diff.Count -eq 0) ($diff -join '; ')
 $stockList = [System.IO.File]::ReadAllText((Join-Path $ue4ssSource 'ue4ss\Mods\mods.txt'))
 $stockJson = [System.IO.File]::ReadAllText((Join-Path $ue4ssSource 'ue4ss\Mods\mods.json'))
 $zipList = [System.IO.File]::ReadAllText((Join-Path $package 'game\ue4ss\Mods\mods.txt'))
-$zipJson = [System.IO.File]::ReadAllText((Join-Path $package 'game\ue4ss\Mods\mods.json'))
-$wantedList = $stockList
-$wantedJson = $stockJson
+# The lists Wax 0.2.1 to 0.3.11 installed: UE4SS's own with the three cheat and console mods switched off.
+$offList = $stockList
+$offJson = $stockJson
 foreach ($mod in $cheatMods) {
-    $wantedList = $wantedList.Replace("$mod : 1", "$mod : 0")
-    $wantedJson = [regex]::Replace($wantedJson, "(`"mod_name`": `"$mod`",\s*`"mod_enabled`": )true", '${1}false')
+    $offList = $offList.Replace("$mod : 1", "$mod : 0")
+    $offJson = [regex]::Replace($offJson, "(`"mod_name`": `"$mod`",\s*`"mod_enabled`": )true", '${1}false')
 }
-Check "UE4SS's own zip switches its cheat and console mods on, which is what the build changes" (-not ($cheatMods | Where-Object { $stockList -notmatch "(?m)^$_ : 1\r?$" }))
-Check 'mods.txt in the zip is UE4SS''s own with CheatManagerEnablerMod, ConsoleCommandsMod and ConsoleEnablerMod switched off, and no other change' ($zipList -ceq $wantedList -and $zipList -cne $stockList -and
-    -not ($cheatMods | Where-Object { $zipList -notmatch "(?m)^$_ : 0\r?$" }))
-Check 'mods.json in the zip says the same' ($zipJson -ceq $wantedJson -and $zipJson -cne $stockJson -and
-    -not (($zipJson | ConvertFrom-Json) | Where-Object { $_.mod_name -in $cheatMods -and $_.mod_enabled }) -and @(($zipJson | ConvertFrom-Json) | Where-Object mod_enabled).Count -eq 3)
-Check 'the mods UE4SS needs for its own mod loading are still on' ($zipList -match '(?m)^BPModLoaderMod : 1\r?$' -and $zipList -match '(?m)^BPML_GenericFunctions : 1\r?$' -and $zipList -match '(?m)^Keybinds : 1\r?$')
+$brought = @(Get-ChildItem -LiteralPath (Join-Path $ue4ssSource 'ue4ss\Mods') -Directory | ForEach-Object { $_.Name } | Sort-Object)
+Check "UE4SS's own zip brings the mods the build knows and takes out, and no other" (($brought -join ',') -ceq (($stockMods | Sort-Object) -join ',')) ($brought -join ',')
+$inZip = @(Get-ChildItem -LiteralPath (Join-Path $package 'game\ue4ss\Mods') -Force | ForEach-Object { $_.Name } | Sort-Object)
+Check 'under ue4ss\Mods the zip holds Wax and a list that starts no mod, and nothing else' (($inZip -join ',') -ceq 'mods.txt,Wax' -and
+    $zipList -notmatch '(?m)^\s*[^;\s]' -and $zipList -match '(?m)^;') ($inZip -join ',')
+function Add-StockMods([string]$Win64) {
+    foreach ($mod in $stockMods) {
+        Copy-Item -LiteralPath (Join-Path $ue4ssSource "ue4ss\Mods\$mod") -Destination (Join-Path $Win64 "ue4ss\Mods\$mod") -Recurse -Force
+    }
+}
+function Get-StockMods([string]$Win64) {
+    @($stockMods | Where-Object { Test-Path -LiteralPath (Join-Path $Win64 "ue4ss\Mods\$_") }) -join ','
+}
 $runtime = Join-Path $Root 'wax\runtime'
 $waxSource = @{}
-foreach ($item in Get-ChildItem -LiteralPath $runtime -Force | Where-Object { $_.Name -notin 'run', 'saved', 'mods', 'dev.txt' }) {
+foreach ($item in Get-ChildItem -LiteralPath $runtime -Force | Where-Object { $_.Name -notin 'run', 'saved', 'mods', 'dev.txt', 'VERSION' }) {
     if ($item.PSIsContainer) { (Get-Tree $item.FullName).GetEnumerator() | ForEach-Object { $waxSource["$($item.Name)\$($_.Key)"] = $_.Value } }
     else { $waxSource[$item.Name] = (Get-FileHash -LiteralPath $item.FullName -Algorithm SHA256).Hash }
 }
@@ -403,13 +415,14 @@ $real = if (Test-Path -LiteralPath $configFile) { (Get-Content $configFile -Raw 
 if ($real -and (Test-Path -LiteralPath (Join-Path $real 'ue4ss\UE4SS.dll'))) {
     $realTree = @{ 'dwmapi.dll' = (Get-FileHash -LiteralPath (Join-Path $real 'dwmapi.dll')).Hash }
     # Left out: what UE4SS writes while it runs (its log, the object dump, the Lua type dump in shared\types), and the
-    # two mod lists, which the owner's own game keeps as UE4SS's zip has them.
-    (Get-Tree (Join-Path $real 'ue4ss') -Skip 'UE4SS.log', 'UE4SS_ObjectDump.txt', 'Mods\shared\types\*', 'Mods\Wax\*', 'Mods\mods.txt', 'Mods\mods.json').GetEnumerator() | ForEach-Object { $realTree["ue4ss\$($_.Key)"] = $_.Value }
-    foreach ($item in Get-ChildItem -LiteralPath (Join-Path $real "$waxPath\") -Force | Where-Object { $_.Name -notin 'run', 'saved', 'mods', 'dev.txt' }) {
+    # two mod lists and the mods UE4SS brings, which the owner's own game keeps as UE4SS's zip has them.
+    $skipReal = @('UE4SS.log', 'UE4SS_ObjectDump.txt', 'Mods\Wax\*', 'Mods\mods.txt', 'Mods\mods.json') + @($stockMods | ForEach-Object { "Mods\$_\*" })
+    (Get-Tree (Join-Path $real 'ue4ss') -Skip $skipReal).GetEnumerator() | ForEach-Object { $realTree["ue4ss\$($_.Key)"] = $_.Value }
+    foreach ($item in Get-ChildItem -LiteralPath (Join-Path $real "$waxPath\") -Force | Where-Object { $_.Name -notin 'run', 'saved', 'mods', 'dev.txt', 'VERSION' }) {
         if ($item.PSIsContainer) { (Get-Tree $item.FullName).GetEnumerator() | ForEach-Object { $realTree["$waxPath\$($item.Name)\$($_.Key)"] = $_.Value } }
         else { $realTree["$waxPath\$($item.Name)"] = (Get-FileHash -LiteralPath $item.FullName).Hash }
     }
-    $diff = Compare-Tree $realTree (Get-Tree (Join-Path $package 'game') -Skip "$waxPath\mods\*", "$waxPath\VERSION", 'ue4ss\Mods\mods.txt', 'ue4ss\Mods\mods.json')
+    $diff = Compare-Tree $realTree (Get-Tree (Join-Path $package 'game') -Skip "$waxPath\mods\*", "$waxPath\VERSION", 'ue4ss\Mods\mods.txt')
     Check "the zip's game folder matches the working install, file for file ($($realTree.Count) files)" ($diff.Count -eq 0) (($diff | Select-Object -First 8) -join '; ')
     foreach ($folder in 'saved', 'run\in', 'run\out', 'mods') {
         Check "the working install has Wax\$folder, and so does the zip" ((Test-Path -LiteralPath (Join-Path $real "$waxPath\$folder")) -and (Test-Path -LiteralPath (Join-Path $package "game\$waxPath\$folder")))
@@ -467,9 +480,9 @@ $fingerprint = Get-KeyFingerprint $contractKey
 Check "README.txt gives the key's fingerprint ($fingerprint), names the registry key of the button, why it is there and two ways to remove it" (
     ($readme = [System.IO.File]::ReadAllText((Join-Path $package 'README.txt'))).Contains($fingerprint) -and $readme.Contains('HKEY_CURRENT_USER\Software\Classes\wax') -and
     $readme -match 'Uninstall Wax\.cmd' -and $readme.Contains('reg delete HKCU\Software\Classes\wax /f') -and $readme -match 'two ways to remove' -and $readme -notmatch '@[A-Z]+@')
-Check 'README.txt lists what Wax leaves on a PC, the importer''s log among it, and says the three UE4SS mods are off and who can change Wax''s folder' (
+Check 'README.txt lists what Wax leaves on a PC, the importer''s log among it, and names UE4SS''s own mods, which are not in it, and who can change Wax''s folder' (
     $readme.Contains('%LOCALAPPDATA%\Wax\import.log') -and $readme -match 'WHAT WAX LEAVES ON YOUR PC' -and
-    $readme.Contains('CheatManagerEnablerMod, ConsoleCommandsMod, ConsoleEnablerMod') -and $readme -match 'WHO CAN CHANGE WAX''S FOLDER')
+    $readme.Contains('CheatManagerEnablerMod, ConsoleCommandsMod, ConsoleEnablerMod') -and $readme.Contains('none of them is in this download') -and $readme -match 'WHO CAN CHANGE WAX''S FOLDER')
 Check 'the three .cmd files only start Wax-Setup.ps1 beside them with their own action' (-not ('Install', 'Update', 'Uninstall' | Where-Object {
     [System.IO.File]::ReadAllText((Join-Path $package "$_ Wax.cmd")) -notmatch "-File `"%~dp0Wax-Setup\.ps1`" -Action $_ %\*\r\n" }))
 
@@ -826,34 +839,46 @@ Check 'this user can still write in Wax''s folder, as the game does' ((Get-Conte
 $run = Invoke-Setup @('-Action', 'Uninstall', '-GameDir', $aclWin64, '-RemoveMyFiles', 'Yes', '-RemoveUE4SS', 'Yes')
 Check 'uninstall works on the closed folder' ($run.Code -eq 0 -and -not (Test-Path -LiteralPath (Join-Path $aclWin64 'ue4ss'))) $run.Text
 
-Section 'UE4SS''s cheat and console mods on a game that had an older Wax'
+Section 'UE4SS''s own mods on a game that had an older Wax'
 $modsWin64 = New-FakeGame (Join-Path $work 'older wax\Icarus')
 $modsArgs = @('-Action', 'Install', '-GameDir', $modsWin64)
 $null = Invoke-Setup $modsArgs
 $gameList = Join-Path $modsWin64 'ue4ss\Mods\mods.txt'
 $gameJson = Join-Path $modsWin64 'ue4ss\Mods\mods.json'
-# Wax 0.2.0 installed UE4SS's two mod lists as they are in UE4SS's zip, with the three mods on.
+# Wax 0.2.0 installed UE4SS's mods and its two lists as they are in UE4SS's zip, with the three cheat and console mods on.
+Add-StockMods $modsWin64
 [System.IO.File]::WriteAllText($gameList, $stockList)
 [System.IO.File]::WriteAllText($gameJson, $stockJson)
 Set-Content -LiteralPath (Join-Path $modsWin64 "$waxPath\VERSION") -Value '0.2.0'
 $run = Invoke-Setup $modsArgs
-Check 'over Wax 0.2.0 with the mod lists never touched: the three are switched off, and the installer says so and how to switch one back on' ($run.Code -eq 0 -and
-    [System.IO.File]::ReadAllText($gameList) -ceq $zipList -and [System.IO.File]::ReadAllText($gameJson) -ceq $zipJson -and
-    $run.Text -match "cheat and console mods are now switched off: CheatManagerEnablerMod, ConsoleCommandsMod, ConsoleEnablerMod\." -and
-    $run.Text -match 'change its 0 to 1' -and $run.Text.Contains($gameList)) $run.Text
+Check 'over Wax 0.2.0 with the mod lists never touched: UE4SS''s own mods are removed, the list starts nothing, and the installer says so' ($run.Code -eq 0 -and
+    [System.IO.File]::ReadAllText($gameList) -ceq $zipList -and -not (Test-Path -LiteralPath $gameJson) -and (Get-StockMods $modsWin64) -eq '' -and
+    $run.Text -match "UE4SS's own mods were removed: BPML_GenericFunctions, BPModLoaderMod, CheatManagerEnablerMod" -and
+    $run.Text -match 'console and cheat commands were among them') $run.Text
 Check 'nothing was backed up for that, and it is not called the player''s own setting' (-not (Test-Path (Join-Path $modsWin64 'ue4ss-backup-*')) -and $run.Text -notmatch 'Your own UE4SS settings were kept')
+# Wax 0.2.1 to 0.3.11 installed them with the three switched off.
+Add-StockMods $modsWin64
+[System.IO.File]::WriteAllText($gameList, $offList)
+[System.IO.File]::WriteAllText($gameJson, $offJson)
+$run = Invoke-Setup $modsArgs
+Check 'over Wax 0.2.1 to 0.3.11 with the mod lists never touched: the same' ($run.Code -eq 0 -and [System.IO.File]::ReadAllText($gameList) -ceq $zipList -and
+    -not (Test-Path -LiteralPath $gameJson) -and (Get-StockMods $modsWin64) -eq '' -and $run.Text -match "UE4SS's own mods were removed" -and
+    $run.Text -notmatch 'Your own UE4SS settings were kept' -and -not (Test-Path (Join-Path $modsWin64 'ue4ss-backup-*'))) $run.Text
+$run = Invoke-Setup $modsArgs
+Check 'installed again, nothing is removed and nothing is said about it' ($run.Code -eq 0 -and $run.Text -notmatch 'were removed') $run.Text
 $edited = $stockList + "MyOtherMod : 1`r`n"
+Add-StockMods $modsWin64
 [System.IO.File]::WriteAllText($gameList, $edited)
 $run = Invoke-Setup $modsArgs
-Check 'a mods.txt the player changed is kept as it is, and the installer names the three that are on in it and says how to switch them off' ($run.Code -eq 0 -and
-    [System.IO.File]::ReadAllText($gameList) -ceq $edited -and $run.Text -match 'Your own UE4SS settings were kept: mods\.txt' -and
+Check 'a mods.txt the player changed is kept as it is with the mods it names, and the installer names the three that are on in it and says how to switch them off' ($run.Code -eq 0 -and
+    [System.IO.File]::ReadAllText($gameList) -ceq $edited -and (Get-StockMods $modsWin64) -eq ($stockMods -join ',') -and $run.Text -match 'Your own UE4SS settings were kept: mods\.txt' -and
     $run.Text -match 'these mods of UE4SS are switched on: CheatManagerEnablerMod, ConsoleCommandsMod, ConsoleEnablerMod\.' -and
-    $run.Text -match 'Your file was not changed' -and $run.Text -match 'change its 1 to 0') $run.Text
-$oneOn = $zipList.Replace('ConsoleEnablerMod : 0', 'ConsoleEnablerMod : 1')
+    $run.Text -match 'Your file was not changed' -and $run.Text -match 'change its 1 to 0' -and $run.Text -notmatch 'were removed') $run.Text
+$oneOn = $offList.Replace('ConsoleEnablerMod : 0', 'ConsoleEnablerMod : 1')
 [System.IO.File]::WriteAllText($gameList, $oneOn)
 $run = Invoke-Setup $modsArgs
 Check 'a player who switched one of them on keeps it on, and only that one is named' ($run.Code -eq 0 -and [System.IO.File]::ReadAllText($gameList) -ceq $oneOn -and
-    $run.Text -match 'these mods of UE4SS are switched on: ConsoleEnablerMod\.') $run.Text
+    (Get-StockMods $modsWin64) -eq ($stockMods -join ',') -and $run.Text -match 'these mods of UE4SS are switched on: ConsoleEnablerMod\.') $run.Text
 $oldStyle = Join-Path $work 'old-updater\Wax-update-0a1b2c3d\Wax'
 New-Item -ItemType Directory -Force (Split-Path $oldStyle) | Out-Null
 Copy-Item -LiteralPath $package -Destination $oldStyle -Recurse

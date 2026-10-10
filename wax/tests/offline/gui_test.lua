@@ -658,6 +658,8 @@ t.test("the Mods page has the updater's button, a switch on the card of each mod
     ui.SetPreview(true)
     local shown = panel.updates
     t.ok(shown and shown.check and shown.line and shown.note, "the controls are there")
+    t.eq(panel.Window().title, "Wax", "the name stays as it was")
+    t.eq(panel.Window().version, "0.3.12", "the version sits beside it")
     t.eq(shown.switch, nil, "there is no one switch for every mod any more")
     t.eq(text_of(shown.line), "Not checked yet.")
     refresh()
@@ -723,6 +725,36 @@ t.test("the Mods page has the updater's button, a switch on the card of each mod
     local touches = fake.dead_touches
     frames(3)
     t.eq(fake.dead_touches, touches, fake.dead_where)
+end)
+
+t.test("the Mods page says which Wax this is, and when a newer one is waiting", function()
+    local panel = Wax.import("gui.debug")
+    local state = { running = "0.3.12", ready = nil, installer = nil }
+    Wax.selfupdate = { state = function() return state end }
+    Wax.update = {
+        state = function() return { available = {}, installing = {}, checking = false, last = 0, look = true, mods = {} } end,
+        set_looking = function() end,
+        check_now = function() return true end,
+        install = function() return true end,
+    }
+    local function refresh()
+        local started = os.clock()
+        while os.clock() - started < 0.55 do end
+        panel.step()
+    end
+    panel.start()
+    ui.SetPreview(true)
+    t.eq(panel.Window().title, "Wax")
+    t.eq(panel.Window().version, "0.3.12")
+    state.ready = "0.3.13"
+    refresh()
+    t.eq(panel.Window().version, "0.3.12  ·  0.3.13 at next start")
+    state.ready, state.installer = nil, "0.4.0"
+    refresh()
+    t.eq(panel.Window().version, "0.3.12  ·  0.4.0 needs Update Wax.cmd")
+    ui.SetPreview(false)
+    panel.stop()
+    Wax.selfupdate, Wax.update = nil, nil
 end)
 
 t.test("the Mods page has one switch for looking for updates: off, Check now and every mod's Auto Update are greyed", function()
@@ -1979,7 +2011,7 @@ t.test("a mod's named key runs on its key, can be changed by the player, and a c
     Wax.game = nil
 end)
 
-t.test("a key is chosen for an owner with ui.Keys.Set: one that is taken is refused and says who has it", function()
+t.test("a key is chosen for an owner with ui.Keys.Set: one that is taken is given all the same, with a notice of who else has it", function()
     Wax.game = { LocalPlayer = { Raw = fake.new_object("PlayerController") } }
     ui.Notifications.Clear()
     local garage, radar, scout = mod("Garage", "Garage Tools"), mod("Radar"), mod("Scout")
@@ -1997,28 +2029,26 @@ t.test("a key is chosen for an owner with ui.Keys.Set: one that is taken is refu
     local wax_listening = ui.KeyChanged:Connect(function(key) wax_told[#wax_told + 1] = tostring(key) end)
 
     local ok, who = ui.Keys.Set("Garage", "K")
-    t.eq(ok, false)
-    t.eq(who, "Radar", "the owner that has it")
-    t.eq(ui.Keys.Get("Garage"), "F6", "the key stays what it was")
+    t.eq(ok, true, "a key somebody has is given all the same")
+    t.eq(who, "Radar", "and the answer names who else has it")
+    t.eq(ui.Keys.Get("Garage"), "K")
     t.eq(ui.Notifications.Count(), 1, "and a notice says so")
+    t.eq(told[1], "Garage=K")
+    t.ok(ui.Keys.Clashes("Garage")[1]:find("K is also used by Radar", 1, true), ui.Keys.Clashes("Garage")[1])
     ok, who = ui.Keys.Set("Garage", "F8")
     t.eq(who, "Wax")
     ok, who = ui.Keys.Set("Garage", "J")
-    t.eq(ok, false)
-    t.eq(who, "Radar", "a key another mod uses as a hotkey is taken too")
-    ok, who = ui.Keys.Set("Wax", "F6")
-    t.eq(ok, false)
-    t.eq(who, "Garage Tools")
-    t.eq(ui.SetToggleKey("K"), false, "the old name for Wax's key answers the same")
-    t.eq(ui.GetToggleKey(), "F8")
-    t.eq(#told, 0, "a refused key is no change")
+    t.eq(who, "Radar", "a key another mod uses as a hotkey is named too")
+    t.eq(ui.Keys.Set("Garage", "F6"), true)
+    t.eq(#ui.Keys.Clashes(), 0)
+    told = {}
     ui.Notifications.Clear()
 
     t.eq(ui.Keys.Set("Garage", "Ctrl+Shift+G"), true)
     t.eq(ui.Keys.Get("Garage"), "Ctrl+Shift+G")
     t.eq(told[1], "Garage=Ctrl+Shift+G")
     ok, who = ui.Keys.Set("Radar", "shift+ctrl+G")
-    t.eq(ok, false, "the same key spelt another way is the same key")
+    t.eq(who, "Garage Tools", "the same key spelt another way is the same key")
     t.eq(ui.Keys.Set("Garage", "F6"), true)
     t.eq(ui.Keys.Set("Radar", "K"), true, "an owner can be given the key it has")
     t.eq(ui.Keys.Set("Wax", "F7"), true)
@@ -2515,15 +2545,15 @@ t.test("the Mods page: a mod from the catalogue has its own Auto Update on its c
     frames(3)
     t.eq(ui.Keys.Get("Hello"), "K", "the key that was pressed is the mod's key now")
     t.eq(card.keybind:Get(), "K")
-    -- a key somebody has: refused, said, and the control shows the key the mod still has
+    -- a key somebody has: given all the same, and said
     ui.Notifications.Clear()
     click(card.keybind.source)
     fake.key_pressed = "F8"
     frames(1)
     fake.key_pressed = nil
     frames(3)
-    t.eq(ui.Keys.Get("Hello"), "K")
-    t.eq(card.keybind:Get(), "K")
+    t.eq(ui.Keys.Get("Hello"), "F8")
+    t.eq(card.keybind:Get(), "F8")
     t.eq(ui.Notifications.Count(), 1)
     -- changed elsewhere, the card follows
     t.eq(ui.Keys.Set("Hello", "L"), true)

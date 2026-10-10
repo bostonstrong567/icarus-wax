@@ -16,7 +16,7 @@ local SINKS = {
 
 local DELEGATES = {
     OnClicked = "none", OnPressed = "none", OnReleased = "none", OnHovered = "none", OnUnhovered = "none",
-    OnMouseCaptureBegin = "none", OnMouseCaptureEnd = "none",
+    OnMouseCaptureBegin = "none", OnMouseCaptureEnd = "none", OnIsSelectingKeyChanged = "none", OnKeySelected = "none",
     OnCheckStateChanged = "bool",
     OnValueChanged = "number", OnUserScrolled = "number",
     OnTextChanged = "text", OnTextCommitted = "text",

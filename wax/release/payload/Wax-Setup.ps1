@@ -42,8 +42,13 @@ $StockMods = @(
     'BPML_GenericFunctions', 'BPModLoaderMod', 'CheatManagerEnablerMod', 'ConsoleCommandsMod',
     'ConsoleEnablerMod', 'Keybinds', 'LineTraceMod', 'SplitScreenMod', 'shared'
 )
-# UE4SS's own mods that Wax ships switched off.
+# UE4SS's own mods that open the game's console and cheat commands.
 $CheatMods = @('CheatManagerEnablerMod', 'ConsoleCommandsMod', 'ConsoleEnablerMod')
+# The SHA-256 of every UE4SS mod list an earlier Wax installed. A list that is one of these is not the player's own.
+$EarlierLists = @(
+    '7b186575d19dbbddb7e357c6458fa5223bf1cd565cba03f52a49ddf2de3994b9', 'b09bd14e654e5e8caa0af4348e547196bcc05ebe9d2ff183e579cccbe9c63371',
+    '023e06aca051278eace08bf0bbb565263d6e0e8b94c5b45bda832706d9d009ac', 'cfa4334b41ae4be8e043fd69329e38dc3f4023f67d0faa9efa1970cb195889c7'
+)
 $AclOnItem = [bool]([System.IO.DirectoryInfo].GetMethod('SetAccessControl'))
 
 function Combine([string]$Left, [string]$Right) { return [System.IO.Path]::Combine($Left, $Right) }
@@ -472,16 +477,11 @@ function Protect-Folder([string]$Wax) {
     }
 }
 
-# True when a UE4SS mod list in the game is the one that came with Wax before: today's list with all three mods switched on.
+# True when a UE4SS mod list in the game is one that came with Wax before.
 function Test-EarlierList([string]$Shipped, [string]$Installed) {
     $name = [System.IO.Path]::GetFileName($Shipped)
     if ($name -ne 'mods.txt' -and $name -ne 'mods.json') { return $false }
-    $earlier = [System.IO.File]::ReadAllText($Shipped)
-    foreach ($mod in $CheatMods) {
-        $earlier = [regex]::Replace($earlier, "(?m)^($mod\s*:\s*)0", '${1}1')
-        $earlier = [regex]::Replace($earlier, "(`"mod_name`"\s*:\s*`"$mod`"\s*,\s*`"mod_enabled`"\s*:\s*)false", '${1}true')
-    }
-    return $earlier -ceq [System.IO.File]::ReadAllText($Installed)
+    return $EarlierLists -contains (Get-Sha256 $Installed)
 }
 
 function Install-Wax {
@@ -533,6 +533,20 @@ function Install-Wax {
         }
         Copy-File $file $target
     }
+    # UE4SS's own mods came with earlier versions of Wax. They go, unless the list of mods to start is the player's own.
+    $removed = @()
+    $modsFolder = Combine $win64 'ue4ss\Mods'
+    if (($kept -notcontains 'mods.txt') -and ($sameUE4SS -or -not $hadUE4SS)) {
+        foreach ($mod in $StockMods) {
+            $folder = Combine $modsFolder $mod
+            if ((Test-Folder $folder) -and -not (Test-Link $folder)) {
+                Remove-Tree $folder
+                $removed += $mod
+            }
+        }
+        $oldList = Combine $modsFolder 'mods.json'
+        if ((Test-File $oldList) -and ($EarlierLists -contains (Get-Sha256 $oldList))) { [System.IO.File]::Delete($oldList) }
+    }
     $stillOn = @()
     if ($kept -contains 'mods.txt') {
         $list = [System.IO.File]::ReadAllText((Combine $win64 'ue4ss\Mods\mods.txt'))
@@ -578,16 +592,15 @@ function Install-Wax {
         Write-Host ('Your own UE4SS settings were kept: ' + ($kept -join ', '))
     }
     $modList = Combine $win64 'ue4ss\Mods\mods.txt'
-    if ($switchedOff) {
+    if ($removed.Count -gt 0) {
         Write-Host ''
-        Write-Host ("UE4SS's own cheat and console mods are now switched off: " + ($CheatMods -join ', ') + '.')
-        Write-Host 'Wax does not need them, and earlier versions of Wax left them on. To switch one back on, change its 0 to 1 in:'
-        Write-Host "  $modList"
+        Write-Host ("UE4SS's own mods were removed: " + ($removed -join ', ') + '.')
+        Write-Host 'They came with earlier versions of Wax, and Wax does not need them. The game''s console and cheat commands were among them.'
     }
     if ($stillOn.Count -gt 0) {
         Write-Host ''
         Write-Host ("In your mods.txt these mods of UE4SS are switched on: " + ($stillOn -join ', ') + '.')
-        Write-Host 'They open the game''s console and cheat commands. Wax does not need them, and a new install has them off.'
+        Write-Host 'They open the game''s console and cheat commands. Wax does not need them, and a new install does not have them.'
         Write-Host 'Your file was not changed. To switch one off, change its 1 to 0 in:'
         Write-Host "  $modList"
     }
@@ -907,9 +920,6 @@ function Remove-Wax([string]$Win64, [string]$Wax, [bool]$HasWax) {
 function Remove-UE4SS([string]$Win64) {
     $ue4ss = Combine $Win64 'ue4ss'
     $stock = $StockMods
-    if (Test-Folder (Combine $Package 'ue4ss\Mods')) {
-        $stock = @((New-Object System.IO.DirectoryInfo (Combine $Package 'ue4ss\Mods')).GetDirectories() | ForEach-Object { $_.Name })
-    }
     $mods = Combine $ue4ss 'Mods'
     $others = @()
     if (Test-Folder $mods) {

@@ -111,6 +111,14 @@ function Window:SetTitle(title)
     kit.set_text(self.title_label, self.title)
 end
 
+-- The dim text after the name. Empty hides it.
+function Window:SetVersion(text)
+    self.version = text == nil and "" or tostring(text)
+    if not self.version_label then return end
+    kit.set_text(self.version_label, self.version)
+    self.version_label:SetVisibility(self.version == "" and V.Collapsed or V.HitTestInvisible)
+end
+
 function Window:SetPosition(x, y)
     self.x, self.y = x, y
     apply_geometry(self)
@@ -612,7 +620,16 @@ local function build(window, options)
         kit.slot(bar_row:AddChild(title_icon), { v = VA.Center, pad = style.margin(0, 0, 8, 0) })
     end
     window.title_label = kit.label(window.title, { size = theme.title_size, face = "Bold" })
-    kit.slot(bar_row:AddChild(window.title_label), { v = VA.Center, fill = 1 })
+    if options.version then
+        -- The name stays bold. The version is the dim text beside it, and a spacer keeps the buttons at the right.
+        kit.slot(bar_row:AddChild(window.title_label), { v = VA.Center })
+        window.version_label = kit.label("", { size = theme.title_size, color = theme.dim, free = true })
+        window.version_label:SetVisibility(V.Collapsed)
+        kit.slot(bar_row:AddChild(window.version_label), { v = VA.Center, pad = style.margin(8, 0, 0, 0) })
+        kit.slot(bar_row:AddChild(root.new("Spacer")), { fill = 1 })
+    else
+        kit.slot(bar_row:AddChild(window.title_label), { v = VA.Center, fill = 1 })
+    end
     local minimize_icons = root.new("Overlay")
     window.minus_icon, window.plus_icon = kit.icon("minus", 14, theme.dim), kit.icon("plus", 14, theme.dim)
     minimize_icons:AddChild(window.minus_icon)
