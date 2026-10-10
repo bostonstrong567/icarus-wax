@@ -1,0 +1,58 @@
+# Sends the player zip from a published release to the Nexus Mods file page.
+# Pinned to v1.0.0-beta.10, which is v1.0.0-beta.9 plus the changelog field.
+# A pre-release, including the kept UE4SS build, is left alone.
+name: Upload to Nexus Mods
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  upload:
+    if: ${{ !github.event.release.prerelease && startsWith(github.event.release.tag_name, 'v') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the release zip
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          for attempt in 1 2 3 4 5 6; do
+            gh release download "$tag" --repo "${GITHUB_REPOSITORY}" --pattern "Wax-${version}.zip" --output "Wax-${version}.zip" && break
+            sleep 10
+          done
+          test -s "Wax-${version}.zip"
+          python3 - <<'PY'
+          import json, os
+          event = json.load(open(os.environ["GITHUB_EVENT_PATH"], encoding="utf-8"))
+          notes = ((event.get("release") or {}).get("body") or "").strip()[:65535]
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write("notes<<EOF\n")
+              if notes:
+                  handle.write(notes)
+                  if not notes.endswith("\n"):
+                      handle.write("\n")
+              handle.write("EOF\n")
+          PY
+
+      - name: Upload to Nexus Mods
+        uses: Nexus-Mods/upload-action@v1.0.0-beta.10
+        with:
+          api_key: ${{ secrets.NEXUSMODS_API_KEY }}
+          file_id: ${{ vars.NEXUSMODS_FILE_ID }}
+          mod_id: ${{ vars.NEXUSMODS_MOD_ID }}
+          filename: Wax-${{ steps.release.outputs.version }}.zip
+          display_name: Wax ${{ steps.release.outputs.version }}
+          version: ${{ steps.release.outputs.version }}
+          category: main
+          changelog: ${{ steps.release.outputs.notes }}
+          primary_mod_manager_download: true
+          allow_mod_manager_download: true
+          update_mod_version: true
+          archive_existing_version: false
