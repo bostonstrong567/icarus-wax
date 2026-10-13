@@ -1089,7 +1089,7 @@ end
 
 local Table = {}
 local TABLE_NAMES = { "Name", "RowStruct", "Raw", "Count", "GetNames", "Has", "Row", "Load", "Loaded", "Fields", "Meta", "Stamp",
-                      "Set", "Change", "Add", "Reset", "Changes", "Conflicts" }
+                      "Set", "Change", "Add", "Reset", "SetAll", "Changes", "Conflicts" }
 
 Table.Set = public(function(self, row, field, value) return writer().set(self, row, field, value) end)
 Table.Change = public(function(self, row, field, fn) return writer().change(self, row, field, fn) end)
@@ -1284,6 +1284,7 @@ M.internal = {
     plan_of = plan_of, scalar = scalar, clean = clean, describe = describe, live = live, record_of = record_of, rows = rows_of,
     forget = forget_row, row_added = row_added, row_removed = row_removed, Patched = Patched,
     named = function(name) return object_for(open(name)) end,
+    Table = Table, public = public,
     meta = function(record) return metas[record.key] or nil end,
     changed = function(name) Changed:Fire(name) end,
     table_names = function()

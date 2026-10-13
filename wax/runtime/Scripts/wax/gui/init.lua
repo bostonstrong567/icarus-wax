@@ -20,6 +20,7 @@ local model = Wax.import("gui.model")
 local tip = Wax.import("gui.tip")
 local fit = Wax.import("gui.fit")
 local grab = Wax.import("gui.drag")
+local settings_module = Wax.import("gui.settings")
 local sched = Wax.import("core.sched")
 local storage = Wax.import("core.storage")
 local scope = Wax.import("core.scope")
@@ -497,6 +498,8 @@ function ui.Window(options)
     return window
 end
 
+-- ui.Settings({ title = , fields = { ... }, presets = { ... } }): a settings window whose values are kept on disk
+function ui.Settings(spec) return settings_module.create(spec, caller(), ui.Window) end
 ui.Overlay = overlay_module.create
 ui.Panel = overlay_module.panel
 -- The value of the slot under the mouse, then its look and its control.

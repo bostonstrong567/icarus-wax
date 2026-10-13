@@ -127,6 +127,8 @@ function boot.start()
         local data_ok, data_err = xpcall(function() Wax.import("data.tables").start() end, debug.traceback)
         if not data_ok then core_log:error("game.Data failed to start: %s", tostring(data_err)) end
         local patch_ok, patch_err = xpcall(function() Wax.import("data.patch").start() end, debug.traceback)
+        local bulk_ok, bulk_err = xpcall(function() Wax.import("data.bulk").start() end, debug.traceback)
+        if not bulk_ok then core_log:warn("data.bulk did not start: %s", tostring(bulk_err)) end
         if not patch_ok then core_log:error("changing game tables failed to start: %s", tostring(patch_err)) end
         local recipes_ok, recipes_err = xpcall(function() Wax.import("world.recipes").start() end, debug.traceback)
         if not recipes_ok then core_log:error("game.Recipes failed to start: %s", tostring(recipes_err)) end

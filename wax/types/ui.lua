@@ -753,6 +753,64 @@ function ui.Theme() end
 ---@param container WaxContainer
 function ui.AddSettings(container) end
 
+---One setting of a settings window. Its first entry is the key, its second the caption. Exactly one of slider, toggle, choices and text says what it is.
+---A table with only `heading` draws a heading between fields instead.
+---@class WaxSettingsField
+---@field [1] string The key the value is kept under, such as "multiplier".
+---@field [2] string The caption shown beside the control.
+---@field default any What the setting is until the player changes it. A number for a slider, a boolean for a toggle, one of the choices, or a string.
+---@field slider? { min: number, max: number, step?: number, format?: string, live?: boolean } A number between min and max. The value is reported when the mouse lets go, unless `live` is true.
+---@field toggle? boolean True for a switch.
+---@field choices? any[] The choices of a dropdown.
+---@field text? boolean|{ hint?: string } True for a text box, or a table with the greyed text shown while it is empty.
+---@field help? string A dim line of explanation under the control.
+---@field heading? string A heading between fields, on a table of its own.
+
+---@class WaxSettingsSpec
+---@field title string The window's title.
+---@field fields WaxSettingsField[] The settings, in the order they are shown.
+---@field presets? { [1]: string, [2]: table<string, any> }[] Named sets of values, each `{ "Balanced", { multiplier = 2, weight = 0.5 } }`. A Preset dropdown goes at the top; it reads "Custom" while the values match none.
+---@field icon? string The window's icon.
+---@field name? string The storage name the values are saved under. "settings" when omitted.
+---@field section? string The title of the card the fields sit in. "Settings" when omitted.
+---@field key? string The key that shows and hides the window, as ui.Window takes it.
+---@field width? number
+---@field height? number
+---@field x? number
+---@field y? number
+
+---A settings window and its values.
+---@class WaxSettings
+---@field values table<string, any> The values by key. Read them whenever you need them; they are kept up to date.
+---@field Changed WaxSignal<fun(key: string, value: any)> Fires with the key and the new value when the player, a preset, Set or Reset changes a setting. Handlers run as tasks and may pause.
+---@field window WaxWindow The window, for SetVisible, SetPosition and anything else of a window.
+---@field section WaxSection The card the controls are in, to add controls of your own after them.
+---@field controls table<string, WaxControl> The control of each key.
+---@field Get fun(self: WaxSettings, key: string): any The value of one setting. An unknown key is an error.
+---@field Set fun(self: WaxSettings, key: string, value: any): boolean Sets one value: the control follows, the value is saved and Changed fires. A number outside a slider's range is kept inside it; a value the field cannot hold is an error. False when nothing moved.
+---@field UsePreset fun(self: WaxSettings, name: string): boolean Sets every value of a preset. False when the values already matched it.
+---@field Preset fun(self: WaxSettings): string The name of the preset the values match, or "Custom".
+---@field Reset fun(self: WaxSettings): boolean Puts every default back.
+
+---A settings window in one call: a window with a control for each field, values that are saved under your mod's name and
+---come back the next time the game starts, presets, a Defaults button, and a signal that says when a value moves.
+---```lua
+---local settings = ui.Settings({
+---    title = "Bigger Stacks", icon = "layers",
+---    presets = { { "Balanced", { multiplier = 2 } }, { "Lots", { multiplier = 10 } } },
+---    fields = {
+---        { "multiplier", "Stack multiplier", slider = { min = 1, max = 50, step = 1 }, default = 2 },
+---        { "ammo", "Ammo too", toggle = true, default = false },
+---    },
+---})
+---local function apply() ... end
+---apply()
+---settings.Changed:Connect(apply)
+---```
+---@param spec WaxSettingsSpec
+---@return WaxSettings
+function ui.Settings(spec) end
+
 ---The fur of a model: a second mesh that hair grows from. game.Creatures:GetModel fills it in from the creature's own data.
 ---@class WaxModelFur
 ---@field mesh string The game path of the mesh the fur grows from.

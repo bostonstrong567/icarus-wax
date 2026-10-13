@@ -659,7 +659,13 @@ t.test("the Mods page has the updater's button, a switch on the card of each mod
     local shown = panel.updates
     t.ok(shown and shown.check and shown.line and shown.note, "the controls are there")
     t.eq(panel.Window().title, "Wax", "the name stays as it was")
-    t.eq(panel.Window().version, "0.3.12", "the version sits beside it")
+    local function released()
+        local file = assert(io.open("wax/VERSION", "rb"))
+        local text = file:read("a")
+        file:close()
+        return text:match("%S+")
+    end
+    t.eq(panel.Window().version, released(), "the version sits beside it")
     t.eq(shown.switch, nil, "there is no one switch for every mod any more")
     t.eq(text_of(shown.line), "Not checked yet.")
     refresh()

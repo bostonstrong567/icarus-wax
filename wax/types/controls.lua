@@ -98,6 +98,9 @@ function Icon:Set(name) end
 ---A switch that is on or off, with a caption beside it.
 ---@class WaxToggle: WaxControl
 ---@field Changed WaxSignal<fun(on: boolean)> Fires when the user flips the switch.
+---@field Get fun(self: WaxToggle): boolean Whether the switch is on.
+---@field Set fun(self: WaxToggle, on: boolean) Flips the switch from code. Changed does not fire.
+---@field SetCaption fun(self: WaxToggle, text: string)
 local Toggle = {}
 
 ---True while the switch is on.
@@ -150,6 +153,8 @@ function Title:SetDescription(description) end
 
 ---A slider. The number beside it can be clicked and typed into.
 ---@class WaxSlider: WaxControl
+---@field Get fun(self: WaxSlider): number The value shown.
+---@field Set fun(self: WaxSlider, value: number) Moves the slider from code, snapped to its step and kept inside its range. Changed does not fire.
 ---@field Changed WaxSignal<fun(value: number)> Fires with each new value while the user drags (once, on letting go, with live = false), and when a number is typed.
 ---@field Released WaxSignal<fun(value: number)> Fires once when the user lets go, for changes too heavy to apply during the drag.
 local Slider = {}
@@ -171,6 +176,8 @@ function Slider:Set(value) end
 
 ---A box the user types text into, with or without a caption.
 ---@class WaxInput: WaxControl
+---@field Get fun(self: WaxInput): string The text in the box.
+---@field Set fun(self: WaxInput, text: string) Puts text in the box from code. Changed does not fire.
 ---@field Changed WaxSignal<fun(text: string)> Fires when the text is committed (Enter, or the box losing focus).
 ---@field Entered WaxSignal<fun(text: string)> Fires only when Enter is pressed, even when the text is the same as last time (for a command line).
 ---@field Typed WaxSignal<fun(text: string)> Fires on every change to the text while typing.
@@ -202,6 +209,8 @@ function Input:SetHint(hint) end
 ---A dropdown opens in place under its header. The chosen row is highlighted, and only one list is open at a time.
 ---The header is always one line: a choice too long for it ends in "..." there and is whole in the list.
 ---@class WaxDropdown: WaxControl
+---@field Get fun(self: WaxDropdown): any The chosen entry.
+---@field Set fun(self: WaxDropdown, choice: any) Chooses an entry from code. Changed does not fire.
 ---@field Changed WaxSignal<fun(choice: any)> Fires when the user picks a choice.
 local Dropdown = {}
 
@@ -277,6 +286,8 @@ function Field:SetColor(color) end
 
 ---A key the user can change: after a click on it, the next key pressed becomes the key. Escape leaves it as it was.
 ---@class WaxKeybind: WaxControl
+---@field Get fun(self: WaxKeybind): string? The key shown, or nil for none.
+---@field Set fun(self: WaxKeybind, key: string?) Shows another key from code. Changed does not fire.
 ---@field Changed WaxSignal<fun(key: string)> Fires with the engine's name of the key the user pressed.
 local Keybind = {}
 

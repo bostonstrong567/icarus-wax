@@ -1,0 +1,51 @@
+-- The sums of Crafting Tweaks: tools\lua\lua54\lua.exe build\nexus-work\CraftingTweaks\tests\craftingtweaks_test.lua
+local t = dofile("wax/tests/offline/harness.lua")
+local scale = dofile("luamods/CraftingTweaks/scale.lua")
+
+t.test("a count at a share of the game's own", function()
+    t.eq(scale.count_at(10, 100), 10)
+    t.eq(scale.count_at(10, 50), 5)
+    t.eq(scale.count_at(10, 25), 3, "rounds to the nearest")
+    t.eq(scale.count_at(1, 25), 1, "never rounds down to nothing")
+    t.eq(scale.count_at(3, 200), 6)
+    t.eq(scale.count_at(10, 0), 0, "0% is free")
+    t.eq(scale.count_at(0, 50), 0, "a count of nothing stays nothing")
+end)
+
+t.test("work at a share of the game's own", function()
+    t.eq(scale.work_at(2500, 100), 2500)
+    t.eq(scale.work_at(2500, 50), 1250)
+    t.eq(scale.work_at(2500, 10), 250)
+    t.eq(scale.work_at(2500, 0), 1, "0% is the one millijoule the instant mods write")
+    t.eq(scale.work_at(2500, 200), 5000)
+    t.eq(scale.work_at(3, 5), 1, "never under one")
+end)
+
+t.test("inputs are copied, never changed in place", function()
+    local was = { { Element = { RowName = "Fiber", DataTableName = "D_ItemsStatic" }, Count = 10 }, { Element = { RowName = "Stick" }, Count = 4 } }
+    local now = scale.inputs_at(was, 50)
+    t.eq(now[1].Count, 5)
+    t.eq(now[2].Count, 2)
+    t.eq(now[1].Element.RowName, "Fiber")
+    t.eq(was[1].Count, 10, "the original keeps its count")
+    t.ok(now[1].Element ~= was[1].Element, "the handle is a copy too")
+    t.eq(scale.inputs_at({}, 50), nil, "an empty list leaves the row alone")
+end)
+
+t.test("outputs are multiplied", function()
+    local was = { { Element = { RowName = "Iron_Ingot" }, Count = 1, DynamicProperties = {}, Alterations = {} } }
+    local now = scale.outputs_times(was, 10)
+    t.eq(now[1].Count, 10)
+    t.eq(#now[1].DynamicProperties, 0)
+    t.eq(was[1].Count, 1)
+    t.eq(scale.outputs_times({}, 10), nil)
+end)
+
+t.test("the extractor's recipe is not crafting", function()
+    t.eq(scale.is_crafting(nil, { RecipeSets = { { RowName = "Meta_Extractor" } } }), false)
+    t.eq(scale.is_crafting(nil, { RecipeSets = { { RowName = "Character" }, { RowName = "Crafting_Bench" } } }), true)
+    t.eq(scale.is_crafting(nil, { RecipeSets = {} }), true)
+    t.eq(scale.is_crafting(nil, {}), true)
+end)
+
+t.finish("craftingtweaks")

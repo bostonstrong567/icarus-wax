@@ -214,6 +214,33 @@ function DataTable:Add(name, values, options) end
 ---@return integer count How many changes were taken back.
 function DataTable:Reset(row, field) end
 
+---@class WaxBulkOptions
+---@field where? fun(name: string, row: WaxDataRow): boolean Only rows this answers true for are changed. The row holds the field and the `fields` named here.
+---@field fields? string[] Other fields to read into the row that `where` and the function see.
+---@field rows? string[] Only these rows. Every row of the table when omitted.
+---@field budget? number Seconds of one frame the job may use before it pauses until the next. 0.001 when omitted.
+
+---A change over many rows, running in a task of its own.
+---@class WaxBulkJob
+---@field Field string The field being set.
+---@field Total integer How many rows the job looks at.
+---@field Count integer Rows the function gave a value for so far.
+---@field Changed integer Rows that were written so far. A row that already held the value is not written.
+---@field Failed integer Rows that could not be read, or where the function raised an error.
+---@field Problem string? The first failure, as "row: what went wrong".
+---@field Running boolean True until the last row is done.
+---@field Done WaxSignal<fun(job: WaxBulkJob)> Fires once when the job is through, with the job.
+---@field Cancel fun(self: WaxBulkJob) Stops the job after the row it is on. What was written stays, as any Set does.
+
+---Sets one field of every row, spread over frames so the game keeps running: `items:SetAll("MaxStack", function(was) return was * 2 end)`.
+---`value` is the new value for each row, or a function of what the game itself had (never what a mod set before, so running it again with a new factor is right), the row's name, and the row with the fields read. A function that returns nil leaves that row alone.
+---Each row is set as Set does, so the changes belong to your mod and are put back when it unloads. The job runs in a task that starts at the end of this frame: SetAll returns at once, and `job.Done` fires when every row is through.
+---@param field string
+---@param value any|fun(was: any, name: string, row: WaxDataRow): any
+---@param options? WaxBulkOptions
+---@return WaxBulkJob job
+function DataTable:SetAll(field, value, options) end
+
 ---What mods changed in this table and still stands, sorted by row and field.
 ---@return WaxDataChange[]
 function DataTable:Changes() end
