@@ -205,6 +205,7 @@ else {
         'recipe-creature' = @('wax\tests\offline\recipe_creature_test.lua', $recipeMod)
         'recipe-creature-page' = @('wax\tests\offline\recipe_creature_page_test.lua', $recipeMod)
         'recipe-layout' = @('wax\tests\offline\recipe_layout_test.lua', $recipeMod)
+        'talentbuilds' = @('wax\tests\offline\talentbuilds_test.lua')
         'mods'   = @('wax\tests\offline\mods_test.lua', ("$scratch\mods" -replace '\\', '/'))
         'held'   = @('wax\tests\offline\held_test.lua', ("$scratch\held" -replace '\\', '/'))
         'update' =@('wax\tests\offline\update_test.lua', ("$scratch\update" -replace '\\', '/'))

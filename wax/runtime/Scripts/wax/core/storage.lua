@@ -115,4 +115,84 @@ function storage.flush()
     pending = {}
 end
 
+-- The saved folder the way the game lists it, or nil when that list has no such folder.
+local function saved_node()
+    local list_folders = rawget(_G, "IterateGameDirectories")
+    if type(list_folders) ~= "function" or not storage.directory then return nil end
+    local segments = {}
+    for part in storage.directory:gmatch("[^/\\]+") do
+        if part == ".." then segments[#segments] = nil elseif part ~= "." then segments[#segments + 1] = part end
+    end
+    local start = nil
+    for index = #segments, 1, -1 do
+        if segments[index] == "Binaries" then start = index break end
+    end
+    if not start then return nil end
+    local ok, listed = pcall(list_folders)
+    if not ok or type(listed) ~= "table" then return nil end
+    local node = listed.Game
+    for index = start, #segments do
+        if type(node) ~= "table" then return nil end
+        node = node[segments[index]]
+    end
+    return type(node) == "table" and node or nil
+end
+
+-- File names in the saved folder. The game's own list wins. A folder it does not show is read from disk.
+local function saved_file_names()
+    local names = {}
+    local node = saved_node()
+    if node and type(node.__files) == "table" then
+        for index = 1, #node.__files do
+            local name = node.__files[index] and node.__files[index].__name
+            if type(name) == "string" and name ~= "" then names[#names + 1] = name end
+        end
+        return names
+    end
+    if not storage.directory then return names end
+    local handle = io.popen('cmd /c dir /b /a-d "' .. storage.directory:gsub("/", "\\") .. '" 2>nul')
+    if not handle then return names end
+    for line in handle:lines() do
+        line = line:gsub("\r", "")
+        if line ~= "" then names[#names + 1] = line end
+    end
+    handle:close()
+    return names
+end
+
+-- owner -> { name, ... } for saved/<owner>.<name>.lua. Anything else in the folder is left alone.
+function storage.owners()
+    local owners = {}
+    for _, file in ipairs(saved_file_names()) do
+        local owner, name = file:match("^([%w_%-]+)%.([%w_%-]+)%.lua$")
+        if owner then
+            local list = owners[owner]
+            if not list then list = {} owners[owner] = list end
+            list[#list + 1] = name
+        end
+    end
+    return owners
+end
+
+function storage.names(owner)
+    if type(owner) ~= "string" then return {} end
+    return storage.owners()[owner] or {}
+end
+
+-- Deletes saved/<owner>.*.lua and drops a save that was still waiting to be written.
+-- Wax's own files (owner "wax") stay: those are the mod list, the window, and update settings.
+function storage.discard(owner)
+    if type(owner) ~= "string" or not owner:match(NAME_PATTERN) then return nil, "a storage owner must be a simple name" end
+    if owner == "wax" then return nil, "Wax's own saved files stay" end
+    local removed = 0
+    for _, name in ipairs(storage.names(owner)) do
+        local path = path_of(owner, name)
+        if path then
+            pending[path] = nil
+            if os.remove(path) then removed = removed + 1 end
+        end
+    end
+    return removed
+end
+
 return storage

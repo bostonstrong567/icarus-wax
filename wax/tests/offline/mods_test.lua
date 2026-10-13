@@ -659,6 +659,56 @@ t.test("mod.OnUnload runs before the mod's things go, newest first, with why, an
     look()
 end)
 
+t.test("removing a mod can erase its saved settings, and a mod that is still here keeps them", function()
+    local storage = Wax.import("core.storage")
+    -- Earlier tests leave save files for mods that are no longer in the index. Clear those first.
+    loader.erase_leftovers()
+    local function exists(path)
+        local file = io.open(path, "rb")
+        if not file then return false end
+        file:close()
+        return true
+    end
+    local function read(path)
+        local file = assert(io.open(path, "rb"))
+        local text = file:read("a")
+        file:close()
+        return text
+    end
+    put_mod("Keeper", { ["init.lua"] = "return {}" })
+    put_mod("Leaver", { ["init.lua"] = "return {}" })
+    write_index()
+    sync()
+    storage.save("Keeper", "settings", { kept = true })
+    storage.save("Leaver", "settings", { gone = true })
+    storage.save("wax", "interface", { theme = "Midnight" })
+    storage.flush()
+    t.ok(exists(root .. "/saved/Leaver.settings.lua"), "the leaving mod has a settings file")
+    loader.set_enabled("Leaver", false)
+    loader.move("Leaver", -1)
+    storage.flush()
+    local kept_name = loader.remove("Leaver", nil, { erase = true })
+    t.ok(kept_name and kept_name:find("^%.removed%-Leaver%-"), tostring(kept_name))
+    storage.flush()
+    t.ok(not exists(root .. "/saved/Leaver.settings.lua"), "its settings file is gone")
+    local prefs = read(root .. "/saved/wax.mods.lua")
+    t.ok(not prefs:find("Leaver", 1, true), prefs)
+    t.ok(exists(root .. "/saved/Keeper.settings.lua"), "the mod that stayed keeps its settings")
+    t.ok(exists(root .. "/saved/wax.interface.lua"), "Wax's own settings stay")
+    t.eq(storage.discard("wax"), nil)
+    local again = loader.remove("Keeper")
+    t.ok(again)
+    storage.flush()
+    t.ok(exists(root .. "/saved/Keeper.settings.lua"), "without erase, the settings file stays")
+    known.Keeper, known.Leaver = nil, nil
+    write_index()
+    local leftovers = loader.erase_leftovers()
+    t.eq(table.concat(leftovers, ","), "Keeper")
+    t.ok(not exists(root .. "/saved/Keeper.settings.lua"), "the leftover settings are erased from Settings")
+    -- Switching a mod off asks for a look on the next frame. Do that look here, so the next test starts settled.
+    look()
+end)
+
 t.test("unload_all leaves no connections or tasks behind", function()
     loader.unload_all()
     t.eq(signal.count, 0)

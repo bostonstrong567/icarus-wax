@@ -639,8 +639,10 @@ end
 -- The ids of the mods in load order.
 function loader.ids() return table.move(order, 1, #order, 1, {}) end
 
--- Takes a mod out: it unloads, its folder is renamed with a leading dot (nothing is erased), and it is forgotten unless the updater is replacing it. Returns the new folder name.
-function loader.remove(id, replacing)
+-- Takes a mod out: it unloads, its folder is renamed with a leading dot (nothing in that folder is erased), and it is forgotten unless the updater is replacing it.
+-- options.erase also deletes saved/<id>.*.lua. The mod list, window, and update files belong to Wax and are not part of that.
+-- Returns the new folder name.
+function loader.remove(id, replacing, options)
     local mod = mods[id]
     if not mod then return nil, ("no mod named '%s'"):format(tostring(id)) end
     local parent = mod.dir:match("^(.*)/[^/]+$")
@@ -654,14 +656,41 @@ function loader.remove(id, replacing)
     end
     mods[id] = nil
     switched_off()
-    if not replacing then told[id], accepted[id] = nil, nil end
-    if not replacing and preferences.known[id] then
+    if not replacing then
+        told[id], accepted[id] = nil, nil
+        preferences.disabled[id] = nil
         preferences.known[id] = nil
+        if type(preferences.order) == "table" then
+            local kept_order = {}
+            for _, other in ipairs(preferences.order) do
+                if other ~= id then kept_order[#kept_order + 1] = other end
+            end
+            preferences.order = kept_order
+        end
+        if options and options.erase then storage.discard(id) end
         storage.save("wax", "mods", preferences)
     end
     order = sort_by_dependencies()
     pending_sync = true
     return kept
+end
+
+-- Deletes saved settings whose mod folder is gone. A mod that is still installed, including one switched off, keeps its settings.
+-- Returns the mod ids that were erased, in alphabetical order.
+function loader.erase_leftovers()
+    local present = {}
+    for id in pairs(mods) do present[id] = true end
+    local found = discover.all()
+    for _, entry in ipairs(found) do present[entry.id] = true end
+    local gone = {}
+    for owner in pairs(storage.owners()) do
+        if owner ~= "wax" and not present[owner] then
+            storage.discard(owner)
+            gone[#gone + 1] = owner
+        end
+    end
+    table.sort(gone)
+    return gone
 end
 
 -- The environment for debug console commands: a mod's usual globals, plus mods.<Id> and exports.<Id> for each mod.

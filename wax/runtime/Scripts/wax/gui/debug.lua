@@ -541,19 +541,30 @@ local function rebuild_mods(list, updates, keyed)
             if off then reload:SetEnabled(false) end
             -- removing asks first, in the mod's own card
             local ask
-            tools:Button(nil, function() ask.control:SetVisible(true) end, { icon = "trash-2" })
+            local erase_saved = true
+            local erase_toggle = section:Toggle("Erase saved settings", true, function(on) erase_saved = on end)
+            erase_toggle:SetVisible(false)
             ask = section:Row()
             ask:Label(("Remove %s? Its folder is renamed, not erased."):format(mod.name), { color = style.theme.warn })
             ask:Button("Remove", function()
-                local kept, problem = Wax.mods.remove(mod.id)
+                local kept, problem = Wax.mods.remove(mod.id, nil, { erase = erase_saved })
                 if kept then
-                    ui.Notify(("To get it back, rename mods/%s to %s."):format(kept, mod.id), { title = mod.name .. " removed", seconds = 10 })
+                    local settings = erase_saved and " Its saved settings were erased." or " Its saved settings were kept."
+                    ui.Notify(("To get it back, rename mods/%s to %s.%s"):format(kept, mod.id, settings),
+                        { title = mod.name .. " removed", seconds = 12 })
                 else
                     ui.Notify(tostring(problem), { title = "Could not remove " .. mod.name, kind = "bad" })
                 end
             end, { icon = "trash-2", stretch = false })
-            ask:Button("Keep", function() ask.control:SetVisible(false) end, { stretch = false })
+            ask:Button("Keep", function()
+                ask.control:SetVisible(false)
+                erase_toggle:SetVisible(false)
+            end, { stretch = false })
             ask.control:SetVisible(false)
+            tools:Button(nil, function()
+                ask.control:SetVisible(true)
+                erase_toggle:SetVisible(true)
+            end, { icon = "trash-2" })
             mod_rows[#mod_rows + 1] = row
         end
     end)
@@ -1050,6 +1061,16 @@ function panel.start()
         local settings_page = window:Page("Settings", { icon = "settings", bottom = true })
         settings_page:Title("Settings", "These are remembered the next time you play.")
         ui.AddSettings(settings_page)
+        local leftovers = settings_page:Section("Saved data")
+        leftovers:Label("A mod that was removed can leave its settings here. Erasing them forgets those settings. A mod that is still installed keeps its settings, including one that is switched off.")
+        leftovers:Button("Erase leftover saves", function()
+            local gone = Wax.mods.erase_leftovers()
+            if #gone == 0 then
+                ui.Notify("There were no leftover saves.", { title = "Saved data", seconds = 6 })
+            else
+                ui.Notify(("Erased saved settings for %s."):format(table.concat(gone, ", ")), { title = "Saved data", seconds = 8 })
+            end
+        end)
     end)
     mods_signature, log_stamp, perf_before = nil, nil, nil
 end
