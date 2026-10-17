@@ -3515,6 +3515,7 @@ BP_Coffee_C
 BP_Coffee_Grinder_C
 BP_CollectionShipBeacon_C
 BP_Colony_Arcade_Machine_C
+BP_ComfortFunctionLibrary_C
 BP_Common_Check_For_Upgrade_C
 BP_Composite_Sign_Angle_C
 BP_Composite_Sign_Angle_Small_C
@@ -3703,6 +3704,7 @@ BP_Door_Wood_Refined_C
 BP_Downed_Drone_C
 BP_DragonFlyNest_C
 BP_DragonFly_Corpse_C
+BP_DragonFly_Geothermal_Corpse_C
 BP_Dressing_MoHelmet_C
 BP_Dressing_SatelliteDish_C
 BP_Dressing_Spotlight_C
@@ -4806,6 +4808,7 @@ BP_Knitting_Decor_A_C
 BP_Knitting_Decor_B_C
 BP_Knitting_Decor_C_C
 BP_Knitting_Decor_D_C
+BP_Koala_Sheep_Corpse_C
 BP_Komodo_Corpse_C
 BP_Komodo_Lava_Corpse_C
 BP_Komodo_Statue_Stone_C
@@ -6638,6 +6641,8 @@ BP_Tree_HG_Aspen_Var3_Burnt_C
 BP_Tree_HG_Aspen_Var3_ORA_C
 BP_Tree_HG_Aspen_Var3_RED_C
 BP_Tree_HG_Aspen_Var3_YEL_C
+BP_Tree_JU_Banyan_SML_Var1_Burnt_C
+BP_Tree_JU_Banyan_SML_Var1_C
 BP_Tree_JU_Banyan_Var1_Burnt_C
 BP_Tree_JU_Banyan_Var1_C
 BP_Tree_JU_Banyan_Var2_Burnt_C
@@ -7061,6 +7066,7 @@ BP_Workshop_Animal_C
 BP_Workshop_Animal_LRG_C
 BP_Workshop_Animal_MED_C
 BP_Workshop_Cooker_C
+BP_Workshop_Dehumidifier_C
 BP_Workshop_Heater_C
 BP_WorldBossBehaviour_C
 BP_WorldBossBehaviour_SandWorm_C

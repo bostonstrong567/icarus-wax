@@ -142,7 +142,6 @@
 ---@field Texture_AgeNormalMap table<string, Texture>
 ---@field TopMatrixEnabled boolean
 ---@field UIDebugTemp WB_Cha_TempDebug_C
----@field ["AffectedMeshW Helmet"] fun(self: BP_Character_Preview_C, Hair: SkeletalMesh?, Beard: SkeletalMesh?)
 ---@field Age_Update fun(self: BP_Character_Preview_C, Age: string)
 ---@field BS_ControlSelect fun(self: BP_Character_Preview_C, TopName: string, BottomName: string, LeftName: string, RightName: string, ResetMatrix_: boolean)
 ---@field BS_MatrixToggle fun(self: BP_Character_Preview_C, TopEnabled: boolean, BottomEnabled: boolean, LeftEnabled: boolean, RightEnabled: boolean)
@@ -160,12 +159,12 @@
 ---@field HeadAndNormalsUpdate fun(self: BP_Character_Preview_C, Top: string, Bottom: string, Left: string, Right: string)
 ---@field HeadGetData fun(self: BP_Character_Preview_C, HairColorList: ST_ChaCustom_HairColors[], EyeColorList: ST_ChaCustom_EyeColors[], ComplexionType: string[])
 ---@field HelmetToggle fun(self: BP_Character_Preview_C, Helmet: boolean, Hood: boolean, Rebreather: boolean)
+---@field InitFace fun(self: BP_Character_Preview_C)
 ---@field InitializeDefaults fun(self: BP_Character_Preview_C)
 ---@field ReceiveBeginPlay fun(self: BP_Character_Preview_C)
 ---@field ResolveVisibility fun(self: BP_Character_Preview_C, Visible: boolean)
 ---@field ScarUpdate fun(self: BP_Character_Preview_C, ID: number)
 ---@field SkinColorUpdate fun(self: BP_Character_Preview_C, Tone: number, ToneBlend: number, Hemoglobin: number)
----@field SkinUpdate fun(self: BP_Character_Preview_C, Slider_Tone: number, Slider_ToneBlend: number, Slider_Hemoglobin: number)
 ---@field Swap_Beard fun(self: BP_Character_Preview_C, ID: integer)
 ---@field Swap_Eyebrow fun(self: BP_Character_Preview_C, ID: integer)
 ---@field Swap_Hair fun(self: BP_Character_Preview_C, HairStyleID: integer)

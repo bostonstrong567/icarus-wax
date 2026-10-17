@@ -49,6 +49,7 @@ return {
     BP_AtmosphereFunctionLibrary_C = "/Game/ASS/ENV/ATM/BP_AtmosphereFunctionLibrary.Default__BP_AtmosphereFunctionLibrary_C",
     BP_AudioFunctionLibrary_C = "/Game/BP/MiscConstructs/BP_AudioFunctionLibrary.Default__BP_AudioFunctionLibrary_C",
     BP_BallisticFunctionLibrary_C = "/Game/BP/MiscConstructs/BP_BallisticFunctionLibrary.Default__BP_BallisticFunctionLibrary_C",
+    BP_ComfortFunctionLibrary_C = "/Game/BP/MiscConstructs/Comfort/BP_ComfortFunctionLibrary.Default__BP_ComfortFunctionLibrary_C",
     BP_DeployableFunctionLibrary_C = "/Game/BP/MiscConstructs/BP_DeployableFunctionLibrary.Default__BP_DeployableFunctionLibrary_C",
     BP_EdenSetup_FunctionLibrary_C = "/Game/BP/Quests/Elysium/Story/Common/BP_EdenSetup_FunctionLibrary.Default__BP_EdenSetup_FunctionLibrary_C",
     BP_IcarusGameModeFunctionLibrary_C = "/Game/BP/Systems/BP_IcarusGameModeFunctionLibrary.Default__BP_IcarusGameModeFunctionLibrary_C",

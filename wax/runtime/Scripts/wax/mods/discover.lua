@@ -44,6 +44,18 @@ local function mods_folder()
     return type(node.mods) == "table" and node.mods or nil, true
 end
 
+-- The EXMOD or EXMODZ file at the root of a folder, when it has one: the community's table patch format.
+local function exmod_in(files)
+    local zipped = nil
+    for name in pairs(files) do
+        if not name:find("/", 1, true) then
+            if name:lower():match("%.exmod$") then return name end
+            if name:lower():match("%.exmodz$") then zipped = name end
+        end
+    end
+    return zipped
+end
+
 -- True when the folders could be listed, so that what is not in `found` is really not there.
 local function from_folder(found, notes)
     local ok, folder, listed = pcall(mods_folder)
@@ -67,9 +79,34 @@ local function from_folder(found, notes)
         if not name:match(ID_PATTERN) then
             notes[#notes + 1] = ("skipped mods/%s: a mod folder's name may only use letters, digits, _ and -"):format(name)
         elseif not (files["init.lua"] or files["mod.lua"]) then
-            notes[#notes + 1] = ("skipped mods/%s: it has no init.lua"):format(name)
+            local packed = exmod_in(files)
+            if packed then
+                found[#found + 1] = { id = name, dir = (tostring(node.__absolute_path):gsub("\\", "/")), files = files, exmod = packed }
+            else
+                notes[#notes + 1] = ("skipped mods/%s: it has no init.lua"):format(name)
+            end
         else
             found[#found + 1] = { id = name, dir = (tostring(node.__absolute_path):gsub("\\", "/")), files = files }
+        end
+    end
+    -- an EXMOD or EXMODZ file dropped straight into the mods folder is a mod of its own, named after the file
+    local taken = {}
+    for _, entry in ipairs(found) do taken[entry.id] = true end
+    local loose = {}
+    for _, file in ipairs(folder.__files or {}) do
+        local file_name = type(file.__name) == "string" and file.__name or ""
+        local stem = file_name:match("^(.+)%.[Ee][Xx][Mm][Oo][Dd][Zz]?$")
+        if stem and file_name:sub(1, 1) ~= "." then loose[#loose + 1] = { file = file_name, stem = stem } end
+    end
+    table.sort(loose, function(a, b) return a.file < b.file end)
+    for _, entry in ipairs(loose) do
+        local id = entry.stem:gsub("[^%w_%-]", "_"):sub(1, MAX_ID)
+        if taken[id] then
+            notes[#notes + 1] = ("skipped mods/%s: a mod named %s is already there"):format(entry.file, id)
+        else
+            taken[id] = true
+            found[#found + 1] = { id = id, dir = (tostring(folder.__absolute_path):gsub("\\", "/")), files = { [entry.file] = true },
+                                  exmod = entry.file, bare = true }
         end
     end
     return true

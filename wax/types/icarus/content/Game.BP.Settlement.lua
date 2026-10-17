@@ -220,6 +220,7 @@
 ---@field CurrentWaveSpawnCountTarget integer
 ---@field DecisionRequestTask SettlementNPCTask
 ---@field DefaultSceneRoot SceneComponent
+---@field FMODAudio FMODAudioComponent
 ---@field GateActors Actor[]
 ---@field HasCompletedRaidSpawning boolean
 ---@field Highlightable HighlightableComponent

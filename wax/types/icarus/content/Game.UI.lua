@@ -67,9 +67,11 @@
 ---@class UMG_CharacterBlending_DropBox_C : UserWidget
 ---@field ComboBox CustomComboBox
 ---@field DefaultFaceShape EFaceShapes
+---@field FaceIcon UMG_FaceIcon_C
 ---@field Construct fun(self: UMG_CharacterBlending_DropBox_C)
 ---@field PreConstruct fun(self: UMG_CharacterBlending_DropBox_C, IsDesignTime: boolean)
 ---@field SetSelectedOption fun(self: UMG_CharacterBlending_DropBox_C, FaceShape: EFaceShapes)
+---@field Tick fun(self: UMG_CharacterBlending_DropBox_C, MyGeometry: Geometry|{}, InDeltaTime: number)
 
 ---@class UMG_CharacterCreation_C : UserWidget
 ---@field AgeSelection_V2 UMG_CharacterSetting_Visual_C
@@ -401,6 +403,7 @@
 ---@field UpdateAbandonProspectPrompt fun(self: UMG_CharacterSelection_C)
 ---@field UpdateDeleteCharacterPrompt fun(self: UMG_CharacterSelection_C)
 ---@field UpdateLobby fun(self: UMG_CharacterSelection_C) Wax refuses this call from Lua.
+---@field UpdatePreviewVisiblity fun(self: UMG_CharacterSelection_C, OnlineProfileCharacter: OnlineProfileCharacter|{})
 
 ---@class UMG_CharacterSetting_Base_C : UserWidget
 ---@field CustomisationContextWhitelist ECharacterCustomisationContext[]

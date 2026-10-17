@@ -229,14 +229,14 @@
 ---@field UpdateEffects fun(self: BP_Smoker_T3_C, Active: boolean)
 
 ---@class BP_Smoker_T4_C : BP_ProcessorBase_C
----@field BP_IcarusPointLight BP_IcarusPointLight_C
 ---@field BP_ProxyMeshComponent BP_ProxyMeshComponent_C
----@field BP_UIProjectionLocation BP_UIProjectionLocation_C
 ---@field Cooked_Roast SceneComponent
 ---@field Cooking SceneComponent
 ---@field FMOD_Fire_Audio FMODAudioComponent
 ---@field NS_Potbelly_Smoke NiagaraComponent
 ---@field NS_Smoke NiagaraComponent
+---@field NS_Smoke1 NiagaraComponent
+---@field SM_DEP_Roaster_T4 StaticMeshComponent
 ---@field SM_Roast_Raw StaticMeshComponent
 ---@field SM_Roast_Raw1 StaticMeshComponent
 ---@field SM_Roast_Raw3 StaticMeshComponent
@@ -244,10 +244,7 @@
 ---@field SM_Roast_Raw5 StaticMeshComponent
 ---@field SM_Roast_Raw6 StaticMeshComponent
 ---@field SM_Roast_Raw8 StaticMeshComponent
----@field Scene_Effects SceneComponent
----@field GeneratorStateUpdate fun(self: BP_Smoker_T4_C, Active: boolean)
 ---@field ProcessorStateUpdate fun(self: BP_Smoker_T4_C, Active: boolean)
----@field ProcessorStateUpdated fun(self: BP_Smoker_T4_C, bIsActive: boolean)
 ---@field ReceiveBeginPlay fun(self: BP_Smoker_T4_C)
 
 ---@class BP_StoneBrick_Fireplace_C : BP_Fireplace_C

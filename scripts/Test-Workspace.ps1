@@ -193,6 +193,8 @@ else {
         'journal' = @('wax\tests\offline\journal_test.lua')
         'patch'  = @('wax\tests\offline\patch_test.lua')
         'bulk'   = @('wax\tests\offline\bulk_test.lua')
+        'zip'    = @('wax\tests\offline\zip_test.lua')
+        'exmod'  = @('wax\tests\offline\exmod_test.lua', ("$scratch\exmod" -replace '\\', '/'))
         'patch-loader' = @('wax\tests\offline\patch_loader_test.lua', ("$scratch\patch-loader" -replace '\\', '/'))
         'recipes' = @('wax\tests\offline\recipes_test.lua')
         'workshop' = @('wax\tests\offline\workshop_test.lua')

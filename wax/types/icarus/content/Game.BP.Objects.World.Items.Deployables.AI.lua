@@ -295,6 +295,8 @@
 
 ---@class BP_DragonFly_Corpse_C : BP_GOAP_Corpse_C
 
+---@class BP_DragonFly_Geothermal_Corpse_C : BP_DragonFly_Corpse_C
+
 ---@class BP_Eagle_Corpse_C : BP_GOAP_Corpse_C
 ---@field ReceiveBeginPlay fun(self: BP_Eagle_Corpse_C)
 
@@ -548,6 +550,10 @@
 ---@class BP_Kiwi_Corpse_C : BP_GOAP_Corpse_C
 ---@field GFur GFurComponent
 ---@field OnSkinnedStateUpdated fun(self: BP_Kiwi_Corpse_C)
+
+---@class BP_Koala_Sheep_Corpse_C : BP_GOAP_Corpse_C
+---@field GFur1 GFurComponent
+---@field OnSkinnedStateUpdated fun(self: BP_Koala_Sheep_Corpse_C)
 
 ---@class BP_Komodo_Corpse_C : BP_GOAP_Corpse_C
 

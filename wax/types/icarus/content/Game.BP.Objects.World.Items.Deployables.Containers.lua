@@ -24,6 +24,7 @@
 
 ---@class BP_ArmourStand_C : BP_DeployableContainerBase_C
 ---@field AnimationPoses AnimSequence[]
+---@field Camera CameraComponent
 ---@field CurrentAnimPose integer
 ---@field CurrentlyEquippedItems table<SkeletalMeshComponent, ItemData>
 ---@field NeedsUpdate boolean
@@ -31,6 +32,7 @@
 ---@field ["Stored Objects"] Object[]
 ---@field SwapBackpack boolean
 ---@field DeployableTick fun(self: BP_ArmourStand_C, DeltaSeconds: number)
+---@field Deployable_Interact fun(self: BP_ArmourStand_C, Interactor: Actor?)
 ---@field GetArmourDataSoftObjects fun(self: BP_ArmourStand_C, SoftMeshes: SkeletalMesh[], SoftAnimBPs: Class[]) Wax refuses this call from Lua.
 ---@field IcarusBeginPlay fun(self: BP_ArmourStand_C)
 ---@field OnItemUpdated fun(self: BP_ArmourStand_C)
@@ -45,12 +47,18 @@
 ---@field UpdateHighlightable fun(self: BP_ArmourStand_C, Highlightable: HighlightableComponent?, Component: PrimitiveComponent?, bHighlighted: boolean)
 
 ---@class BP_ArmourStand_T4_C : BP_ArmourStand_C
----@field ArmorCase SkeletalMeshComponent
+---@field BP_IcarusSpotLight BP_IcarusSpotLight_C
 ---@field CaseOpen boolean
+---@field DeviceIsOn boolean
 ---@field IsInteracting boolean
+---@field SK_DEP_Armor_Stand_T4_Case SkeletalMeshComponent
+---@field IcarusBeginPlay fun(self: BP_ArmourStand_T4_C)
 ---@field OnBecomeInteractedWith fun(self: BP_ArmourStand_T4_C)
+---@field OnDeviceOnStateChanged fun(self: BP_ArmourStand_T4_C, bIsOn: boolean)
 ---@field OnNoLongerInteractedWith fun(self: BP_ArmourStand_T4_C)
+---@field OnRep_DeviceIsOn fun(self: BP_ArmourStand_T4_C)
 ---@field ReceiveBeginPlay fun(self: BP_ArmourStand_T4_C)
+---@field RepairArmor fun(self: BP_ArmourStand_T4_C)
 ---@field ToggleOpen fun(self: BP_ArmourStand_T4_C)
 
 ---@class BP_Bunker_Locker_C : BP_DeployableContainerBase_C

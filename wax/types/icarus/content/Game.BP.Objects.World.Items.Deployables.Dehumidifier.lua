@@ -54,3 +54,21 @@
 ---@field StopFanAnim fun(self: BP_Electric_Dehumidifier_V2_C)
 ---@field UpdateModifier fun(self: BP_Electric_Dehumidifier_V2_C, Powered: boolean)
 ---@field UpdateRunningEffects fun(self: BP_Electric_Dehumidifier_V2_C, ReceivingPower: boolean)
+
+---@class BP_Workshop_Dehumidifier_C : BP_DeployableBase_C
+---@field FMOD_Active_Audio FMODAudioComponent
+---@field GeneralInventory Inventory
+---@field Niagara1 NiagaraComponent
+---@field Niagara2 NiagaraComponent
+---@field PointLight1 PointLightComponent
+---@field PointLight2 PointLightComponent
+---@field PointLight3 PointLightComponent
+---@field PointLight4 PointLightComponent
+---@field PointLight5 PointLightComponent
+---@field PointLight6 PointLightComponent
+---@field PointLight7 PointLightComponent
+---@field Scene_Lights SceneComponent
+---@field Scene_Niagara SceneComponent
+---@field GeneratorStateUpdate fun(self: BP_Workshop_Dehumidifier_C, Active: boolean)
+---@field OnInventoryItemAdded fun(self: BP_Workshop_Dehumidifier_C, Inventory: Inventory?, Location: integer)
+---@field ReceiveBeginPlay fun(self: BP_Workshop_Dehumidifier_C)

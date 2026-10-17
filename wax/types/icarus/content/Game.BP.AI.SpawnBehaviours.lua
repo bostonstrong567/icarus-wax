@@ -49,6 +49,7 @@
 ---@field SpawnScale Vector
 ---@field SuccessfullySpawnedAI Actor
 ---@field UseFallbackSpawnPoint boolean
+---@field CheckCampaignCompletion fun(self: BP_AISpawnBehaviour_AroundPlayers_C, CanSpawn: boolean)
 ---@field CleanupAI fun(self: BP_AISpawnBehaviour_AroundPlayers_C, AI: Actor?)
 ---@field DoSpawn fun(self: BP_AISpawnBehaviour_AroundPlayers_C, Context: Object?, SpawnLocation: Vector|{})
 ---@field GetSpawnRotation fun(self: BP_AISpawnBehaviour_AroundPlayers_C, SpawnLocation: Vector|{}, OutRotation: Rotator|{})

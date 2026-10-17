@@ -1727,12 +1727,20 @@
 ---@field UpdateProgress fun(self: UMG_Fishing_2_C, Delta: number)
 
 ---@class UMG_Fishing_C : UserWidget
+---@field Background Border
+---@field CatchBoxBorder HorizontalBox
 ---@field CatchSpeed number
+---@field Corner1 Image
+---@field Corner2 Image
+---@field Corner3 Image
+---@field Corner4 Image
 ---@field CurrentProgress number
 ---@field Fish ItemData
+---@field FishBox Overlay
 ---@field FishCaught GameDelegate
 ---@field FishHasReachedTarget boolean
 ---@field FishImage Image
+---@field FishImage_1 Image
 ---@field FishLost GameDelegate
 ---@field FishName TextBlock
 ---@field FishRarity Image
@@ -1742,8 +1750,12 @@
 ---@field GoldenZone Border
 ---@field GoldenZoneLeft number
 ---@field GoldenZoneRight number
+---@field HasFoundBiome boolean
 ---@field IsFishing boolean
 ---@field IsReeling boolean
+---@field LureBox Overlay
+---@field LureIcon Image
+---@field Outline Border
 ---@field Quality TextBlock
 ---@field UMG_KeybindPrompt UMG_KeybindPrompt_C
 ---@field UMG_KeybindPrompt_5 UMG_KeybindPrompt_C
@@ -1756,10 +1768,12 @@
 ---@field GoldenZoneMovement fun(self: UMG_Fishing_C, Delta: number)
 ---@field HideWidget fun(self: UMG_Fishing_C)
 ---@field IsFishInZone fun(self: UMG_Fishing_C, InZone: boolean)
+---@field OnLoaded_3AFF794A415218479E289AADCD46432B fun(self: UMG_Fishing_C, Loaded: Object?)
+---@field OnLoaded_AA2603A94131712FB30430969197527B fun(self: UMG_Fishing_C, Loaded: Object?)
 ---@field OnLoaded_D5C124624117D085040657BA30762E76 fun(self: UMG_Fishing_C, Loaded: Object?)
 ---@field Reset fun(self: UMG_Fishing_C)
 ---@field SetReeling fun(self: UMG_Fishing_C, IsReeling: boolean)
----@field StartCatchingFish fun(self: UMG_Fishing_C, Fish: ItemData|{})
+---@field StartCatchingFish fun(self: UMG_Fishing_C, Fish: ItemData|{}, Lure: ItemData|{}, Biome: BiomesRowHandle|{}) Do not call from Lua: it needs 1016 bytes and the call buffer holds 512.
 ---@field StopMinigame fun(self: UMG_Fishing_C)
 ---@field Tick fun(self: UMG_Fishing_C, MyGeometry: Geometry|{}, InDeltaTime: number)
 ---@field UpdateProgress fun(self: UMG_Fishing_C, Delta: number)

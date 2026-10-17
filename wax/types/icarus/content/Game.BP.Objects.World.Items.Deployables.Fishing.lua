@@ -42,6 +42,7 @@
 ---@field Camera CameraComponent
 ---@field CleanGlass StaticMesh
 ---@field CleanMesh StaticMesh
+---@field ComfortModifierUID integer
 ---@field DirtyGlass StaticMesh
 ---@field DirtyMesh StaticMesh
 ---@field Dressing StaticMeshComponent
@@ -126,6 +127,7 @@
 
 ---@class BP_Fish_Wall_Mount_C : BP_DeployableBase_C
 ---@field Camera CameraComponent
+---@field ComfortModifierUID integer
 ---@field FishData ItemData
 ---@field ["SK Fish"] SkeletalMeshComponent
 ---@field Widget WidgetComponent

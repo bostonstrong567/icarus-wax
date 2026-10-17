@@ -1449,8 +1449,11 @@
 
 ---@class CustomComboBox : Widget
 ---@field ComboStyle ComboButtonStyle
+---@field GridItemSize Vector2D
+---@field GridRows integer
 ---@field OnItemSet GameDelegate
 ---@field WidgetsRef UserWidget[]
+---@field bUseGrid boolean
 ---@field AddItem fun(self: CustomComboBox, Name: string, Widget: UserWidget?)
 ---@field ClearChildren fun(self: CustomComboBox)
 ---@field GetSelectedName fun(self: CustomComboBox): string

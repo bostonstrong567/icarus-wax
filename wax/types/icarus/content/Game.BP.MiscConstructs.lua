@@ -31,6 +31,11 @@
 ---@field GetClosestBoneAlongProjectilePrediction fun(self: BP_BallisticFunctionLibrary_C, InPredictionData: PredictProjectilePathResult|{}, InActor: Actor?, __WorldContext: Object?, HitBone: string, HitComponent: PrimitiveComponent?) Wax refuses this call from Lua.
 ---@field PredictProjectileDamage fun(self: BP_BallisticFunctionLibrary_C, Weapon: Actor?, Defender: Actor?, ProjectileHit: HitResult|{}, KillCam: boolean, __WorldContext: Object?, OutDamage: number)
 
+---@class BP_ComfortFunctionLibrary_C : BlueprintFunctionLibrary
+---@field ApplyFishComfortEffectiveness fun(self: BP_ComfortFunctionLibrary_C, FishArray: ItemData[], Parent: Actor?, UID: integer, __WorldContext: Object?)
+---@field GetFishComfortEffectiveness fun(self: BP_ComfortFunctionLibrary_C, Array: ItemData[], __WorldContext: Object?, Effectiveness: integer)
+---@field GetFishRarity fun(self: BP_ComfortFunctionLibrary_C, Item: ItemData|{}, __WorldContext: Object?): EFishRarity
+
 ---@class BP_DeployableFunctionLibrary_C : BlueprintFunctionLibrary
 ---@field GetDeployableVariationClass fun(self: BP_DeployableFunctionLibrary_C, Item: ItemData|{}, Variation: integer, __WorldContext: Object?, AsIcarus_Item: Class?) Do not call from Lua: it needs 520 bytes and the call buffer holds 512.
 ---@field SpawnDeployable fun(self: BP_DeployableFunctionLibrary_C, Item: ItemData|{}, Transform: Transform|{}, __WorldContext: Object?, Deployable: BP_DeployableBase_C?) Do not call from Lua: it needs 560 bytes and the call buffer holds 512.
@@ -62,7 +67,12 @@
 
 ---@class BP_PlayerCosmeticsFunctionLibrary_C : BlueprintFunctionLibrary
 ---@field ApplyCosmeticsToPrimitive fun(self: BP_PlayerCosmeticsFunctionLibrary_C, PrimitiveComponent: PrimitiveComponent?, CosmeticData: CharacterCosmetics|{}, __WorldContext: Object?) Wax refuses this call from Lua.
+---@field ApplyFaceShapesToPrimitive fun(self: BP_PlayerCosmeticsFunctionLibrary_C, MeshComp: Object?, Cosmetics: CharacterCosmetics|{}, __WorldContext: Object?)
 ---@field ClearCosmeticMaterialOverride fun(self: BP_PlayerCosmeticsFunctionLibrary_C, InPrimitive: PrimitiveComponent?, __WorldContext: Object?)
+---@field FaceBlendWeights fun(self: BP_PlayerCosmeticsFunctionLibrary_C, Top: number, Bottom: number, Left: number, Right: number, TopOn: boolean, BottomOn: boolean, LeftOn: boolean, RightOn: boolean, __WorldContext: Object?, TopWeight: number, BottomWeight: number, LeftWeight: number, RightWeight: number)
+---@field ["Find Face Morph"] fun(self: BP_PlayerCosmeticsFunctionLibrary_C, Mesh: SkinnedMeshComponent?, HeadMorph: string, __WorldContext: Object?, Morph: string)
+---@field FindFaceShapeKey fun(self: BP_PlayerCosmeticsFunctionLibrary_C, NameHash: integer, __WorldContext: Object?, Key: string)
+---@field GetFaceShapeData fun(self: BP_PlayerCosmeticsFunctionLibrary_C, Key: string, IsMale: boolean, __WorldContext: Object?, HeadShapeName: string, Normal: Texture?)
 ---@field GetMasterMaterial fun(self: BP_PlayerCosmeticsFunctionLibrary_C, Material: MaterialInterface?, __WorldContext: Object?, Parent: Material?)
 ---@field MakeCharacterCreationDataArray fun(self: BP_PlayerCosmeticsFunctionLibrary_C, CharacterCosmetics: CharacterCosmetics|{}, __WorldContext: Object?, OutData: CharacterCreationDataRowHandle[])
 ---@field UpdateSkinTone fun(self: BP_PlayerCosmeticsFunctionLibrary_C, Tone: number, Tint: number, Saturation: number, MatHead: MaterialInstanceDynamic?, __WorldContext: Object?)

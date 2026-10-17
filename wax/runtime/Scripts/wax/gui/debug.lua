@@ -3,6 +3,7 @@
 local Wax = ...
 local ui = Wax.import("gui.init")
 local style = Wax.import("gui.style")
+local foreign = Wax.import("mods.foreign")
 local log = Wax.import("core.log")
 local perf = Wax.import("core.perf")
 local scope = Wax.import("core.scope")
@@ -318,12 +319,13 @@ local function mod_list_signature(list, updates, keyed)
     local parts = {}
     for _, mod in ipairs(list) do
         local newer = updates and updates.available[mod.id]
-        parts[#parts + 1] = mod.id .. ":" .. mod.status .. ":" .. mod.generation .. ":" .. (mod.waiting or "")
+        parts[#parts + 1] = mod.id .. ":" .. mod.status .. ":" .. mod.generation .. ":" .. (mod.waiting or "") .. ":" .. (mod.note or "")
             .. (mod.content and (":" .. tostring(mod.content.state) .. tostring(mod.content.mark)) or "")
             .. ":" .. (newer or "") .. (newer and updates.installing[mod.id] and "+" or "")
             .. (from_catalogue(updates, mod.id) and ":catalogue" or "") .. (keyed[mod.id] and ":window" or "")
     end
     parts[#parts + 1] = "keys" .. ui.Keys.BindsStamp()
+    parts[#parts + 1] = "other:" .. foreign.signature()
     return table.concat(parts, "|")
 end
 
@@ -446,6 +448,37 @@ local function add_grip(row)
     listen("OnUnhovered", function() style.tint(icon, "image", style.theme.dim) end)
 end
 
+local foreign_section = nil
+
+-- UE4SS mods beside Wax and pak mods the game loads at start, under the cards. A UE4SS mod's switch counts at the next start.
+local function build_foreign()
+    if foreign_section then
+        foreign_section.control:Destroy()
+        foreign_section = nil
+    end
+    local found = foreign.list()
+    if not found.listed or (#found.ue4ss == 0 and #found.paks == 0 and #found.logic == 0) then return end
+    in_core_scope(function()
+        local section = mods_page:Section("Other mods", { open = true })
+        foreign_section = section
+        section:Label("Not made for Wax. UE4SS mods start with the game, so a switch here counts at the next start. Pak mods are loaded by the game itself.", { dim = true })
+        for _, entry in ipairs(found.ue4ss) do
+            local row = section:Row()
+            row:Toggle(entry.name .. " (UE4SS mod)", entry.enabled, function(on)
+                local ok, problem = foreign.set_enabled(entry.name, on)
+                if not ok then ui.Notify(tostring(problem), { title = entry.name, kind = "bad" })
+                else ui.Notify(on and "Starts with the game from the next start." or "Stays off from the next start.", { title = entry.name, seconds = 6 }) end
+            end)
+            if entry.by_list and not entry.enabled then row:Label("listed in mods.txt", { dim = true }) end
+        end
+        for _, name in ipairs(found.paks) do section:Field(name, "pak mod, loaded by the game at start") end
+        for _, name in ipairs(found.logic) do
+            section:Field(name, found.loader == "on" and "blueprint mod, loaded by UE4SS at start"
+                or "blueprint mod: it needs UE4SS's BPModLoaderMod, which is " .. (found.loader == "off" and "switched off" or "not installed"))
+        end
+    end)
+end
+
 local function rebuild_mods(list, updates, keyed)
     stop_sort()
     for _, row in ipairs(mod_rows) do
@@ -473,6 +506,8 @@ local function rebuild_mods(list, updates, keyed)
             local section = mods_page:Section(title, { open = open, fit = true, badge = badge, badge_color = tone })
             section:Field("Status", healthy and "loaded" or (off and (mod.fresh and "new, switched off" or "switched off") or mod.status))
                 :SetColor(healthy and style.theme.good or (off and (mod.fresh and style.theme.warn or style.theme.dim) or style.theme.bad))
+            if mod.kind == "exmod" then section:Field("Kind", "Table mod (EXMOD)") end
+            if mod.note then section:Label(mod.note, { dim = true }) end
             if off and mod.fresh then
                 section:Label("This mod is new here, so it is switched off. It starts when you switch on Enabled below. A mod is code that can do what a program can, so switch on only the ones you trust.",
                     { color = style.theme.warn, size = style.theme.small_size })
@@ -568,6 +603,7 @@ local function rebuild_mods(list, updates, keyed)
             mod_rows[#mod_rows + 1] = row
         end
     end)
+    build_foreign()
     filter_mods()
 end
 
@@ -904,7 +940,7 @@ function panel.start()
 
         status = window:StatusBar("Starting")
         mods_page = window:Page("Mods", { icon = "package" })
-        mods_page:Title("Mods", "Every mod in the mods folder. A new one appears on its own, switched off until you switch it on. Saving a file reloads its mod.")
+        mods_page:Title("Mods", "Every mod in the mods folder, Lua mods and EXMOD table mods alike. A new one appears on its own, switched off until you switch it on. Saving a file reloads its mod.")
         local mod_tools = mods_page:Row()
         mod_tools:Input(nil, { hint = "Search mods: a name, loaded, off, failed, new ...", clear = true }).Typed:Connect(function(text)
             stop_sort()

@@ -287,8 +287,19 @@ local function load_mod(mod)
     mod.env = make_env(mod)
     mod.modules = {}
     local started = os.clock()
-    local main = mod.manifest.main or "init.lua"
-    local value, err = load_module(mod, "init", mod.dir .. "/" .. main, mod.id .. "/" .. main)
+    local value, err
+    if mod.exmod then
+        -- a table patch in the community's format: its applier runs in the mod's scope, so switching it off puts the rows back
+        mod.note = nil
+        local previous = scope.enter(mod.scope)
+        guard.arm()
+        local ok, problem = xpcall(function() return Wax.import("mods.exmod").start(mod) end, guard.handler)
+        scope.leave(previous)
+        value, err = ok and {} or nil, problem
+    else
+        local main = mod.manifest.main or "init.lua"
+        value, err = load_module(mod, "init", mod.dir .. "/" .. main, mod.id .. "/" .. main)
+    end
     if value == nil then
         guard.report(err, "loading " .. mod.id, mod.scope)
         unload(mod)
@@ -437,6 +448,8 @@ function loader.sync()
             held[#held + 1] = { mod = mod, tell = unseen or not (first and was_off) }
         end
         mod.dir, mod.manifest, mod.files, mod.depends = entry.dir, manifest, files, depends
+        mod.exmod, mod.bare = entry.exmod, entry.bare
+        if mod.exmod and manifest.name == nil then manifest.name = mod.id end
         mod.fresh = not known[entry.id] or nil
         mod.enabled = (known[entry.id] and not disabled[entry.id]) and true or false
         mod.manifest_error = manifest_error
@@ -582,7 +595,7 @@ function loader.list()
         out[#out + 1] = {
             content = found and mod.files["content/" .. id .. ".pak"] and (content.state(id) or { id = id, files = 0 }) or nil,
             id = id, name = mod.manifest.name or id, version = mod.manifest.version, status = mod.status, enabled = mod.enabled,
-            fresh = mod.fresh, waiting = mod.held_back,
+            fresh = mod.fresh, waiting = mod.held_back, kind = mod.exmod and "exmod" or "lua", note = mod.note,
             error = mod.error, generation = mod.generation, owned = mod.scope and mod.scope:size() or 0,
             loadMs = mod.load_seconds and mod.load_seconds * 1000 or nil,
         }
@@ -649,7 +662,14 @@ function loader.remove(id, replacing, options)
     if not parent then return nil, "the mod's folder could not be worked out" end
     unload(mod, "removed")
     local kept = (".removed-%s-%s"):format(id, os.date("%Y%m%d-%H%M%S"))
-    local ok, problem = os.rename(mod.dir, parent .. "/" .. kept)
+    local ok, problem
+    if mod.bare then
+        -- a loose EXMOD file: the file itself is renamed, and keeps its extension
+        kept = kept .. "." .. (mod.exmod:match("%.([^.]+)$") or "EXMOD")
+        ok, problem = os.rename(mod.dir .. "/" .. mod.exmod, mod.dir .. "/" .. kept)
+    else
+        ok, problem = os.rename(mod.dir, parent .. "/" .. kept)
+    end
     if not ok then
         pending[id] = true
         return nil, ("the folder could not be renamed (%s)"):format(tostring(problem))

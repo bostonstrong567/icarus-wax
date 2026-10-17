@@ -43,9 +43,11 @@
 ---@field OwnerBuilding BP_Building_Base_C
 ---@field CanPropagate fun(self: BP_Flammable_Building_C, PropagationType: EFlammablePropagationType): boolean
 ---@field GetLocalBounds fun(self: BP_Flammable_Building_C): BoxSphereBounds
+---@field MultiRemoveVFX fun(self: BP_Flammable_Building_C)
 ---@field OnFlammableInstanceState_Combusting_Enter fun(self: BP_Flammable_Building_C, Instance: FlammableInstance?, State: FlammableState?)
 ---@field OnFlammableInstanceState_Combusting_Tick fun(self: BP_Flammable_Building_C, Instance: FlammableInstance?, State: FlammableState?, DeltaSeconds: number)
 ---@field ReceiveBeginPlay fun(self: BP_Flammable_Building_C)
+---@field RemoveVFX fun(self: BP_Flammable_Building_C)
 ---@field SetupBuildingCosmetics fun(self: BP_Flammable_Building_C)
 ---@field SetupCosmetics fun(self: BP_Flammable_Building_C)
 ---@field TeardownCosmetics fun(self: BP_Flammable_Building_C)

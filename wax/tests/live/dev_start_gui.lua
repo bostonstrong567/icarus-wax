@@ -12,6 +12,7 @@ for _, name in ipairs({ "root", "icons", "style", "kit", "events", "tween", "inp
     Wax.modules["gui." .. name] = nil
 end
 Wax.modules["engine.inspect"] = nil
+Wax.modules["mods.foreign"] = nil
 local ui = Wax.import("gui.init")
 ui.start()
 Wax.ui = ui

@@ -1605,6 +1605,7 @@
 ---@field AISetup AISetupEnum
 ---@field AISpawnBehaviour Class
 ---@field GameplayTagsToApply GameplayTagContainer
+---@field GreatHuntCampaignSpawner boolean
 ---@field IcarusActorClass Class
 ---@field MaxDistanceToPlayers integer
 ---@field MaxNumAroundPlayers integer
