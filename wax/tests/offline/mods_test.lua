@@ -228,6 +228,31 @@ t.test("off-thread and restart functions are refused with an explanation; raw st
     t.eq(exports.raw, "the real one")
 end)
 
+t.test("UE4SS's hooks are not a mod's to call: hooks.listen is, and a mod that reaches them through raw is told once", function()
+    put_mod("Hooky", {
+        ["init.lua"] = [[
+            local ok, err = pcall(RegisterHook, "/Script/Engine.Actor:ReceiveTick", function() end)
+            local off, err2 = pcall(UnregisterHook, "/Script/Engine.Actor:ReceiveTick", 1, 2)
+            return { ok = ok, err = err, off = off, err2 = err2, hooks = hooks, listen = hooks and hooks.listen }
+        ]],
+        ["lib/old.lua"] = "-- raw.RegisterHook in a comment does not count\nlocal function later()\n    return raw.RegisterHook\nend\nreturn later",
+    })
+    write_index()
+    sync()
+    local exports = loader.get("Hooky").exports
+    t.eq(exports.ok, false)
+    t.ok(exports.err:find("RegisterHook is not available in Wax mods", 1, true), exports.err)
+    t.ok(exports.err:find("hooks.listen(path, fn, { when = \"pre\" or \"post\" })", 1, true), exports.err)
+    t.ok(exports.err:find("raw.RegisterHook is still the original function", 1, true), exports.err)
+    t.eq(exports.off, false)
+    t.ok(exports.err2:find("hooks.listen returns the function that takes the listener off", 1, true), exports.err2)
+    t.eq(type(exports.listen), "function", "hooks.listen is in every mod's environment")
+    t.eq(exports.hooks.CALLED, "called")
+    t.ok(not logged("raw hooks"), "init.lua does not reach the raw hooks, so nothing was said yet")
+    loader.get("Hooky").env.require("lib.old")
+    t.ok(logged("Hooky/lib/old.lua:3: raw hooks: the game's arrays are yours to break"), "the file and the line are named")
+end)
+
 t.test("request_reload waits for the frame step; a removed mod unloads; a broken manifest is reported", function()
     put_mod("Kappa", { ["init.lua"] = "shared.kappa = (shared.kappa or 0) + 1 return true" })
     write_index()

@@ -133,6 +133,29 @@ t.test("what a station accepts comes from its recipe set", function()
     t.ok(found[2]:Accepts("Anything"), "storage takes any item")
 end)
 
+t.test("an animal's owner is asked safely: a live PlayerState only, once per animal and state, never of a gone animal", function()
+    local asked = 0
+    local state = { Raw = { GetAddress = function() return 9001 end }, IsA = function(_, class) return class == "PlayerState" end }
+    local other = { Raw = { GetAddress = function() return 9002 end }, IsA = function(_, class) return class == "PlayerState" end }
+    local actor = { Raw = { GetAddress = function() return 500 end }, IsA = function() return false end }
+    local animal = { Raw = { GetAddress = function() return 400 end } }
+    function animal:IsMountOwner(who) asked = asked + 1 return who == state end
+    local entry = { destroyed = false, instance = animal }
+    t.ok(M.owned(entry, state), "the owner's state")
+    t.ok(M.owned(entry, state), "asked again at once")
+    t.eq(asked, 1, "the game was asked once: the answer is kept")
+    t.ok(not M.owned(entry, other), "another player's state")
+    t.eq(asked, 2)
+    t.ok(not M.owned(entry, nil), "no state: no call")
+    t.ok(not M.owned(entry, actor), "a thing that is no PlayerState: no call")
+    t.ok(not M.owned(entry, "state"), "a string: no call")
+    t.eq(asked, 2, "none of those reached the game")
+    entry.destroyed = true
+    local third = { Raw = { GetAddress = function() return 9003 end }, IsA = function(_, class) return class == "PlayerState" end }
+    t.ok(not M.owned(entry, third), "a gone animal answers false without a call")
+    t.eq(asked, 2)
+end)
+
 t.test("inputs_of is pure", function()
     local rows = { a = { RecipeSets = { { RowName = "X" } }, Inputs = { { Element = { RowName = "Wood" } }, { Element = { RowName = "None" } } } } }
     local out = M.inputs_of("x", rows)

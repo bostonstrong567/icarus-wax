@@ -6,6 +6,8 @@ local guard = Wax.import("core.guard")
 local sched = Wax.import("core.sched")
 local perf = Wax.import("core.perf")
 local suggest = Wax.import("core.suggest")
+local instance = Wax.import("engine.instance")
+local handed = Wax.import("engine.handed")
 local log = Wax.import("core.log").channel("wax.hooks")
 
 local M = {}
@@ -21,8 +23,10 @@ local REACHES = { M.NET, M.DELEGATE, M.CALLED }
 local IS_REACH = { [M.NET] = true, [M.DELEGATE] = true, [M.CALLED] = true }
 local OPTIONS = { "reach", "catch", "deliver", "label" }
 local IS_OPTION = { reach = true, catch = true, deliver = true, label = true }
+local CHECKED_OPTIONS = { "when", "reach", "label" }
+local IS_CHECKED_OPTION = { when = true, reach = true, label = true }
 
-local type, pcall, error, pairs, tostring = type, pcall, error, pairs, tostring
+local type, pcall, xpcall, error, pairs, tostring, select, unpack = type, pcall, xpcall, error, pairs, tostring, select, table.unpack
 local clock, suspend = perf.now, guard.suspend_watchdog
 
 -- A real global: the hooks UE4SS holds outlive every reload of this file, and UE4SS cannot take one off for good.
@@ -32,7 +36,7 @@ if type(registry) ~= "table" or type(registry.slots) ~= "table" then
     rawset(_G, "WaxHooks", registry)
 end
 -- what an older copy of this file listened for is let go
-for _, slot in pairs(registry.slots) do slot.fn = nil end
+for _, slot in pairs(registry.slots) do slot.fn, slot.after = nil, nil end
 
 local records = {}                  -- function path -> what listens to it here
 local queue, queued = {}, 0         -- listener, value, listener, value ...
@@ -86,15 +90,43 @@ local function hold()
     if ok then link = made end
 end
 
--- Runs inside the engine's own call: every listener copies what it needs, and nothing of a mod's runs here.
+-- A mod's listener runs inside the game's call, as its own scope, with the watchdog back on for it.
+-- A value it returns is the new return value, which only a post listener has.
+local function run_checked(listener, object, ret, views, n)
+    local previous = scope.enter(listener.owner)
+    local was = suspend(false)
+    guard.arm()
+    local ok, result
+    if ret then ok, result = xpcall(listener.checked, guard.handler, object, ret, unpack(views, 1, n))
+    else ok, result = xpcall(listener.checked, guard.handler, object, unpack(views, 1, n)) end
+    suspend(was)
+    scope.leave(previous)
+    if ok and result ~= nil then
+        if ret then ok, result = pcall(ret.set, ret, result) else ok, result = false, handed.BEFORE end
+    end
+    return ok, result
+end
+
+-- Runs inside the engine's own call. Wax's own listeners copy what they need and nothing of a mod's runs here;
+-- a mod's checked listener runs here with views it can read and not write.
 local function caught(record, bare, context, ...)
     local object = context:get()
+    record.pre_n = select("#", ...)
     local list = record.listeners
+    local views, n, wrapped = nil, 0, nil
     for i = 1, #list do
         local listener = list[i]
         if not listener.off then
             local ok, value
-            if bare then ok, value = pcall(listener.catch, object) else ok, value = pcall(listener.catch, object, ...) end
+            if listener.checked then
+                if not views then
+                    wrapped = instance.wrap(object)
+                    if bare then views, n = {}, 0 else views, n = handed.params(...) end
+                end
+                ok, value = run_checked(listener, wrapped, nil, views, n)
+                if ok then value = nil end
+            elseif bare then ok, value = pcall(listener.catch, object)
+            else ok, value = pcall(listener.catch, object, ...) end
             if not ok then
                 failed(listener, value)
             else
@@ -111,15 +143,43 @@ local function caught(record, bare, context, ...)
             end
         end
     end
+    if views then handed.retire(views, n) end
+end
+
+-- After the function ran. UE4SS hands (object, return value, parameters...) when the function has a return value.
+local function caught_after(record, bare, context, ...)
+    local object = context:get()
+    local n = select("#", ...)
+    local has_return = record.pre_n ~= nil and n == record.pre_n + 1
+    local list = record.afters
+    local wrapped, ret, views, m = nil, nil, nil, 0
+    for i = 1, #list do
+        local listener = list[i]
+        if not listener.off then
+            if not ret then
+                wrapped = instance.wrap(object)
+                ret = handed.returns(has_return and (...) or nil)
+                if bare then views, m = {}, 0
+                elseif has_return then views, m = handed.params(select(2, ...))
+                else views, m = handed.params(...) end
+            end
+            local ok, problem = run_checked(listener, wrapped, ret, views, m)
+            if not ok then failed(listener, problem) else listener.failures = 0 end
+        end
+    end
+    if ret then
+        ret.retire()
+        handed.retire(views, m)
+    end
 end
 
 -- The engine may call a hooked function during a map load, seconds after the last frame: that is not a runaway script.
-local function entry_for(record)
+local function entry_for(record, run)
     local bare = record.reach == M.CALLED
     return function(context, ...)
         local started = clock()
         local was = suspend(true)
-        local ok, problem = pcall(caught, record, bare, context, ...)
+        local ok, problem = pcall(run, record, bare, context, ...)
         suspend(was)
         record.calls = record.calls + 1
         record.seconds = record.seconds + (clock() - started)
@@ -130,18 +190,27 @@ local function entry_for(record)
     end
 end
 
--- One registration per function for the life of the game process. What it calls is looked up on every call.
-local function slot_for(path)
+-- One registration per function for the life of the game process, with a callback before and one after the function.
+-- What they call is looked up on every call. A slot from before this file had post callbacks gets a second
+-- registration the first time a post listener needs one.
+local function slot_for(path, after)
     local slot = registry.slots[path]
-    if slot then return slot end
+    if slot and (slot.both or not after) then return slot end
     if type(RegisterHook) ~= "function" then error("this build of UE4SS has no RegisterHook", 0) end
-    slot = { fn = nil }
-    local ok, pre, post = pcall(RegisterHook, path, function(context, ...)
-        local fn = slot.fn
-        if fn then fn(context, ...) end
-    end)
+    local fresh = slot == nil
+    slot = slot or { fn = nil }
+    local ok, pre, post = pcall(RegisterHook, path,
+        function(context, ...)
+            local fn = slot.fn
+            if fn then fn(context, ...) end
+        end,
+        function(context, ...)
+            local fn = slot.after
+            if fn then fn(context, ...) end
+        end)
     if not ok then error(("the game has no function %s to listen to (%s)"):format(path, first_line(pre)), 0) end
-    slot.pre, slot.post = pre, post
+    if fresh then slot.pre, slot.post = pre, post else slot.pre2, slot.post2 = pre, post end
+    slot.both = true
     registry.slots[path] = slot
     return slot
 end
@@ -180,16 +249,70 @@ local function without(list, listener)
     return out
 end
 
+local function check_path(path)
+    if type(path) ~= "string" or not path:find("^/Script/[%w_]+%.[%w_]+:[%w_]+$") then
+        error("hooks.listen expects the path of a function of the game's own code, such as "
+            .. "\"/Script/Icarus.ActorState:Multicast_OnDamaged\", got " .. tostring(path)
+            .. ". A blueprint's function cannot be listened to: UE4SS never lets go of such a hook", 3)
+    end
+end
+
+-- The record of a function, hooked on first use. `reach` must agree with what listens already.
+local function record_for(path, reach)
+    local record = records[path]
+    if not record then
+        if reach ~= M.CALLED and called_by_blueprints(path) then
+            reach = M.CALLED
+            log:warn("%s is called by blueprints in this build of the game, so only the object it was called on is handed over", path)
+        end
+        local ok, slot = pcall(slot_for, path)
+        if not ok then error("hooks.listen: " .. tostring(slot), 3) end
+        record = { path = path, reach = reach, slot = slot, listeners = {}, afters = {}, calls = 0, seconds = 0, failed = 0 }
+        record.entry = entry_for(record, caught)
+        record.exit = entry_for(record, caught_after)
+        records[path] = record
+    elseif record.reach ~= reach and not (record.reach == M.CALLED and called_by_blueprints(path)) then
+        error(("hooks.listen: %s is already listened to as \"%s\", and a function is reached one way only"):format(path, record.reach), 3)
+    end
+    return record
+end
+
+local function wire(record)
+    local slot = record.slot
+    slot.fn = (#record.listeners > 0 or #record.afters > 0) and record.entry or nil
+    slot.after = #record.afters > 0 and record.exit or nil
+end
+
+-- Adds a listener to the record's `listeners` or `afters` and returns the undo, owned by the current scope.
+local function attach(record, listener, after)
+    if after and not record.slot.both then
+        local ok, problem = pcall(slot_for, record.path, true)
+        if not ok then error("hooks.listen: " .. tostring(problem), 3) end
+    end
+    local key = after and "afters" or "listeners"
+    local list = without(record[key], nil)
+    list[#list + 1] = listener
+    record[key] = list
+    wire(record)
+    local owner, slot_number = nil, nil
+    local function undo()
+        if listener.gone then return end
+        listener.gone = true
+        record[key] = without(record[key], listener)
+        wire(record)
+        if owner then owner:remove(slot_number) end
+    end
+    owner, slot_number = scope.own(undo)
+    return undo
+end
+
 -- hooks.listen("/Script/Icarus.ActorState:Multicast_OnDamaged", { reach = hooks.NET, catch = fn, deliver = fn, label = "damage" })
 -- catch(object, ...) runs inside the game's call with the object the function was called on and its values as UE4SS
 -- hands them (each read with :get()). It copies what it needs and returns one value, or nil for nothing to tell.
 -- deliver(value) runs with that value in the frame loop, where a mod's code may run. Returns the undo.
+-- This is Wax's own way; a mod's is M.checked, below.
 function M.listen(path, options)
-    if type(path) ~= "string" or not path:find("^/Script/[%w_]+%.[%w_]+:[%w_]+$") then
-        error("hooks.listen expects the path of a function of the game's own code, such as "
-            .. "\"/Script/Icarus.ActorState:Multicast_OnDamaged\", got " .. tostring(path)
-            .. ". A blueprint's function cannot be listened to: UE4SS never lets go of such a hook", 2)
-    end
+    check_path(path)
     if type(options) ~= "table" then error("hooks.listen expects { reach = ..., catch = function, deliver = function }", 2) end
     for key in pairs(options) do
         if not IS_OPTION[key] then
@@ -206,37 +329,48 @@ function M.listen(path, options)
         error("hooks.listen: deliver must be a function, got " .. type(options.deliver), 2)
     end
     local label = type(options.label) == "string" and options.label or path:match("([%w_]+)$")
-    local record = records[path]
-    if not record then
-        if reach ~= M.CALLED and called_by_blueprints(path) then
-            reach = M.CALLED
-            log:warn("%s is called by blueprints in this build of the game, so only the object it was called on is handed over", path)
-        end
-        local ok, slot = pcall(slot_for, path)
-        if not ok then error("hooks.listen: " .. tostring(slot), 2) end
-        record = { path = path, reach = reach, slot = slot, listeners = {}, calls = 0, seconds = 0, failed = 0 }
-        record.entry = entry_for(record)
-        records[path] = record
-    elseif record.reach ~= reach and not (record.reach == M.CALLED and called_by_blueprints(path)) then
-        error(("hooks.listen: %s is already listened to as \"%s\", and a function is reached one way only"):format(path, record.reach), 2)
-    end
+    local record = record_for(path, reach)
     local listener = { catch = options.catch, label = label, owner = scope.current(), failures = 0, off = false, gone = false }
     if options.deliver then listener.deliver = guard.wrap("hooks: " .. label, options.deliver) end
-    local list = without(record.listeners, nil)
-    list[#list + 1] = listener
-    record.listeners = list
-    record.slot.fn = record.entry
-    local owner, slot_number = nil, nil
-    local function undo()
-        if listener.gone then return end
-        listener.gone = true
-        record.listeners = without(record.listeners, listener)
-        if #record.listeners == 0 then record.slot.fn = nil end
-        if owner then owner:remove(slot_number) end
-    end
-    owner, slot_number = scope.own(undo)
-    return undo
+    return attach(record, listener, false)
 end
+
+-- A mod's way: hooks.listen(path, fn, { when = "pre" | "post", reach = ..., label = ... }). Returns the undo.
+-- when = "pre": fn(object, params...) runs before the function, when = "post": fn(object, ret, params...) after it.
+-- Every parameter is a view the listener can read and not write, good only inside fn; ret:get() reads the return
+-- value, ret:set(value) or a value returned from fn replaces it. With reach "called" only the object is handed over.
+function M.checked(path, fn, options)
+    check_path(path)
+    if type(fn) ~= "function" then
+        error("hooks.listen expects the function to run: hooks.listen(path, function(object, ...) end, { when = \"post\" }), got "
+            .. type(fn) .. " in its place", 2)
+    end
+    if options == nil then options = {} end
+    if type(options) ~= "table" then error("hooks.listen: the options are a table such as { when = \"post\" }, got " .. type(options), 2) end
+    for key in pairs(options) do
+        if not IS_CHECKED_OPTION[key] then
+            error(("hooks.listen has no option '%s'.%s"):format(tostring(key), suggest.phrase(tostring(key), CHECKED_OPTIONS)), 2)
+        end
+    end
+    local when = options.when or "pre"
+    if when ~= "pre" and when ~= "post" then
+        error(("hooks.listen: when is \"pre\" (before the function runs) or \"post\" (after it, with its return value), got %s"):format(tostring(when)), 2)
+    end
+    local reach = options.reach
+    if reach == nil then reach = records[path] and records[path].reach or M.DELEGATE end
+    if not IS_REACH[reach] then
+        error(("hooks.listen: reach is one of \"net\", \"delegate\" and \"called\", got %s.%s")
+            :format(tostring(reach), type(reach) == "string" and suggest.phrase(reach, REACHES) or ""), 2)
+    end
+    if options.label ~= nil and type(options.label) ~= "string" then error("hooks.listen: label must be a string", 2) end
+    local label = options.label or path:match("([%w_]+)$")
+    local record = record_for(path, reach)
+    local listener = { checked = fn, label = label, owner = scope.current(), failures = 0, off = false, gone = false }
+    return attach(record, listener, when == "post")
+end
+
+-- What a mod sees as `hooks`.
+M.api = { listen = M.checked, NET = M.NET, DELEGATE = M.DELEGATE, CALLED = M.CALLED }
 
 -- Makes a signal say when its first handler comes and when its last one leaves. first may raise: nothing is connected then.
 function M.count(signal, first, last)
@@ -279,8 +413,11 @@ function M.stats()
         for i = 1, #record.listeners do
             if record.listeners[i].off then off = off + 1 end
         end
-        hooked[path] = { reach = record.reach, listeners = #record.listeners, off = off, calls = record.calls, failed = record.failed,
-            us = record.calls > 0 and record.seconds / record.calls * 1e6 or 0 }
+        for i = 1, #record.afters do
+            if record.afters[i].off then off = off + 1 end
+        end
+        hooked[path] = { reach = record.reach, listeners = #record.listeners, afters = #record.afters, off = off, calls = record.calls,
+            failed = record.failed, us = record.calls > 0 and record.seconds / record.calls * 1e6 or 0 }
     end
     return { registered = registered, hooks = hooked, queued = queued // 2, delivered = counts.delivered, dropped = counts.dropped,
         flushes = counts.flushes, tell_us = counts.flushes > 0 and counts.seconds / counts.flushes * 1e6 or 0,

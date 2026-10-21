@@ -273,6 +273,63 @@ function Containers:Accepted(row)
     return known, set
 end
 
+M.OWNED_KEPT = 3            -- seconds an animal's owner answer is kept, per animal and player state
+local owned_known = {}
+
+local function address_of(object)
+    local ok, addr = pcall(function() return object:GetAddress() end)
+    if ok and type(addr) == "number" and addr ~= 0 then return addr end
+    return nil
+end
+
+-- The player state as a live Instance of a PlayerState, else nil: nothing else is ever handed to the game.
+local function player_state_of(state)
+    if state == nil then return nil end
+    local who = (type(instance.is_instance) == "function" and instance.is_instance(state)) and state or nil
+    if not who then
+        local ok, made = pcall(instance.wrap, state)
+        if ok and made then who = made end
+    end
+    if not who then return nil end
+    local ok, yes = pcall(function() return who:IsA("PlayerState") end)
+    if not ok or yes ~= true then return nil end
+    return who
+end
+
+-- Whether a listed animal belongs to the player of this state. The animal must still be there (its handle, taken when
+-- it was listed, and the tracked entry), the state must be a PlayerState, the call goes through the checked Instance,
+-- and the answer is kept for a moment so a list is asked once, not once per row per frame.
+function M.owned(entry, state)
+    if not entry or entry.destroyed then return false end
+    local who = player_state_of(state)
+    if not who then return false end
+    local animal = entry.instance
+    local raw = nil
+    pcall(function() raw = animal.Raw end)
+    local animal_addr, who_addr = address_of(raw), nil
+    pcall(function() who_addr = address_of(who.Raw) end)
+    if not animal_addr or not who_addr then return false end
+    local handles = Wax.handle
+    if handles then
+        if entry.handle == nil then
+            local ok, taken = pcall(handles.take, raw)
+            entry.handle = ok and taken or false
+        end
+        if entry.handle and not handles.alive(entry.handle) then
+            entry.destroyed = true
+            return false
+        end
+    end
+    local key = animal_addr .. ":" .. who_addr
+    local now = os.clock()
+    local known = owned_known[key]
+    if known and now - known.at < M.OWNED_KEPT then return known.yes end
+    local ok, yes = pcall(function() return animal:IsMountOwner(who) end)
+    yes = ok and yes == true
+    owned_known[key] = { at = now, yes = yes }
+    return yes
+end
+
 local function record_of(entry, distance)
     local parts = inventories_of(entry)
     local row = entry.variant or entry.kind
@@ -280,11 +337,10 @@ local function record_of(entry, distance)
     local record = { Row = cargo and entry.kind or row, Name = shown_name(row, entry), Distance = distance, Actor = entry.instance,
         Inventories = parts.takes, Fuel = parts.fuel, Inputs = parts.inputs,
         Kind = parts.inputs and "station" or (cargo and "cargo" or "storage") }
-    -- A cargo animal belongs to the player whose state is given (the game's own IsMountOwner); anything else is everyone's.
+    -- A cargo animal belongs to the player whose state is given; anything else is everyone's.
     function record:OwnedBy(state)
         if self.Kind ~= "cargo" then return true end
-        local ok, yes = pcall(function() return self.Actor.Raw:IsMountOwner(state) end)
-        return ok and yes == true
+        return M.owned(entry, state)
     end
     function record:Accepts(item)
         if self.Kind ~= "station" then return #self.Inventories > 0 end

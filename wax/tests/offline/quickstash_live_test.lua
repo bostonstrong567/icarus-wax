@@ -49,12 +49,18 @@ fake.react.GetVisibility = function(self) return rawget(self, "__visibility") or
 fake.react.GetFName = function(self)
     local name = tostring(rawget(self, "__name"))
     name = name:match(":(.+)$") or name
-    return { ToString = function() return name end }
+    local index = rawget(self, "__address") or 0
+    return { ToString = function() return name end, GetComparisonIndex = function() return index end }
 end
 fake.react.GetClass = function(self)
     local class = rawget(self, "__class") or "Widget"
-    return { GetFName = function() return { ToString = function() return class end } end }
+    -- enough of a class for Wax to wrap the object: a name, an address, a full name, no parent, no members
+    return { GetFName = function() return { ToString = function() return class end, GetComparisonIndex = function() return 1 end } end,
+        GetAddress = function() return 1 end, GetFullName = function() return "Class /Script/Icarus." .. class end,
+        IsValid = function() return true end, GetSuperStruct = function() return { IsValid = function() return false end } end,
+        ForEachFunction = function() end, ForEachProperty = function() end }
 end
+fake.react.HasAnyInternalFlags = function() return false end
 fake.react.AddChildToHorizontalBox = function(self, child) return add_child(self, child) end
 fake.react.AddChildToOverlay = function(self, child) return add_child(self, child) end
 fake.react.AddChildToVerticalBox = function(self, child) return add_child(self, child) end
@@ -161,9 +167,11 @@ backpack.Raw = backpack_raw
 local signal = function() return sched.Signal.new("test") end
 local notices = {}
 local Containers = { Changed = signal() }
+local animals = {}      -- cargo records a scenario lists; asking one whether it is owned touches its animal
 function Containers:Nearby(_, options)
     local out = { { Row = "Storage_Metal_Cupboard", Name = "Iron Cupboard", Kind = "storage", Distance = 5, Actor = { Raw = crate_actor },
         Inventories = { cupboard }, Fuel = {}, Inputs = nil, Accepts = function() return true end } }
+    for _, animal in ipairs(animals) do out[#out + 1] = animal end
     if linked_actor then
         table.insert(out, 1, { Row = "Kit_Stone_Furnace", Name = "Stone Furnace", Kind = "station", Distance = 3, Actor = { Raw = linked_actor },
             Inventories = {}, Fuel = { fuel }, Inputs = inputs, Accepts = function(_, item) return item:lower() == "metal_ore" end })
@@ -186,7 +194,7 @@ local game = {
     Containers = Containers,
     Items = { Get = function(_, item) return { Name = item, DisplayName = item, MaxStack = 100 } end },
     Crafting = { IsTyping = function() return false end },
-    Data = { Table = function() return { Row = function() return nil end } end },
+    Data = { Table = function() return { Row = function() return nil end, Load = function() return {} end } end },
     Highlight = { Look = function() return {} end, Add = function() return { Remove = function() end } end },
     FindAll = function() return {} end,
     wrap = function(raw) return { Raw = raw, Size = 1, Used = 0, List = function() return {} end } end,
@@ -279,8 +287,8 @@ local function open_bench(number)
     return screen, device_row, player_row, device_sort
 end
 
-local function open_crate()
-    local screen = widget("UMG_Storage_C_1", "UMG_Storage_C")
+local function open_crate(name)
+    local screen = widget(name or "UMG_Storage_C_1", "UMG_Storage_C")
     screen.LinkedActor = crate_actor
     local device = widget("UMG_DeviceInventory", "UMG_DeviceInventory_C")
     local device_sort, device_row = sort_control("UMG_DeviceInventory.UMG_Sort", false)
@@ -385,6 +393,34 @@ local function run_scenario(label, handles)
     if not handles then frames(1) end
     fake.free(mark3, fake.mark())
     frames(5)
+    -- a ranching station: an animal is listed as cargo; its list is opened, the animal is freed, the list is opened again
+    local before_animal = fake.mark()
+    local animal = fake.new_object("Moa_1")
+    animals[1] = { Row = "cargo:Mount_Moa", Name = "Cargo: Moa", Kind = "cargo", Distance = 4, Actor = { Raw = animal },
+        Inventories = { cupboard }, Fuel = {}, Inputs = nil, Accepts = function() return true end,
+        OwnedBy = function(self, state) return self.Actor.Raw:IsMountOwner(state) == true end }
+    local animal_made = fake.mark()
+    for _ = 1, 2 do
+        local ranch, ranch_row = open_crate("UMG_Ranching_C_1")
+        ui.GameScreenChanged:Fire("UMG_Ranching_C", nil)
+        frames(3)
+        t.eq(buttons_in(ranch_row), 1, label .. ": PULL on the ranching station's device header")
+        local pulls_now = env.quickstash.pulling()
+        fake.hover(pulls_now.buttons and pulls_now.buttons.pull and pulls_now.buttons.pull.button or nil)
+        frames(1)
+        fake.keys.RightMouseButton = true
+        frames(1)
+        fake.keys.RightMouseButton = false
+        frames(2)
+        fake.hover(nil)
+        close_bench(ranch)
+        ui.GameScreenChanged:Fire(nil, nil)
+        frames(2)
+        -- the animal is gone before the second look
+        fake.free(before_animal, animal_made)
+    end
+    animals[1] = nil
+    t.eq(fake.dead_touches, 0, label .. ": a freed animal was never touched: " .. tostring(fake.dead_last))
     t.eq(fake.dead_touches, 0, label .. ": nothing of the closed container screen was touched: " .. tostring(fake.dead_last))
     game.MapChanged:Fire("Terrain_019")
     frames(5)
@@ -423,7 +459,8 @@ t.test("on a dedicated server there is no ui: the mod loads, hooks and sums only
     owner:destroy()
 end)
 
--- The crafting hooks, worked out from the station: two players' stand-ins, each with a cargo animal of their own.
+-- The crafting side without a single write into the game's lists: the checks are answered through their return
+-- value with what is nearby added, and a craft first moves what the backpack lacks into it with the game's own call.
 local function stand_in(name, address)
     local object = { __name = name }
     function object:GetAddress() return address end
@@ -431,12 +468,7 @@ local function stand_in(name, address)
     function object:IsA(class) return (self.__class or "") == class end
     return object
 end
-t.test("the hooks hand a station the storages, benches and the crafting player's own animals around it, on any side", function()
-    local hooks = {}
-    local extras = {
-        RegisterHook = function(path, fn) hooks[path] = fn return 1, 2 end,
-        UnregisterHook = function() end,
-    }
+t.test("the crafting checks are answered from the containers and a craft moves its inputs into the backpack first", function()
     local function actor(name, address, metres, class)
         local a = stand_in(name, address)
         a.__class = class
@@ -444,71 +476,140 @@ t.test("the hooks hand a station the storages, benches and the crafting player's
         function a:K2_GetActorLocation() return self.Position end
         return a
     end
-    local function inventory(name, address, owner, used, kind)
+    local function inventory(name, address, owner, kind, counts, stacks, size)
         local i = stand_in(name, address)
-        i.Used, i.Kind = used, kind
+        i.Kind = kind
+        i.Used = #stacks
+        i.counts = counts
         function i:GetOwner() return owner end
+        function i:FindItemCountByType(handle) return self.counts[tostring(handle.RowName):lower()] or 0 end
+        -- a stand-in is already a table, so the mod reads it as it would the wrapped inventory
+        i.Size = size or 10
+        function i:List() return stacks end
         return i
     end
-    local state_a, state_b = stand_in("state A", 9001), stand_in("state B", 9002)
-    local station = actor("furnace", 100, 0)
-    local station_comp = stand_in("furnace.proc", 101)
-    function station_comp:GetOwner() return station end
-    station_comp.Inventory = inventory("furnace.input", 102, station, 2, "Input")
-    local bench = actor("bench", 200, 8)
-    local bench_comp = stand_in("bench.proc", 201)
-    function bench_comp:GetOwner() return bench end
-    bench_comp.Inventory = inventory("bench.input", 202, bench, 5, "Input")
+    local state_a = stand_in("state A", 9001)
+    local furnace = actor("furnace", 100, 0)
+    -- the hooked component is an engine object (Wax wraps it for the listener); the rest are plain stand-ins
+    local furnace_comp = fake.new_object("furnace.proc")
+    furnace_comp.GetOwner = function() return furnace end
+    furnace_comp.Inventory = inventory("furnace.input", 102, furnace, "Input", {}, { { Item = "Ore", Count = 2, Slot = 1 } })
     local crate = actor("crate", 300, 5, "BP_DeployableContainerBase_C")
-    local crate_inventory = inventory("crate.inventory", 301, crate, 8, "Storage")
-    local far_crate = actor("far crate", 350, 45, "BP_DeployableContainerBase_C")
-    local far_inventory = inventory("far.inventory", 351, far_crate, 8, "Storage")
-    local moa_a = actor("moa of A", 400, 4, "IcarusNPCCharacter")
-    function moa_a:IsMountOwner(state) return state == state_a end
-    local cargo_a = inventory("moa A cargo", 401, moa_a, 3, "Mount_Cargo")
-    local moa_b = actor("moa of B", 500, 3, "IcarusNPCCharacter")
-    function moa_b:IsMountOwner(state) return state == state_b end
-    local cargo_b = inventory("moa B cargo", 501, moa_b, 3, "Mount_Cargo")
-    local player_a = actor("player A", 600, 1, "IcarusPlayerCharacter")
-    player_a.PlayerState = state_a
-    local backpack_a = inventory("backpack A", 601, player_a, 6, "Backpack")
-    local player_b = actor("player B", 700, 2, "IcarusPlayerCharacter")
-    player_b.PlayerState = state_b
-    local backpack_b = inventory("backpack B", 701, player_b, 6, "Backpack")
+    local crate_inventory = inventory("crate.inventory", 301, crate, "Storage", { wood = 100, fiber = 30 },
+        { { Item = "Wood", Count = 100, Slot = 1 }, { Item = "Fiber", Count = 30, Slot = 2 } })
+    local player = actor("player A", 600, 1, "IcarusPlayerCharacter")
+    player.PlayerState = state_a
+    local shifted = {}
+    player.Controller = stand_in("controller A", 601)
+    function player.Controller:OnServer_ShiftItem(from, from_slot, to, to_slot, amount)
+        shifted[#shifted + 1] = { from = from.__name, from_slot = from_slot, to = to.__name, to_slot = to_slot, amount = amount }
+    end
+    local backpack = inventory("backpack A", 602, player, "Backpack", { wood = 5 }, { { Item = "Wood", Count = 5, Slot = 1 } }, 4)
     local find_all = game.FindAll
     game.FindAll = function(_, class)
-        if class == "ProcessingComponent" then return { station_comp, bench_comp } end
-        if class == "Inventory" then
-            return { station_comp.Inventory, bench_comp.Inventory, crate_inventory, far_inventory, cargo_a, cargo_b, backpack_a, backpack_b }
-        end
+        if class == "ProcessingComponent" then return { furnace_comp } end
+        if class == "Inventory" then return { furnace_comp.Inventory, crate_inventory, backpack } end
         return {}
     end
+    local data_was = game.Data
+    local wood_floor = { Inputs = { { Element = { RowName = "Wood" }, Count = 20 }, { Element = { RowName = "Fiber" }, Count = 3 } } }
+    game.Data = { Table = function(_, name)
+        return {
+            Row = function(_, row) if name == "ProcessorRecipes" and row == "Wood_Floor" then return wood_floor end return nil end,
+            Load = function() if name == "ProcessorRecipes" then return { Wood_Floor = wood_floor } end return {} end,
+        }
+    end }
     warned = {}
-    local env, owner = load_mod(nil, true, extras)
+    local env, owner = load_mod(nil, true, { FName = function(name) return name end })
     frames(3)
     t.eq(#warned, 0, table.concat(warned, " | "))
-    local count = 0
-    for _ in pairs(hooks) do count = count + 1 end
-    t.eq(count, 7, "all seven crafting checks are hooked")
-    local function craft(first)
-        local list = { first }
-        list.GetArrayNum = function(self) return #self end
-        list.GetAddress = function() return 1 end
-        local hook = hooks["/Script/Icarus.ProcessingComponent:CanQueueItem"]
-        hook({ get = function() return station_comp end }, nil, { get = function() return list end })
-        local names = {}
-        for index = 2, #list do names[#names + 1] = list[index].__name end
-        return table.concat(names, ", ")
+    local _, installed = env.quickstash.hooks()
+    t.eq(installed, 4, "three checks answered after the fact, one craft caught before it")
+    -- Wax's one registration per function: its entries before (fn) and after (after) the game's function
+    local slots = rawget(_G, "WaxHooks").slots
+    local function before(path) return slots[path] and slots[path].fn end
+    local function after(path) return slots[path] and slots[path].after end
+    t.ok(after("/Script/Icarus.ProcessingComponent:CanSatisfyRecipeInput"), "CanSatisfyRecipeInput is answered")
+    t.ok(after("/Script/Icarus.ProcessingComponent:GetMaxCraftableStack"), "GetMaxCraftableStack is answered")
+    t.ok(after("/Script/Icarus.ProcessingComponent:CanQueueItem"), "CanQueueItem is answered")
+    t.ok(before("/Script/Icarus.ProcessingComponent:OnServer_AddProcessingRecipe"), "OnServer_AddProcessingRecipe is caught before it runs")
+    local ctx = { get = function() return furnace_comp end }
+    -- the return value as UE4SS hands it: get reads the game's answer, set is what Wax writes back
+    local function ret(value)
+        local r = { value = value, written = nil }
+        function r:get() return self.value end
+        function r:set(new) self.written = new end
+        return r
     end
-    t.eq(craft(backpack_a), "crate.inventory, bench.input, moa A cargo", "player A at the furnace: the crate, the bench, A's own moa; never the far crate, B's moa, anyone's backpack or the furnace's own input")
-    now = now + 2
-    t.eq(craft(backpack_b), "crate.inventory, bench.input, moa B cargo", "player B at the same furnace gets B's own moa instead")
-    local _, _, supplied = env.quickstash.hooks()
-    t.eq(supplied, 6, "six inventories handed over in all")
-    game.FindAll = find_all
+    local function answered(path, r, ...)
+        -- as the engine does: the entry before the function first (it counts the parameters), then the one after
+        before(path)(ctx, ...)
+        local given = after(path)(ctx, r, ...)
+        if r.written ~= nil then return r.written end
+        return given
+    end
+    local wood = { Element = { RowName = "Wood" }, Count = 20 }
+    local stone = { Element = { RowName = "Stone" }, Count = 20 }
+    local satisfy = "/Script/Icarus.ProcessingComponent:CanSatisfyRecipeInput"
+    t.eq(answered(satisfy, ret(false), wood, 1, nil, 5), true, "15 short, 100 nearby: the answer becomes true")
+    t.eq(answered(satisfy, ret(false), stone, 1, nil, 5), nil, "nothing nearby: the game's answer stands")
+    t.eq(answered(satisfy, ret(true), wood, 1, nil, 50), nil, "a yes is left alone")
+    local most = "/Script/Icarus.ProcessingComponent:GetMaxCraftableStack"
+    local recipe = { RowName = "Wood_Floor" }
+    t.eq(answered(most, ret(0), recipe, nil, player), 5, "the first ask reads the recipe at once: wood 5 + 100 over 20, fiber 0 + 30 over 3, five crafts")
+    t.eq(answered(most, ret(7), recipe, nil, player), nil, "the game's larger answer stands")
+    local queue = "/Script/Icarus.ProcessingComponent:CanQueueItem"
+    local function order(crafts) return { CraftingPlayer = player, Recipe = recipe, CraftCount = crafts } end
+    t.eq(answered(queue, ret(false), order(1)), true, "one craft: the button comes on")
+    t.eq(answered(queue, ret(false), order(6)), nil, "six crafts need 120 wood: the game's no stands")
+    t.eq(answered(queue, ret(true), order(1)), nil, "a yes is left alone")
+    -- the craft: before the game queues it, the 15 wood and 3 fiber the backpack lacks come in with the game's own transfer
+    before("/Script/Icarus.ProcessingComponent:OnServer_AddProcessingRecipe")(ctx, recipe, 1, nil, player)
+    t.eq(#shifted, 2, table.concat((function() local out = {} for _, m in ipairs(shifted) do out[#out + 1] = m.amount .. " " .. m.from .. ">" .. m.to end return out end)(), ", "))
+    t.eq(shifted[1].amount, 15, "wood: the 15 short")
+    t.eq(shifted[1].from_slot, 0, "slots are handed to the game from 0")
+    t.eq(shifted[1].to_slot, 0, "into the backpack's own wood stack")
+    t.eq(shifted[2].amount, 3, "fiber: all three")
+    t.eq(shifted[2].to_slot, 1, "into the first empty slot")
+    local stats = env.quickstash.craft_stats()
+    t.eq(stats.moved, 18)
+    t.eq(stats.answered, 3)
+    t.eq(stats.failed, 0)
+    game.FindAll, game.Data = find_all, data_was
     for _, fn in ipairs(unloads) do fn("reload") end
     unloads = {}
     owner:destroy()
+end)
+
+-- One mod for every way the game is played: what starts under each kind Wax reads.
+t.test("the mod chooses what runs from Wax's mode: server, host, single player, client", function()
+    local cases = {
+        { kind = "server", IsAuthority = true, HasScreen = false, screens = false, bring_in = true, notice = false },
+        { kind = "host", IsAuthority = true, HasScreen = true, screens = true, bring_in = true, notice = false },
+        { kind = "single", IsAuthority = true, HasScreen = true, screens = true, bring_in = true, notice = false },
+        { kind = "client", IsAuthority = false, HasScreen = true, screens = true, bring_in = false, notice = true },
+    }
+    local mode_was = Wax.mode
+    for _, case in ipairs(cases) do
+        Wax.mode = { kind = case.kind, IsAuthority = case.IsAuthority, HasScreen = case.HasScreen, IsServer = case.kind == "server" }
+        warned = {}
+        local env, owner = load_mod(nil, not case.HasScreen)
+        frames(3)
+        t.eq(#warned, 0, case.kind .. ": " .. table.concat(warned, " | "))
+        local got = env.quickstash.mode()
+        t.eq(got.kind, case.kind)
+        t.eq(got.screens, case.screens, case.kind .. ": screens")
+        t.eq(got.bring_in, case.bring_in, case.kind .. ": the bring-in")
+        t.eq(got.notice, case.notice, case.kind .. ": the notice")
+        t.eq(got.answers, true, case.kind .. ": the crafting checks are answered")
+        t.eq(got.hooks, 4, case.kind .. ": four hooks")
+        t.eq(buttons_in(inventory_row) > 0, case.screens, case.kind .. ": card buttons only with a screen")
+        for _, fn in ipairs(unloads) do fn("reload") end
+        unloads = {}
+        owner:destroy()
+        frames(2)
+    end
+    Wax.mode = mode_was
 end)
 
 t.finish("quickstash-live")

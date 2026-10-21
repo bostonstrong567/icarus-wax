@@ -15,7 +15,7 @@
 local hooks = { registrations = 0, raised = 0, returned = 0, unregistered = 0 }
 ---@type any
 local world, values, kit, items = nil, nil, nil, nil
-local callbacks = {}        -- path -> every callback registered for it, oldest first
+local callbacks = {}        -- path -> every registration for it, oldest first: { pre = fn, post = fn or nil }
 local carriers = setmetatable({}, { __mode = "k" })     -- character actor -> its inventory component
 
 hooks.DAMAGED = "/Script/Icarus.ActorState:Multicast_OnDamaged"
@@ -35,6 +35,7 @@ hooks.FUNCTIONS = {
     [hooks.DAMAGED] = true, [hooks.WEIGHT] = true, [hooks.SLOT.added] = true, [hooks.SLOT.removed] = true,
     [hooks.SLOT.changed] = true, [hooks.VITALS.Food[1]] = true, [hooks.VITALS.Water[1]] = true, [hooks.VITALS.Oxygen[1]] = true,
     ["/Script/Icarus.IcarusCharacter:OnCharacterDamaged"] = true, ["/Script/Engine.Actor:ReceiveTick"] = true,
+    ["/Script/Icarus.ProcessingComponent:CanSatisfyRecipeInput"] = true, ["/Script/Icarus.ProcessingComponent:GetMaxCraftableStack"] = true,
 }
 
 local function handed(value)
@@ -42,18 +43,44 @@ local function handed(value)
     return { get = function() return value end, type = function() return "RemoteUnrealParam" end }
 end
 
--- The game calls a hooked function on `object` with these values. Returns how many callbacks ran.
-function hooks.raise(path, object, ...)
+-- The game calls a function that returns `result` on `object` with these values, as this UE4SS build does it: the pre
+-- callbacks get (object, values...), the post callbacks (object, return value, values...) when the function returns
+-- something, and a value a callback returns replaces the result. Returns the result the caller sees and how many ran.
+function hooks.call(path, object, result, ...)
     local list = callbacks[path]
-    if not list then return 0 end
+    if not list then return result, 0 end
     hooks.raised = hooks.raised + 1
     local given, n = { ... }, select("#", ...)
     local params = {}
     for i = 1, n do params[i] = handed(given[i]) end
-    for i = 1, #list do
-        if list[i](handed(object), table.unpack(params, 1, n)) ~= nil then hooks.returned = hooks.returned + 1 end
+    local ran = 0
+    local function take(value)
+        if value ~= nil then
+            hooks.returned = hooks.returned + 1
+            result = value
+        end
     end
-    return #list
+    for i = 1, #list do
+        ran = ran + 1
+        take(list[i].pre(handed(object), table.unpack(params, 1, n)))
+    end
+    local ret = { get = function() return result end, set = function(_, value) result = value end,
+        type = function() return "RemoteUnrealParam" end }
+    for i = 1, #list do
+        local post = list[i].post
+        if post then
+            ran = ran + 1
+            if result == nil then take(post(handed(object), table.unpack(params, 1, n)))
+            else take(post(handed(object), ret, table.unpack(params, 1, n))) end
+        end
+    end
+    return result, ran
+end
+
+-- The game calls a hooked function that returns nothing. Returns how many callbacks ran.
+function hooks.raise(path, object, ...)
+    local _, ran = hooks.call(path, object, nil, ...)
+    return ran
 end
 
 -- How many times UE4SS was asked to hook this function.
@@ -118,11 +145,11 @@ function hooks.install(the_world, the_values, the_kit, the_items)
         if not hooks.FUNCTIONS[path] then
             error(("[RegisterHook] Couldn't find the function '%s'"):format(path), 0)
         end
-        if after ~= nil then error("fake_hooks: a second callback was never tried in the game", 2) end
+        if after ~= nil and type(after) ~= "function" then error("RegisterHook expects a function as its post callback", 2) end
         hooks.registrations = hooks.registrations + 1
         local list = callbacks[path] or {}
         callbacks[path] = list
-        list[#list + 1] = callback
+        list[#list + 1] = { pre = callback, post = after }
         return hooks.registrations * 2 - 1, hooks.registrations * 2
     end)
     rawset(_G, "UnregisterHook", function() hooks.unregistered = hooks.unregistered + 1 end)

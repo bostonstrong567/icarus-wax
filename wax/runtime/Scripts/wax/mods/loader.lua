@@ -49,6 +49,34 @@ local BLOCKED = {
     UninstallCurrentMod = "it destroys the Lua state Wax runs in",
     ClearAllDelayedActions = "it cancels every mod's timers, and Wax's own frame loop with them",
 }
+-- UE4SS's hooks hand a mod the game's own arrays, and a write into one crashed a server. hooks.listen hands views instead.
+local RAW_HOOKS = "use hooks.listen(path, fn, { when = \"pre\" or \"post\" }), which hands you parameters you can read "
+    .. "and a return value you can set"
+local RAW_HOOKS_WARNING = "raw hooks: the game's arrays are yours to break"
+
+-- The table every mod sees as `hooks`, made once the hooks module is there.
+local hooks_api = nil
+local function hooks_for_mods()
+    if hooks_api == nil then
+        local ok, hooks = pcall(Wax.import, "engine.hooks")
+        hooks_api = ok and hooks.api or false
+        if not ok then core_log:warn("the hooks module could not be loaded, so mods have no `hooks`: %s", tostring(hooks):match("^[^\r\n]*"))
+        end
+    end
+    return hooks_api or nil
+end
+
+-- The first line of a file that reaches a hook through raw, or nil.
+local function raw_hook_line(text)
+    local number = 0
+    for line in (text .. "\n"):gmatch("([^\n]*)\n") do
+        number = number + 1
+        if not line:find("^%s*%-%-") and (line:find("raw%s*%.%s*U?n?[Rr]egisterHook") or line:find("raw%s*%[%s*[\"']U?n?[Rr]egisterHook")) then
+            return number
+        end
+    end
+    return nil
+end
 
 local function read_file(path)
     local file, err = io.open(path, "rb")
@@ -137,6 +165,9 @@ local function make_env(mod)
             return type(key) == "string" and file_of(mod, key) or nil
         end })
     for name, reason in pairs(BLOCKED) do env[name] = blocked(name, reason) end
+    env.RegisterHook = blocked("RegisterHook", RAW_HOOKS)
+    env.UnregisterHook = blocked("UnregisterHook", "hooks.listen returns the function that takes the listener off, and a reload takes it off by itself")
+    env.hooks = hooks_for_mods()
     for name, value in pairs(extras) do env[name] = value end
 
     -- Settings that survive restarting the game: storage.Load("settings", defaults), then storage.Save("settings", t).
@@ -176,6 +207,8 @@ local function load_module(mod, name, path, chunkname)
     if not text then return nil, ("cannot read %s: %s"):format(chunkname, tostring(err)) end
     local chunk, syntax_error = load(text, "@" .. chunkname, "t", mod.env)
     if not chunk then return nil, syntax_error end
+    local line = raw_hook_line(text)
+    if line then mod.env.log:warn("%s:%d: %s", chunkname, line, RAW_HOOKS_WARNING) end
     mod.modules[name] = LOADING
     local previous = scope.enter(mod.scope)
     guard.arm()

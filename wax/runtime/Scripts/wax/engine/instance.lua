@@ -46,6 +46,10 @@ local function kind_of(value)
     local ok, kind = pcall(function() return value:type() end)
     return ok and kind or nil
 end
+M.kind_of, M.OBJECT_KINDS, M.TEXT_KINDS, M.PARAM_KINDS = kind_of, OBJECT_KINDS, TEXT_KINDS, PARAM_KINDS
+
+-- Why an engine array is never made longer, shorter or empty through the checked paths: the engine frees what it did not make.
+M.ARRAY_REFUSED = "it belongs to the game. Use the return value, or move items with the game's own calls."
 
 local function describe_dead(self)
     return ("this %s no longer exists (it was destroyed, or the map changed)"):format(rawget(self, INFO).name)
@@ -373,6 +377,14 @@ local function write_property(self, name, member, value)
     local info = rawget(self, INFO)
     local ok, converted = pcall(to_engine, value, member.type, info.name .. "." .. name, member, name, object, true)
     if not ok then error(converted, 3) end
+    if member.type == "ArrayProperty" and type(converted) == "table" then
+        -- entries may change, the length may not: UE4SS grows an array with its own allocator, which the engine then frees
+        local counted, have = pcall(function() return object[name]:GetArrayNum() end)
+        if counted and type(have) == "number" and have ~= #converted then
+            error(("Wax refuses to make %s.%s longer, shorter or empty (it has %d entries, %d were given): %s (.Raw is the override)")
+                :format(info.name, name, have, #converted, M.ARRAY_REFUSED), 3)
+        end
+    end
     object[name] = converted
 end
 

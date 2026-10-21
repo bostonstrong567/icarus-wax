@@ -159,4 +159,17 @@ t.test("why nothing moved", function()
     t.ok(text:find("(and 2 more)", 1, true), text)
 end)
 
+t.test("a stash pick with an amount is cut to it, in the order of the moves", function()
+    local moves = { { container = 1, item = "Wood", count = 40 }, { container = 2, item = "Fiber", count = 12 }, { container = 2, item = "wood", count = 30 } }
+    local cut = push.cap(moves, "Wood", 50)
+    t.eq(#cut, 3)
+    t.eq(cut[1].count, 40)
+    t.eq(cut[2].item, "Fiber", "another item is untouched")
+    t.eq(cut[3].count, 10, "the rest of the amount out of the second move")
+    t.eq(#push.cap(moves, "Wood", 0), 1, "zero: only the other item's move stays")
+    t.eq(#push.cap(moves, "Wood", nil), 3, "no amount: as planned")
+    t.eq(push.cap(moves, "Wood", 500)[3].count, 30, "more than there is: everything")
+    t.eq(moves[3].count, 30, "the plan itself is not changed")
+end)
+
 t.finish("quickstash")

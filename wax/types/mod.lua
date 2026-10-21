@@ -127,6 +127,16 @@ function ExecuteAsync(...) end
 ---@param ... any
 function ExecuteWithDelay(...) end
 
+---Blocked in Wax mods: it hands your code the game's own arrays, and a write into one of them crashes the game. Use hooks.listen(path, fn, { when = "post" }), which hands you parameters you can read and a return value you can set.
+---@deprecated
+---@param ... any
+function RegisterHook(...) end
+
+---Blocked in Wax mods: hooks.listen returns the function that takes the listener off, and a reload takes it off by itself.
+---@deprecated
+---@param ... any
+function UnregisterHook(...) end
+
 ---Blocked in Wax mods: it runs Lua on another thread, which corrupts the game's Lua state. Use ui.Hotkey.
 ---@deprecated
 ---@param ... any
