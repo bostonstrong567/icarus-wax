@@ -345,9 +345,10 @@ function Highlight:Look(options) end
 
 ---Settings every outline shares: Fill is how strongly a filled model is tinted (0 to 1), Width the line width (1 to 4),
 ---Range how far away an outlined thing can be and still show, in metres (1 to 5000; the game's own 14 until set, and false goes back to it).
----Tags made with a mark show exactly as far.
----@param options { Fill?: number, Width?: number, Range?: number|false }
----@return { Fill: number, Width: number, Range: number }
+---Tags made with a mark show exactly as far. ThroughWalls (true when never set) keeps a filled mark's tint as well as its
+---outline behind walls in every colour slot; false leaves the game's own setting, which drops the tint for one of the four.
+---@param options { Fill?: number, Width?: number, Range?: number|false, ThroughWalls?: boolean }
+---@return { Fill: number, Width: number, Range: number, ThroughWalls: boolean }
 function Highlight:Configure(options) end
 
 ---How far away an outlined thing can be and still show, in metres: what Configure set, else the game's own 14.

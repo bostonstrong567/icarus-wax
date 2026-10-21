@@ -278,6 +278,7 @@ function Window:SetMinimized(minimized)
     if self.resize_layer then self.resize_layer:SetVisibility(minimized and V.Collapsed or V.SelfHitTestInvisible) end
     self.glow_layer:SetVisibility(minimized and V.Collapsed or V.HitTestInvisible)
     if self.status_holder then self.status_holder:SetVisibility(hidden) end
+    if self.band then self.band:SetVisibility((minimized or self.status_holder) and V.Collapsed or V.HitTestInvisible) end
     self.minus_icon:SetVisibility(minimized and V.Hidden or V.HitTestInvisible)
     self.plus_icon:SetVisibility(minimized and V.HitTestInvisible or V.Hidden)
     if not minimized then self.body:SetVisibility(V.Visible) end
@@ -327,6 +328,7 @@ local function build_status(self, status, text)
     kit.slot(holder:AddChild(padded), { h = H.Fill })
     kit.slot(self.column:AddChild(holder), { h = H.Fill })
     if self.minimized then holder:SetVisibility(V.Collapsed) end
+    if self.band then self.band:SetVisibility(V.Collapsed) end
     self.status_holder = holder
 
     status.widget = holder
@@ -707,6 +709,12 @@ local function build(window, options)
     kit.slot(backdrop:SetContent(window.body), { h = H.Fill, v = VA.Fill, pad = style.margin(0) })
     window.backdrop = backdrop
     kit.slot(column:AddChild(backdrop), { h = H.Fill, v = VA.Fill, fill = 1 })
+    if window.resizable then
+        -- a band under the body as tall as the grip: the last control ends above the grip and the bottom handles. A status bar takes its place.
+        window.band = kit.sized(nil, nil, GRIP)
+        window.band:SetVisibility(V.HitTestInvisible)
+        kit.slot(column:AddChild(window.band), { h = H.Fill })
+    end
 
     local outline = kit.image(theme.outline, "frame12", 1, 1)
     outline:SetVisibility(V.HitTestInvisible)

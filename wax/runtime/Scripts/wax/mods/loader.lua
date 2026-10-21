@@ -168,6 +168,7 @@ local function make_env(mod)
     env.RegisterHook = blocked("RegisterHook", RAW_HOOKS)
     env.UnregisterHook = blocked("UnregisterHook", "hooks.listen returns the function that takes the listener off, and a reload takes it off by itself")
     env.hooks = hooks_for_mods()
+    env.memo = Wax.import("core.memo").api
     for name, value in pairs(extras) do env[name] = value end
 
     -- Settings that survive restarting the game: storage.Load("settings", defaults), then storage.Save("settings", t).

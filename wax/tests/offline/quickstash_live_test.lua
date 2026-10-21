@@ -133,6 +133,14 @@ local inventory_card_w, inventory_row, inventory_sort = inventory_card("UMG_Main
 local crafting_card_w, crafting_row, crafting_sort = inventory_card("UMG_Crafting")
 main.UMG_MainInventory = inventory_card_w
 main.UMG_Crafting = crafting_card_w
+-- the crafting card's recipe list with the game's own search box, the model the mod's list boxes copy
+local recipe_list = widget("UMG_Crafting.UMG_RecipeList", "UMG_RecipeList_C")
+local recipe_search = widget("UMG_Crafting.UMG_RecipeList.Search", "EditableTextBox")
+local recipe_root = widget("UMG_Crafting.UMG_RecipeList.root", "VerticalBox")
+add_child(recipe_root, recipe_search)
+recipe_list.WidgetTree = fake.new_object("UMG_Crafting.UMG_RecipeList.tree")
+recipe_list.WidgetTree.RootWidget = recipe_root
+crafting_card_w.UMG_RecipeList = recipe_list
 -- the main menu's tree holds its two cards' Sort controls, as the game's does
 local main_root = widget("main.root", "VerticalBox")
 add_child(main_root, inventory_sort)
@@ -168,10 +176,12 @@ local signal = function() return sched.Signal.new("test") end
 local notices = {}
 local Containers = { Changed = signal() }
 local animals = {}      -- cargo records a scenario lists; asking one whether it is owned touches its animal
+local extra_records = {}    -- structures a scenario lists beside the cupboard
 function Containers:Nearby(_, options)
     local out = { { Row = "Storage_Metal_Cupboard", Name = "Iron Cupboard", Kind = "storage", Distance = 5, Actor = { Raw = crate_actor },
         Inventories = { cupboard }, Fuel = {}, Inputs = nil, Accepts = function() return true end } }
     for _, animal in ipairs(animals) do out[#out + 1] = animal end
+    for _, record in ipairs(extra_records) do out[#out + 1] = record end
     if linked_actor then
         table.insert(out, 1, { Row = "Kit_Stone_Furnace", Name = "Stone Furnace", Kind = "station", Distance = 3, Actor = { Raw = linked_actor },
             Inventories = {}, Fuel = { fuel }, Inputs = inputs, Accepts = function(_, item) return item:lower() == "metal_ore" end })
@@ -183,7 +193,20 @@ function Containers:Nearby(_, options)
     end
     return out
 end
+function Containers:Around(_, range, options) return Containers:Nearby(range, options) end
+function Containers:Totals(inventory)
+    local totals = {}
+    local ok, stacks = pcall(function() return inventory:List() end)
+    -- a fake object answers every index with another object, so only a plain list of stacks is walked
+    if not ok or type(stacks) ~= "table" or rawget(stacks, "__name") ~= nil then return totals end
+    for _, stack in ipairs(stacks) do
+        local key = tostring(stack.Item):lower()
+        totals[key] = (totals[key] or 0) + (tonumber(stack.Count) or 0)
+    end
+    return totals
+end
 function Containers:Kinds() return {} end
+function Containers:Count() return 1 + #extra_records end
 function Containers:Accepted(row) return row == "Kit_Stone_Furnace" and { metal_ore = "Metal_Ore" } or nil end
 
 local game = {
@@ -317,6 +340,7 @@ end
 local function run_scenario(label, handles)
     fake.dead_touches, fake.dead_last, fake.dead_where = 0, nil, nil
     local env, owner = load_mod(handles)
+    env.quickstash.picker().prepare()
     frames(2)
     if os.getenv("QS_DEBUG") then
         for _, child in ipairs(rawget(inventory_row, "__children")) do print("row child", rawget(child, "__name")) end
@@ -505,6 +529,14 @@ t.test("the crafting checks are answered from the containers and a craft moves i
         shifted[#shifted + 1] = { from = from.__name, from_slot = from_slot, to = to.__name, to_slot = to_slot, amount = amount }
     end
     local backpack = inventory("backpack A", 602, player, "Backpack", { wood = 5 }, { { Item = "Wood", Count = 5, Slot = 1 } }, 4)
+    backpack.Raw = backpack
+    player.Backpack = backpack
+    crate_inventory.Raw = crate_inventory
+    -- what game.Containers answers around the furnace: the crate, and the furnace itself (its own input never counts)
+    extra_records[1] = { Row = "Storage_Crate", Name = "Crate", Kind = "storage", Distance = 5, Actor = { Raw = crate },
+        Inventories = { crate_inventory }, Fuel = {}, Inputs = nil, Accepts = function() return true end }
+    extra_records[2] = { Row = "Kit_Stone_Furnace", Name = "Furnace", Kind = "station", Distance = 0, Actor = { Raw = furnace },
+        Inventories = {}, Fuel = {}, Inputs = furnace_comp.Inventory, Accepts = function() return true end }
     local find_all = game.FindAll
     game.FindAll = function(_, class)
         if class == "ProcessingComponent" then return { furnace_comp } end
@@ -556,7 +588,7 @@ t.test("the crafting checks are answered from the containers and a craft moves i
     t.eq(answered(satisfy, ret(true), wood, 1, nil, 50), nil, "a yes is left alone")
     local most = "/Script/Icarus.ProcessingComponent:GetMaxCraftableStack"
     local recipe = { RowName = "Wood_Floor" }
-    t.eq(answered(most, ret(0), recipe, nil, player), 5, "the first ask reads the recipe at once: wood 5 + 100 over 20, fiber 0 + 30 over 3, five crafts")
+    t.eq(answered(most, ret(0), recipe, nil, player), 5, "the recipes were read in a task when the hooks went in: wood 5 + 100 over 20, fiber 0 + 30 over 3, five crafts")
     t.eq(answered(most, ret(7), recipe, nil, player), nil, "the game's larger answer stands")
     local queue = "/Script/Icarus.ProcessingComponent:CanQueueItem"
     local function order(crafts) return { CraftingPlayer = player, Recipe = recipe, CraftCount = crafts } end
@@ -565,16 +597,20 @@ t.test("the crafting checks are answered from the containers and a craft moves i
     t.eq(answered(queue, ret(true), order(1)), nil, "a yes is left alone")
     -- the craft: before the game queues it, the 15 wood and 3 fiber the backpack lacks come in with the game's own transfer
     before("/Script/Icarus.ProcessingComponent:OnServer_AddProcessingRecipe")(ctx, recipe, 1, nil, player)
-    t.eq(#shifted, 2, table.concat((function() local out = {} for _, m in ipairs(shifted) do out[#out + 1] = m.amount .. " " .. m.from .. ">" .. m.to end return out end)(), ", "))
-    t.eq(shifted[1].amount, 15, "wood: the 15 short")
-    t.eq(shifted[1].from_slot, 0, "slots are handed to the game from 0")
+    t.eq(#shifted, 3, table.concat((function() local out = {} for _, m in ipairs(shifted) do out[#out + 1] = m.amount .. " " .. m.from .. ">" .. m.to end return out end)(), ", "))
+    t.eq(shifted[1].amount, 10, "wood: the cupboard's 10 first (nearest storage, same distance, listed first)")
+    t.eq(shifted[1].from, "Storage_Metal_Cupboard")
+    t.eq(shifted[1].from_slot, 1, "the cupboard's wood is its second slot: slots are handed to the game from 0")
     t.eq(shifted[1].to_slot, 0, "into the backpack's own wood stack")
-    t.eq(shifted[2].amount, 3, "fiber: all three")
-    t.eq(shifted[2].to_slot, 1, "into the first empty slot")
+    t.eq(shifted[2].amount, 5, "wood: the last 5 of the 15 short out of the crate")
+    t.eq(shifted[2].from, "crate.inventory")
+    t.eq(shifted[3].amount, 3, "fiber: all three")
+    t.eq(shifted[3].to_slot, 1, "into the first empty slot")
     local stats = env.quickstash.craft_stats()
     t.eq(stats.moved, 18)
     t.eq(stats.answered, 3)
     t.eq(stats.failed, 0)
+    extra_records[1], extra_records[2] = nil, nil
     game.FindAll, game.Data = find_all, data_was
     for _, fn in ipairs(unloads) do fn("reload") end
     unloads = {}

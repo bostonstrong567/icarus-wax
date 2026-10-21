@@ -1,43 +1,40 @@
--- The station-centred list the crafting hooks feed the game: tools\lua\lua54\lua.exe wax\tests\offline\quickstash_nearby_test.lua
+-- The station-centred list the crafting hooks draw on: tools\lua\lua54\lua.exe wax\tests\offline\quickstash_nearby_test.lua
 local t = dofile("wax/tests/offline/harness.lua")
 local DIR = (arg and arg[1]) or "luamods/QuickStash/"
 local nearby = dofile(DIR .. "nearby.lua")
 
-local function at(x) return { X = x * 100, Y = 0, Z = 0 } end
-local ME, OTHER = 1001, 1002       -- two players' states
+local function actor(address) return { Raw = { GetAddress = function() return address end } } end
+local function inv(name, used) return { Name = name, Used = used } end
 local records = {
-    { addr = 1, owner_addr = 10, at = at(2), kind = "bench" },               -- the station itself, excluded
-    { addr = 2, owner_addr = 20, at = at(5), kind = "storage" },
-    { addr = 3, owner_addr = 30, at = at(3), kind = "bench" },
-    { addr = 4, owner_addr = 40, at = at(1), kind = "character" },           -- another player's backpack: never
-    { addr = 5, owner_addr = 50, at = at(4), kind = "cargo", owner_state = ME },
-    { addr = 6, owner_addr = 60, at = at(2), kind = "cargo", owner_state = OTHER },
-    { addr = 7, owner_addr = 70, at = at(40), kind = "storage" },            -- too far
-    { addr = 8, owner_addr = 80, at = at(9), kind = "storage" },
+    { Kind = "station", Distance = 0, Row = "Kit_Stone_Furnace", Actor = actor(10), Inventories = {}, Inputs = inv("own", 3) },
+    { Kind = "storage", Distance = 5, Row = "Storage_Crate", Actor = actor(20), Inventories = { inv("crate", 8) }, Inputs = nil },
+    { Kind = "station", Distance = 3, Row = "Crafting_Bench", Actor = actor(30), Inventories = {}, Inputs = inv("bench", 5) },
+    { Kind = "cargo", Distance = 4, Row = "cargo:Mount_Moa", Actor = actor(50), Inventories = { inv("moa", 3) }, Inputs = nil },
+    { Kind = "storage", Distance = 9, Row = "Storage_Cupboard", Actor = actor(80), Inventories = { inv("cupboard", 2), inv("empty", 0) }, Inputs = nil },
+    { Kind = "storage", Distance = 2, Row = "Storage_Box", Actor = actor(90), Inventories = { inv("box", 1) }, Inputs = nil },
 }
 
-t.test("around the station: storages first by distance, then benches, then the crafting player's own cargo", function()
-    local list = nearby.for_station(records, at(2), 10, ME, 30)
-    local order = {}
-    for _, record in ipairs(list) do order[#order + 1] = record.addr end
-    t.eq(table.concat(order, " "), "2 8 3 5")
-    t.ok(list[1].storage and not list[3].storage)
+local function names(list)
+    local out = {}
+    for _, entry in ipairs(list) do out[#out + 1] = entry.inventory.Name end
+    return table.concat(out, " ")
+end
+
+t.test("storages first by distance, then other stations' inputs; never the station's own, nor animals while they are off", function()
+    local list = nearby.from_records(records, 10, {}, 24, false)
+    t.eq(names(list), "box crate cupboard bench")
+    t.ok(list[1].storage and not list[4].storage)
+    t.eq(list[4].metres, 3)
 end)
 
-t.test("another player's animal and any character are never in it, nor the station's own inventory", function()
-    local list = nearby.for_station(records, at(2), 10, OTHER, 30)
-    local order = {}
-    for _, record in ipairs(list) do order[#order + 1] = record.addr end
-    t.eq(table.concat(order, " "), "2 8 3 6")
-    local none = nearby.for_station(records, at(2), 10, nil, 30)
-    order = {}
-    for _, record in ipairs(none) do order[#order + 1] = record.addr end
-    t.eq(table.concat(order, " "), "2 8 3", "no player state: no animals at all")
+t.test("an unticked kind is left out, an empty inventory too, and animals count when they are on", function()
+    t.eq(names(nearby.from_records(records, 10, { storage_crate = true }, 24, false)), "box cupboard bench")
+    t.eq(names(nearby.from_records(records, 10, {}, 24, true)), "box moa crate cupboard bench")
 end)
 
-t.test("the list is cut to the most the game's checks take", function()
-    t.eq(#nearby.for_station(records, at(2), 10, ME, 30, 2), 2)
-    t.eq(#nearby.for_station(records, nil, 10, ME, 30), 0, "no place to measure from")
+t.test("the list is cut to the most the checks take", function()
+    t.eq(#nearby.from_records(records, 10, {}, 2, false), 2)
+    t.eq(#nearby.from_records(nil, 10, {}, 2, false), 0)
 end)
 
 t.finish("quickstash-nearby")

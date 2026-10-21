@@ -228,6 +228,7 @@ else {
         'quickstash-live' = @('wax\tests\offline\quickstash_live_test.lua')
         'quickstash-nearby' = @('wax\tests\offline\quickstash_nearby_test.lua')
         'quickstash-craft' = @('wax\tests\offline\quickstash_craft_test.lua')
+        'memo' = @('wax\tests\offline\memo_test.lua')
         'share' = @('wax\tests\offline\share_test.lua')
         'containers' = @('wax\tests\offline\containers_test.lua')
         'gamebutton' = @('wax\tests\offline\gamebutton_test.lua')

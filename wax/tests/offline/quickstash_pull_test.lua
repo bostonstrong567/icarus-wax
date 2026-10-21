@@ -90,7 +90,8 @@ t.test("an amount caps a pull: less than available, more, zero, empty, and half"
     t.eq(x, 0, "a button near the left edge: the panel starts at the edge")
     t.eq(y, 20 + 50 * 0.425 / 2)
     t.eq(picker.place({}, 1920, 1080, 520, 300, unit), nil, "no point known: no place")
-    t.eq(picker.height_for(10), 6 * 2 + 32 + 6 + 10 * 26)
+    t.eq(picker.height_for(10), 8 * 2 + 50 + 6 + 10 * 50, "in the game's units: padding, the Search line, the gap, ten rows")
+    t.eq(picker.height_for(30), picker.height_for(10), "never more than ten rows high")
 end)
 
 t.test("one station gets whole stacks up to its room", function()

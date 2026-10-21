@@ -892,9 +892,10 @@ return {
             { class = "/Script/Icarus.IcarusItem", properties = { "ItemData" } },
             { class = "/Script/Icarus.InventoryComponent", properties = { "Inventories" } },
             { class = "/Script/Icarus.ProcessingComponent", properties = { "Inventory" } },
-            { class = "/Script/Icarus.Inventory", functions = { "IsClientSideOnlyInventory", "IsRemoveOnly" } },
+            { class = "/Script/Icarus.Inventory", functions = { "IsClientSideOnlyInventory", "IsRemoveOnly", "GetItemCount" } },
             { class = "/Script/Engine.Actor", functions = { "GetComponentByClass" } },
             { class = "/Script/Icarus.IcarusPlayerController", functions = { "GetIcarusPlayerCharacter" } },
+            { class = "/Script/Icarus.IcarusMountCharacter", functions = { "IsMountOwner" } },
         },
         structs = {
             { struct = "/Script/Icarus.ItemData", fields = { "ItemStaticData" } },

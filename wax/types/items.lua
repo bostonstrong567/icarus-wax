@@ -104,6 +104,31 @@ local Containers = {}
 ---@return WaxNearbyContainer[]
 function Containers:Nearby(range, options) end
 
+---The same list measured from a place in the game's own units (a station, a build site, a spot on a server that has
+---no player to measure from), nearest first.
+---@param place { X: number, Y: number, Z: number }
+---@param range? number Metres. 30 when omitted.
+---@param options? WaxNearbyOptions
+---@return WaxContainer[]
+function Containers:Around(place, range, options) end
+
+---What an inventory holds, by item row in lower case: `{ wood = 140, fiber = 12 }`. One pass over its stacks, kept
+---until the inventory's slots used or items held change, so asking every frame costs two cheap reads at most.
+---@param inventory WaxInventory|any A Wax inventory or the engine's own object.
+---@param options? { stale?: boolean } `stale = true` answers the last pass with no read at all once one exists, for a path that runs many times a frame while something else keeps it fresh.
+---@return table<string, integer>
+function Containers:Totals(inventory, options) end
+
+---How many of an item the structures within range hold, storage, inputs and fuel together.
+---@param item string|WaxItemStack The item row, such as "Wood".
+---@param range? number Metres. 30 when omitted.
+---@param options? WaxHeldOptions
+---@return integer
+function Containers:Held(item, range, options) end
+
+---@class WaxHeldOptions: WaxNearbyOptions
+---@field around? { X: number, Y: number, Z: number } Measure from this place instead of the player.
+
 ---The kinds of structure in range and how many of each, by name.
 ---@param range? number
 ---@param options? WaxNearbyOptions

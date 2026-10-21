@@ -156,6 +156,56 @@ t.test("an animal's owner is asked safely: a live PlayerState only, once per ani
     t.eq(asked, 2)
 end)
 
+t.test("around a place, not the player: the same list measured from there", function()
+    local found = Containers:Around({ X = 5000, Y = 0, Z = 0 }, 30)
+    t.eq(#found, 1, "only the far furnace is within 30 m of that place")
+    t.eq(found[1].Distance, 0)
+    t.eq(#Containers:Around({ X = 0, Y = 0, Z = 0 }, 30), 2, "from the origin the list is the player's")
+    t.ok(not pcall(function() return Containers:Around("here", 30) end), "a place is a table")
+end)
+
+t.test("an inventory's totals come from one pass, kept until its stamp changes", function()
+    local passes, items = 0, 7
+    local stacks = { { Item = "Wood", Count = 5 }, { Item = "wood", Count = 2 }, { Item = "Fiber", Count = 12 } }
+    local inv = object({ Kind = "Storage", Used = 2, Size = 10 })
+    inv.Raw = { GetAddress = function() return 777 end, GetItemCount = function() return items end }
+    function inv:List() passes = passes + 1 return stacks end
+    local totals = Containers:Totals(inv)
+    t.eq(totals.wood, 7, "the two wood stacks added up, by folded name")
+    t.eq(totals.fiber, 12)
+    modules["core.sched"].clock = function() return 1 end
+    t.eq(Containers:Totals(inv).wood, 7)
+    t.eq(passes, 1, "the stamp did not change: no second pass")
+    stacks[1].Count, items = 50, 52
+    modules["core.sched"].clock = function() return 2 end
+    t.eq(Containers:Totals(inv).wood, 52, "a changed stamp: read again")
+    t.eq(passes, 2)
+    modules["core.sched"].clock = function() return 9 end
+    stacks[1].Count, items = 70, 72
+    t.eq(Containers:Totals(inv, { stale = true }).wood, 52, "stale: the last pass, no read")
+    t.eq(passes, 2)
+    t.eq(Containers:Totals(inv).wood, 72, "fresh: read again")
+    modules["core.sched"].clock = function() return 0 end
+    t.eq(next(Containers:Totals({ Raw = {} })), nil, "no address: nothing")
+end)
+
+t.test("how many of an item the structures around hold, storage, inputs and fuel together", function()
+    local crate = inventory("Storage_Metal_Cupboard", 1)
+    crate.Raw.GetAddress = function() return 801 end
+    crate.Raw.GetItemCount = function() return 40 end
+    function crate:List() return { { Item = "Metal_Ore", Count = 40 } } end
+    local inputs = inventory("Processor_T3", 1)
+    inputs.Raw.GetAddress = function() return 802 end
+    inputs.Raw.GetItemCount = function() return 10 end
+    function inputs:List() return { { Item = "metal_ore", Count = 10 } } end
+    listed(actor("Storage_Metal_Cupboard", { X = 200, Y = 0, Z = 0 }, { crate }), "Storage_Metal_Cupboard")
+    listed(actor("Kit_Stone_Furnace", { X = 400, Y = 0, Z = 0 }, { inputs }, inputs), "Kit_Stone_Furnace")
+    t.eq(Containers:Held("Metal_Ore", 10), 50, "the crate's 40 and the furnace's 10")
+    t.eq(Containers:Held("Metal_Ore", 10, { around = { X = 400, Y = 0, Z = 0 } }), 50)
+    t.eq(Containers:Held("Metal_Ore", 10, { around = { X = 9000, Y = 0, Z = 0 } }), 0, "nothing within 10 m of there")
+    t.eq(Containers:Held("Gold", 10), 0)
+end)
+
 t.test("inputs_of is pure", function()
     local rows = { a = { RecipeSets = { { RowName = "X" } }, Inputs = { { Element = { RowName = "Wood" } }, { Element = { RowName = "None" } } } } }
     local out = M.inputs_of("x", rows)

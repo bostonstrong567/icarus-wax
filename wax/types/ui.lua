@@ -603,6 +603,7 @@ function ui.GameScreen() end
 ---@field within? number Metres. Farther away than this the tag is not shown. Default 100.
 ---@field outline? boolean True shows the tag exactly as far as game.Highlight draws outlines (game.Highlight:GetRange()), in place of `within`.
 ---@field fade? boolean The tag gets smaller with distance and fades out over the last fifth of its range. True when omitted.
+---@field over_menus? boolean True keeps the tag showing while one of the game's screens or the Wax menu is open. Otherwise it is hidden then and comes back after.
 ---@field lift? number How far above the thing's middle the tag sits, in centimetres. Worked out from the thing when omitted.
 
 ---A line of text that stays over something in the world.

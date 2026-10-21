@@ -4135,6 +4135,23 @@ t.test("a tag shrinks and fades with distance, hides past its range, and can fol
     t.eq(outlined.shown, false)
     t.raises(function() outlined:SetRange("far") end, "number of metres")
     t.raises(function() ui.Tag({ X = 0, Y = 0, Z = 0 }, { within = "far" }) end, "within is a number")
+    -- a game screen hides every tag but one that asked to stay, and they come back when it closes
+    local over
+    scope.run(host, function() over = ui.Tag({ X = 500, Y = 0, Z = 0 }, { text = "Over", over_menus = true }) end)
+    frames(2)
+    t.eq(near.shown, true)
+    t.eq(over.shown, true)
+    local real_screen = ui.GameScreen
+    ui.GameScreen = function() return "UMG_MainMenu", 1 end
+    frames(2)
+    t.eq(tags.menus_open(), true)
+    t.eq(near.shown, false, "hidden under the game's screen")
+    t.eq(far.shown, false)
+    t.eq(over.shown, true, "over_menus keeps showing")
+    t.eq(tags.count(), 6, "hidden, not removed")
+    ui.GameScreen = real_screen
+    frames(2)
+    t.eq(near.shown, true, "back when the screen closes")
     Wax.modules["world.highlight"] = nil
     host:destroy()
     t.eq(tags.count(), 0)

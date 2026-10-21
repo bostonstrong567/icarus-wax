@@ -132,11 +132,25 @@ end
 
 local function nearer(a, b) return a.away < b.away end
 
+-- True while one of the game's own screens or the Wax menu is open: tags stay off them.
+function M.menus_open()
+    local ui = Wax.ui
+    if not ui then return false end
+    local ok, screen = pcall(ui.GameScreen)
+    if ok and screen then return true end
+    local open, is_open = pcall(ui.IsOpen)
+    return open and is_open == true
+end
+
 -- Tags that would cover each other are piled up, the nearest thing's tag lowest. One with no room left is not shown.
-local function arrange()
+local function arrange(covered)
     local seen = {}
     for _, tag in ipairs(tags) do
-        if tag.near and tag.x then seen[#seen + 1] = tag end
+        if covered and not tag.over_menus then
+            hide(tag)
+        elseif tag.near and tag.x then
+            seen[#seen + 1] = tag
+        end
     end
     table.sort(seen, nearer)
     local scale = style.scale
@@ -186,7 +200,8 @@ local function build(tag, options)
 end
 
 -- options: text, color, size, within (metres, default 100), outline (show as far as outlines do, in place of within),
--- fade (smaller and fainter with distance, default true), lift (how far above the thing's middle, in centimetres)
+-- fade (smaller and fainter with distance, default true), over_menus (keep showing while a game screen or the Wax menu
+-- is open, default false), lift (how far above the thing's middle, in centimetres)
 function M.create(target, options)
     options = options or {}
     if type(options) ~= "table" then error("the tag options are a table such as { text = \"Wolf\" }", 2) end
@@ -219,6 +234,7 @@ function M.create(target, options)
         Instance = not spot and target or nil, actor = actor, spot = spot, aside = aside, address = address,
         text = tostring(options.text or ""), within = options.within or 100, lift = lift or 20,
         outline = options.outline == true and options.within == nil, fade = options.fade ~= false, factor = 1, alpha = 1,
+        over_menus = options.over_menus == true,
         shown = false, near = true, destroyed = false,
     }, Tag)
     if options.within ~= nil and type(options.within) ~= "number" then error("within is a number of metres", 2) end
@@ -261,7 +277,7 @@ function M.step()
             end
         end
     end
-    arrange()
+    arrange(M.menus_open())
 end
 
 function M.rescale()

@@ -32,6 +32,9 @@ local BRIGHTNESS = 1.5      -- above 1 the outline glows, but much higher and ev
 local CHECKED_PER_FRAME, PASS_EVERY = 2, 30
 -- The material stops drawing past its "Distance" parameter (1400 units, 14 metres, in the game's own copy).
 local DISTANCE, METRE, GAME_RANGE, RANGE_LIMITS = "Distance", 100, 14, { 1, 5000 }
+-- A hidden pixel whose stencil is under the threshold is drawn tinted and outlined, at or over it outlined only. The
+-- game's value is 251, which leaves the fourth fill slot without its tint behind walls.
+local THRESHOLD = "Occulsion Threshold"
 local NAMES = { "Add", "Remove", "Clear", "GetAll", "Configure", "GetRange", "Look", "Colors" }
 
 local marks = {}            -- actor address -> mark
@@ -41,8 +44,9 @@ local mesh_class, part_class, library = nil, nil, nil
 local by_actor = {}         -- actor address -> { [mark] = true }, for when the actor ends play
 local custom = false        -- true while Wax's copy of the outline material is in place
 local painted = {}          -- what was last written to the copy
-local settings = { fill = 0.25, width = 1, range = nil }
+local settings = { fill = 0.25, width = 1, range = nil, through = true }
 local game_range = nil      -- metres, read from the game's own material; GAME_RANGE until then
+local game_values = { [THRESHOLD] = 251 }     -- the game's own, read from its material when seen
 local warned_full, warned_tags = false, false
 local stale = false         -- set when a mark went away, so the colours are worked out again on the next frame
 
@@ -122,11 +126,13 @@ local function is_copy(material)
     return parent:IsValid() and parent:GetFName():ToString() == MATERIAL
 end
 
--- How far the game's own outline reaches, read once from its material.
+-- The game's own reach and threshold, read once from its material.
 local function learn_range(original)
     if game_range then return end
     local ok, units = pcall(function() return original:K2_GetScalarParameterValue(FName(DISTANCE)) end)
     if ok and type(units) == "number" and units > 0 then game_range = units / METRE end
+    local read, value = pcall(function() return original:K2_GetScalarParameterValue(FName(THRESHOLD)) end)
+    if read and type(value) == "number" and value > 0 then game_values[THRESHOLD] = value end
 end
 
 -- Metres an outline can be seen from: what Configure set, else the game's own.
@@ -226,10 +232,14 @@ local function paint(copy, second, taken)
     write(copy, "a.fill", "number", "FillAlpha", second and 0 or settings.fill)
     write(copy, "a.width", "number", "OutlineThickness", settings.width)
     write(copy, "a.range", "number", DISTANCE, M.range() * METRE)
+    -- through walls: every fill slot keeps its tint and its line when hidden, every line slot its line
+    local threshold = settings.through and LINE_SLOTS[#LINE_SLOTS] or game_values[THRESHOLD]
+    write(copy, "a.threshold", "number", THRESHOLD, threshold)
     if second then
         write(second, "b.fill", "number", "FillAlpha", settings.fill)
         write(second, "b.width", "number", "OutlineThickness", 0)
         write(second, "b.range", "number", DISTANCE, M.range() * METRE)
+        write(second, "b.threshold", "number", THRESHOLD, threshold)
     end
 end
 
@@ -534,8 +544,9 @@ function Highlight:GetAll()
     return out
 end
 
--- Settings shared by every outline: Fill (how strongly a filled model is tinted, 0 to 1), Width (line width, 1 to 4)
--- and Range (metres an outline is seen from; false goes back to the game's own, 14).
+-- Settings shared by every outline: Fill (how strongly a filled model is tinted, 0 to 1), Width (line width, 1 to 4),
+-- Range (metres an outline is seen from; false goes back to the game's own, 14) and ThroughWalls (true, the default,
+-- keeps a filled mark's tint behind walls in every slot; false leaves the game's own threshold).
 function Highlight:Configure(options)
     if type(options) ~= "table" then error("Configure expects a table such as { Fill = 0.3, Width = 2, Range = 120 }", 2) end
     for key, limits in pairs({ Fill = { "fill", 0, 1 }, Width = { "width", 1, 4 }, Range = { "range", RANGE_LIMITS[1], RANGE_LIMITS[2] } }) do
@@ -547,8 +558,12 @@ function Highlight:Configure(options)
             settings[limits[1]] = math.max(limits[2], math.min(limits[3], value))
         end
     end
+    if options.ThroughWalls ~= nil then
+        if type(options.ThroughWalls) ~= "boolean" then error("ThroughWalls is true or false", 2) end
+        settings.through = options.ThroughWalls
+    end
     sync()
-    return { Fill = settings.fill, Width = settings.width, Range = M.range() }
+    return { Fill = settings.fill, Width = settings.width, Range = M.range(), ThroughWalls = settings.through }
 end
 
 -- How far an outline can be seen from, in metres.

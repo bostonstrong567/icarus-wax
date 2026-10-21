@@ -31,7 +31,7 @@ local player_class = world.class("/Game/BP/BP_IcarusPlayerCharacterSurvival.BP_I
     { HighlightablePostProcess = "ObjectProperty" })
 local pass_class = world.class("/Script/Engine.PostProcessComponent", scene_class)
 world.static["/Script/Engine.Default__KismetMaterialLibrary"] = world.object("Default__KismetMaterialLibrary", {})
-local outline_material = world.object("PPI_OutlineColored", { Distance = 1400 })
+local outline_material = world.object("PPI_OutlineColored", { Distance = 1400, ["Occulsion Threshold"] = 251 })
 
 -- A stand-in for the tag library: what game.Highlight asks of it, and nothing drawn.
 local made_tags = {}
@@ -458,6 +458,12 @@ t.test("outlines reach as far as the game's material says until Range is set, an
     local copy = slot.Object
     t.ok(copy ~= outline_material)
     t.eq(copy.Distance, 1400, "the copy keeps the game's reach until asked otherwise")
+    t.eq(copy["Occulsion Threshold"], 252, "through walls: fill slots tinted and lined when hidden, line slots lined")
+    t.eq(Highlight:Configure({ ThroughWalls = false }).ThroughWalls, false)
+    t.eq(copy["Occulsion Threshold"], 251, "the game's own")
+    t.raises(function() Highlight:Configure({ ThroughWalls = "yes" }) end, "ThroughWalls is true or false")
+    t.eq(Highlight:Configure({ ThroughWalls = true }).ThroughWalls, true)
+    t.eq(copy["Occulsion Threshold"], 252)
     t.eq(#made_tags, 1)
     t.eq(mark.Tag, made_tags[1])
     t.eq(mark.Tag.options.outline, true, "a tag with no within of its own shows as far as the outline")

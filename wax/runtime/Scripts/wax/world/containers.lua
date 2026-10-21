@@ -358,13 +358,11 @@ end
 
 -- The structures within `range` metres that can hold items, nearest first. options: kind = "storage" | "station",
 -- holding = true for only those with something in them.
-function Containers:Nearby(range, options)
-    if self ~= Containers then error("write game.Containers:Nearby(range) with a colon", 2) end
+-- The records within range of a place, nearest first. Nearby asks from the player, Around from any place.
+local function around(at, range, options)
     range = tonumber(range) or M.RANGE
     local kind = wanted_kind(options)
     local set = use()
-    local at = here()
-    if not at then return {} end
     local out = {}
     for _, entry in pairs(set.entries) do
         if entry.ready and not entry.destroyed then
@@ -386,6 +384,83 @@ function Containers:Nearby(range, options)
     end
     table.sort(out, function(a, b) return a.Distance < b.Distance end)
     return out
+end
+
+function Containers:Nearby(range, options)
+    if self ~= Containers then error("write game.Containers:Nearby(range) with a colon", 2) end
+    local at = here()
+    if not at then return {} end
+    return around(at, range, options)
+end
+
+-- The same list measured from a place { X, Y, Z } in the game's own units: a station, a build site, a spot on a
+-- server that has no player of its own to measure from.
+function Containers:Around(place, range, options)
+    if self ~= Containers then error("write game.Containers:Around(place, range) with a colon", 2) end
+    if type(place) ~= "table" or type(place.X) ~= "number" or type(place.Y) ~= "number" or type(place.Z) ~= "number" then
+        error("Around expects a place { X = , Y = , Z = } in the game's units", 2)
+    end
+    return around(place, range, options)
+end
+
+M.STAMP_KEPT = 0.25         -- seconds an inventory's stamp (slots used, items held) is trusted before it is read again
+local totals_known = {}     -- inventory address -> { stamp, at, totals }
+
+-- What an inventory holds, by folded item name: { wood = 140, ... }. One pass over its stacks, kept until its stamp
+-- (slots used and items held, two cheap reads) changes, so a check that asks every frame costs two reads at most.
+function Containers:Totals(inventory, options)
+    if self ~= Containers then error("write game.Containers:Totals(inventory) with a colon", 2) end
+    local raw = inventory
+    if type(inventory) == "table" then raw = inventory.Raw end
+    local addr = address(raw)
+    if not addr then return {} end
+    local known = totals_known[addr]
+    local now = sched.clock()
+    if known and now - known.at < M.STAMP_KEPT then return known.totals end
+    -- stale = true: the last pass as it is, with no read at all, for a path that runs many times a frame; something
+    -- else keeps it fresh
+    if known and options and options.stale then return known.totals end
+    local is_instance = type(instance.is_instance) == "function" and instance.is_instance(inventory) or (type(inventory) == "table" and inventory.Raw ~= nil)
+    local wrapped = is_instance and inventory or instance.wrap(raw)
+    local stamp = nil
+    pcall(function() stamp = tostring(wrapped.Used) .. ":" .. tostring(raw:GetItemCount()) end)
+    if known and stamp and known.stamp == stamp then
+        known.at = now
+        return known.totals
+    end
+    local totals = {}
+    local ok, stacks = pcall(function() return wrapped:List() end)
+    if ok and type(stacks) == "table" then
+        for _, stack in ipairs(stacks) do
+            local key = fold(stack.Item)
+            totals[key] = (totals[key] or 0) + (tonumber(stack.Count) or 0)
+        end
+    end
+    totals_known[addr] = { stamp = stamp, at = now, totals = totals }
+    return totals
+end
+
+-- How many of an item the structures within range hold, in their storage, inputs and fuel together; from the player,
+-- or from a place given as options.around.
+function Containers:Held(item, range, options)
+    if self ~= Containers then error("write game.Containers:Held(item, range) with a colon", 2) end
+    local key = fold(type(item) == "table" and item.Item or item)
+    if key == "" then error("Held expects an item row, such as \"Wood\"", 2) end
+    local records = options and options.around and self:Around(options.around, range, options) or self:Nearby(range, options)
+    -- a station's input inventory is among its takes as well: each inventory once, by address
+    local seen, total = {}, 0
+    local function add(inventory)
+        local addr = inventory and address(inventory.Raw)
+        if not addr or seen[addr] then return end
+        seen[addr] = true
+        total = total + (self:Totals(inventory)[key] or 0)
+    end
+    for _, record in ipairs(records) do
+        for _, inventory in ipairs(record.Inventories) do add(inventory) end
+        for _, inventory in ipairs(record.Fuel) do add(inventory) end
+        if record.Inputs then add(record.Inputs) end
+    end
+    return total
 end
 
 -- The kinds of structure within range and how many of each: { Row, Name, Kind, Count }, by name.
