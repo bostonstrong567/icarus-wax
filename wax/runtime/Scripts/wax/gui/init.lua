@@ -500,8 +500,25 @@ end
 
 -- ui.Settings({ title = , fields = { ... }, presets = { ... } }): a settings window whose values are kept on disk
 function ui.Settings(spec) return settings_module.create(spec, caller(), ui.Window) end
+
+-- Greys a control that cannot work on this game and says why while the mouse rests on it. The control still takes clicks: nothing
+-- is refused, the game answers. text: what the tip says, by default that the host or the server has to run it.
+function ui.NeedsHost(control, text)
+    if type(control) ~= "table" or not control.widget then error("ui.NeedsHost expects a control, got " .. type(control), 2) end
+    if text ~= nil and type(text) ~= "string" then error("ui.NeedsHost expects the tip as a string, got " .. type(text), 2) end
+    local sides = Wax.import("mods.sides")
+    control.needs_host = true
+    if control.destroyed then return control end
+    control.widget:SetRenderOpacity(0.5)
+    if control.source and control.pointer ~= false then control.source:SetCursor(style.Cursor.Default) end
+    control:SetTip(text or sides.NEEDS_HOST)
+    return control
+end
 ui.Overlay = overlay_module.create
 ui.Panel = overlay_module.panel
+local gamebutton = Wax.import("gui.gamebutton")
+gamebutton.wired = true
+ui.GameButton = gamebutton.create
 -- The value of the slot under the mouse, then its look and its control.
 ui.Hovered = slots.hovered
 ui.IsTyping = controls.typing
@@ -820,11 +837,52 @@ local function engine_keys_step()
     end
 end
 
+-- The game's own default bindings, from data/gamekeys.lua: key name -> what the game does with it. A mod's key on one of them
+-- is a clash like any other, since the game acts on the key as well.
+local game_keys = nil
+local function game_key_list()
+    if game_keys then return game_keys end
+    game_keys = {}
+    local chunk = loadfile(Wax.root .. "/data/gamekeys.lua")
+    local ok, list = pcall(function() return chunk and chunk() end)
+    if ok and type(list) == "table" then
+        for name, action in pairs(list) do
+            if type(name) == "string" and type(action) == "string" then game_keys[name:lower()] = action end
+        end
+    end
+    return game_keys
+end
+
+-- What the game does with a plain key ("Tech tree" for P), or nil for a key the game leaves alone or one held with Ctrl, Shift or Alt.
+function ui.Keys.GameKey(key)
+    if key == ui.Keys then error("write ui.Keys.GameKey(...) with a dot, not a colon", 2) end
+    if type(key) ~= "string" or key == "" then return nil end
+    local ok, want = pcall(input.parse, key)
+    if not ok or want.key == "" or want.ctrl or want.shift or want.alt then return nil end
+    return game_key_list()[want.key:lower()]
+end
+
 -- The keys more than one owner acts on, as lines of text. With an id, only that owner's, said from its side.
 function ui.Keys.Clashes(id)
     if id == ui.Keys then error("write ui.Keys.Clashes(...) with a dot, not a colon", 2) end
     local out = {}
     for _, group in pairs(key_users()) do
+        local action = ui.Keys.GameKey(group.key)
+        if action and (id == nil or group.owners[id]) then
+            if id then
+                out[#out + 1] = ("%s is the game's %s key."):format(group.key, action)
+            else
+                local who, seen = {}, {}
+                for _, user in ipairs(group.users) do
+                    if not seen[user.owner] then
+                        seen[user.owner] = true
+                        who[#who + 1] = user.owner == WAX and "the Wax menu" or name_of(user.owner)
+                    end
+                end
+                table.sort(who)
+                out[#out + 1] = ("%s is the game's %s key, and %s uses it."):format(group.key, action, table.concat(who, ", "))
+            end
+        end
         if group.count > 1 and (id == nil or group.owners[id]) then
             local names = {}
             for _, user in ipairs(group.users) do
@@ -859,6 +917,7 @@ function ui.Keys.Clashing()
     return function(id, key)
         local wanted = key_id(key)
         local group = wanted and groups[wanted]
+        if ui.Keys.GameKey(key) then return true end
         return group ~= nil and group ~= false and group.count > 1 and group.owners[id] == true
     end
 end
@@ -1301,6 +1360,7 @@ local function step()
     model.step()
     tip.step()
     fit.step()
+    gamebutton.step()
     if menu_open or preview then controls.step() end
     notify.step()
     tags.step()

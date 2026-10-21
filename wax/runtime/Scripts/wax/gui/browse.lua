@@ -5,12 +5,15 @@ local scope = Wax.import("core.scope")
 local style = Wax.import("gui.style")
 local browse = Wax.import("mods.browse")
 local tween = Wax.import("gui.tween")
+local sides = Wax.import("mods.sides")
 
 local M = {}
 
 local SORTS = { { "updated", "Recently updated" }, { "new", "Newest" }, { "downloads", "Most downloads" },
     { "votes", "Most liked" }, { "name", "Name" } }
 local HAVE = { { "all", "All mods" }, { "new", "Not in my mods" }, { "here", "In my mods" } }
+local SIDES = { { "any", "Runs anywhere" }, { "host", "Runs on the host" }, { "client", "Runs on each player" }, { "both", "Host and client" } }
+local SIDE_ICONS = { host = "server", client = "monitor", both = "users" }
 local ANY_CATEGORY, ANY_TAG = "All categories", "Any tag"
 local PAGE_SIZE = 30
 local TYPING_SECONDS = 0.3
@@ -159,10 +162,12 @@ local function card(entry)
     local mine = browse.my_vote(entry.id)
     local word, tone = standing_word(standing)
     local note = entry.version .. (entry.author ~= "" and ("  by " .. entry.author) or "")
-    local tile = v.page:Tile({ title = entry.name, note = note, text = entry.summary, badge = word, badge_color = tone,
-        marks = { { icon = "download", text = entry.downloads },
-            { icon = "thumbs-up", text = entry.up, active = mine == 1, color = style.theme.good, on_click = function() cast(entry, 1) end },
-            { icon = "thumbs-down", text = entry.down, active = mine == -1, color = style.theme.bad, on_click = function() cast(entry, -1) end } },
+    local marks = { { icon = "download", text = entry.downloads },
+        { icon = "thumbs-up", text = entry.up, active = mine == 1, color = style.theme.good, on_click = function() cast(entry, 1) end },
+        { icon = "thumbs-down", text = entry.down, active = mine == -1, color = style.theme.bad, on_click = function() cast(entry, -1) end } }
+    -- where it runs, only when the catalogue said. It goes last: sync_counts writes the first three marks by their place
+    if sides.WORDS[entry.side] then marks[#marks + 1] = { icon = SIDE_ICONS[entry.side], text = sides.WORDS[entry.side] } end
+    local tile = v.page:Tile({ title = entry.name, note = note, text = entry.summary, badge = word, badge_color = tone, marks = marks,
         on_click = function() v.detail, v.picture, v.dirty = entry.id, 1, true end })
     if entry.pictures > 0 then v.tiles[#v.tiles + 1] = { id = entry.id, tile = tile } end
     return { control = tile, id = entry.id, tile = tile, downloads = entry.downloads, up = entry.up, down = entry.down, mine = mine }
@@ -295,7 +300,20 @@ local function detail_view(entry)
     end
     local word, tone = standing_word(standing)
     if word then head:Badge(word, { color = tone }) end
+    local needs_host = entry.side == "host" and not sides.authority()
+    if sides.WORDS[entry.side] then head:Badge(sides.WORDS[entry.side], { color = needs_host and style.theme.warn or style.theme.dim }) end
     keep(head)
+    if needs_host then keep(page:Label(sides.NEEDS_HOST, { color = style.theme.warn, size = style.theme.small_size })) end
+    if #entry.features > 0 then
+        local list = page:Section("Features", { collapsible = false })
+        for _, feature in ipairs(entry.features) do
+            local row = list:Row()
+            row:Label(feature.name)
+            row:Badge(sides.WORDS[feature.side], { color = sides.can_run(feature.side) and style.theme.dim or style.theme.warn })
+            if not sides.can_run(feature.side) then row.control:SetEnabled(false) end
+        end
+        keep(list)
+    end
 
     local line = page:Flow()
     if entry.author ~= "" then line:Stat("Author", entry.author) end
@@ -391,6 +409,10 @@ local function list_view(list, categories, tags)
         v.query.have = key_of(HAVE, choice)
         v.shown, v.dirty = PAGE_SIZE, true
     end)
+    second:Dropdown(nil, labels(SIDES), label_of(SIDES, v.query.side), function(choice)
+        v.query.side = key_of(SIDES, choice)
+        v.shown, v.dirty = PAGE_SIZE, true
+    end)
     keep(second)
     for index, entry in ipairs(list) do
         if index > v.shown then break end
@@ -440,7 +462,7 @@ local function signature(list, categories, tags)
         local standing, detail = browse.standing(entry.id)
         return table.concat({ "mod", entry.id, entry.version, standing, tostring(detail), entry.pictures }, "|")
     end
-    local parts = { table.concat(categories, ","), table.concat(tags, ","), v.query.sort, v.query.have, tostring(v.query.category),
+    local parts = { table.concat(categories, ","), table.concat(tags, ","), v.query.sort, v.query.have, v.query.side, tostring(v.query.category),
         tostring(v.query.tag), tostring(v.shown) }
     for index, mod in ipairs(list) do
         if index > v.shown + 1 then break end
@@ -481,7 +503,7 @@ end
 
 function M.build(page, window)
     v = { page = page, window = window, rows = {}, tiles = {}, open = {}, shown = PAGE_SIZE, dirty = true, typed_at = nil, looked_at = -LOOK_SECONDS,
-        query = { text = "", category = nil, tag = nil, sort = "updated", have = "all" } }
+        query = { text = "", category = nil, tag = nil, sort = "updated", have = "all", side = "any" } }
     local title = page:Title("Browse", "Mods from the Wax catalogue. The catalogue is asked when you open this page. A mod you add stays switched off until you switch it on.")
     local tools = page:Row()
     tools:Input(nil, { hint = "Search: a name, an author, a tag ...", clear = true }).Typed:Connect(function(text)

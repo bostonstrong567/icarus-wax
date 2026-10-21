@@ -24,6 +24,7 @@ local modules = {
 local Wax = { import = function(name) return modules[name] end, mods = { get = function(id) return installed[id] and {} or nil end },
     update = { shared = shared, state = function() return { available = { Here = "2.0.0" } } end,
         newer = function(a, b) return a > b end } }
+modules["mods.sides"] = assert(loadfile("wax/runtime/Scripts/wax/mods/sides.lua"))(Wax)
 local browse = assert(loadfile("wax/runtime/Scripts/wax/mods/browse.lua"))(Wax)
 
 local function mod(id, fields)
@@ -103,6 +104,34 @@ t.test("a mod that is here, or not listed, is not added", function()
     ok, why = browse.add("NoSuchMod")
     t.eq(ok, false)
     t.ok(why:find("does not list", 1, true), why)
+end)
+
+t.test("a vote shows the catalogue's answer, counts and the vote it holds, not a count added here", function()
+    shared.looking = function() return true end
+    browse.refresh(true)
+    local entry = browse.get("Zeta")
+    t.eq(entry.up, 9)
+    -- the ticket and the cast read the same output: one answer serves both
+    answers["plan/vote-Zeta.json"] = { ticket = "1700000000000.abc", votes = { up = 12, down = 1 }, mine = 1 }
+    local before = #sent
+    t.ok(browse.vote("Zeta", 1))
+    t.eq(#sent, before + 2, "the ticket, then the cast")
+    t.ok(sent[#sent]:find("/api/mods/Zeta/vote/cast?vote=1&ticket=1700000000000.abc", 1, true), sent[#sent])
+    t.eq(browse.get("Zeta").up, 12, "the count is the catalogue's, not nine plus one")
+    t.eq(browse.get("Zeta").down, 1)
+    t.eq(browse.my_vote("Zeta"), 1)
+    -- the catalogue says it holds no vote for this address: the mark goes, whatever was sent
+    answers["plan/vote-Zeta.json"] = { ticket = "1700000000000.abc", votes = { up = 11, down = 1 }, mine = 0 }
+    t.ok(browse.vote("Zeta", -1))
+    t.eq(browse.get("Zeta").up, 11)
+    t.eq(browse.my_vote("Zeta"), 0, "the vote held by the catalogue, not the one pressed")
+    -- pressing the vote already held changes nothing and asks nothing
+    answers["plan/vote-Zeta.json"] = { ticket = "1700000000000.abc", votes = { up = 12, down = 1 }, mine = 1 }
+    t.ok(browse.vote("Zeta", 1))
+    t.eq(browse.my_vote("Zeta"), 1)
+    before = #sent
+    t.ok(browse.vote("Zeta", 1))
+    t.eq(#sent, before, "the same vote twice is not sent again")
 end)
 
 t.test("nothing is asked while looking is switched off", function()

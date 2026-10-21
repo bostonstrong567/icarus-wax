@@ -143,6 +143,12 @@ function methods.K2_GetComponentsByClass(self, class)
 end
 function methods.SetVectorParameterValue(self, name, value) rawget(self, "__props")[name] = value end
 function methods.SetScalarParameterValue(self, name, value) rawget(self, "__props")[name] = value end
+function methods.K2_GetScalarParameterValue(self, name)
+    local own = rawget(self, "__props")[name]
+    if own ~= nil then return own end
+    local parent = rawget(self, "__props").Parent
+    return parent and methods.K2_GetScalarParameterValue(parent, name) or 0
+end
 function methods.CreateDynamicMaterialInstance(_, _, parent)
     world.copies = (world.copies or 0) + 1
     return new(nil, "MaterialInstanceDynamic_" .. world.copies, { Parent = parent })

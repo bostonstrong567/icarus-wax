@@ -19,20 +19,23 @@ watch.on_change = nil                       -- function(mod_id), set by the load
 watch.on_lost = nil                         -- function(mod_id): a watched file is gone, set by the loader
 watch.checks = 0
 
--- list: { id, dir, files = { ["relative/path.lua"] = true } } for every mod to watch
+-- list: { id, dir, files = { ["relative/path.lua"] = true }, main = "init.lua" } for every mod to watch. A main file that is not
+-- in files yet is waited for: the mod loads when it appears.
 function watch.track(list)
     local kept = {}
     files = {}
     for _, mod in ipairs(list) do
-        for relative in pairs(mod.files) do
-            if relative:match("%.lua$") then
-                local path = mod.dir .. "/" .. relative
-                local entry = by_path[path] or { path = path }
-                entry.mod = mod.id
-                kept[path] = entry
-                files[#files + 1] = entry
-            end
+        local function take(relative, awaited)
+            local path = mod.dir .. "/" .. relative
+            local entry = by_path[path] or { path = path }
+            entry.mod, entry.awaited = mod.id, awaited or nil
+            kept[path] = entry
+            files[#files + 1] = entry
         end
+        for relative in pairs(mod.files) do
+            if relative:match("%.lua$") then take(relative) end
+        end
+        if mod.main and not mod.files[mod.main] then take(mod.main, true) end
     end
     by_path = kept
     table.sort(files, function(a, b) return a.path < b.path end)
@@ -51,16 +54,18 @@ local function check(entry)
     if not file then
         if not entry.lost then
             entry.lost = true
-            if watch.on_lost then watch.on_lost(entry.mod) end
+            -- a file that is waited for is not lost, only not there yet
+            if not entry.awaited and watch.on_lost then watch.on_lost(entry.mod) end
         end
         return
     end
+    local arrived = entry.awaited and entry.lost
     entry.lost = nil
     local content = file:read("a")
     file:close()
-    if entry.content == nil then
+    if entry.content == nil and not arrived then
         entry.content = content
-    elseif content ~= entry.content then
+    elseif content ~= entry.content or arrived then
         entry.content = content
         local now = sched.clock()
         dirty[entry.mod], last_change, hot = now, now, entry

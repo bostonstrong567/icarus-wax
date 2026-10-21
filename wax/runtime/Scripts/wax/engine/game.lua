@@ -31,19 +31,32 @@ local function viewport()
     return v:IsValid() and v or nil
 end
 
-local function world()
-    local v = viewport()
-    if not v then return nil end
-    local w = v.World
-    return w:IsValid() and w or nil
-end
-
+-- A dedicated server has no viewport: its game instance hangs on the engine, and the world on the game instance.
 local function game_instance()
     local v = viewport()
-    if not v then return nil end
-    local g = v.GameInstance
-    return g:IsValid() and g or nil
+    local g = nil
+    if v then
+        g = v.GameInstance
+    else
+        local e = engine()
+        if not e:IsValid() then return nil end
+        g = e.GameInstance
+    end
+    return g and g:IsValid() and g or nil
 end
+
+local function world()
+    local v = viewport()
+    if v then
+        local w = v.World
+        return w:IsValid() and w or nil
+    end
+    local g = game_instance()
+    if not g then return nil end
+    local ok, w = pcall(function() return g:GetWorld() end)
+    return ok and type(w) == "userdata" and w:IsValid() and w or nil
+end
+M.world = world
 
 local function local_controller()
     local g = game_instance()

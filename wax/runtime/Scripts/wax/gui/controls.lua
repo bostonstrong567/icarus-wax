@@ -174,6 +174,20 @@ local function hover_tip(control, widget)
     end
 end
 
+-- Help shown while the mouse rests on the control. It needs a part that reports the mouse (a button): a control without one
+-- answers false. nil or "" takes the tip away.
+function Control:SetTip(text)
+    local target = self.source or self.widget
+    if not target or self.destroyed then return false end
+    if not self.tip_setter then
+        local ok, made = pcall(hover_tip, self, target)
+        if not ok then return false end
+        self.tip_setter = made
+    end
+    self.tip_setter(text)
+    return true
+end
+
 -- Text that shows cut says itself in full while the mouse rests on it. A text block cannot be asked about the mouse, so a
 -- see-through button is laid over it in `stack`, the first time the text is cut. Returns the function that takes the whole text, or nil.
 local function whole_tip(control, stack)

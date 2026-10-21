@@ -8,6 +8,7 @@ local co = Wax.import("core.co")
 local sched = Wax.import("core.sched")
 local storage = Wax.import("core.storage")
 local discover = Wax.import("mods.discover")
+local sides = Wax.import("mods.sides")
 local watch = Wax.import("mods.watch")
 
 local loader = {}
@@ -115,7 +116,11 @@ local function make_env(mod)
     env.Signal = sched.Signal
     env.log = log.channel(mod.id)
     env.mod = setmetatable({ id = mod.id, name = mod.manifest.name or mod.id, version = mod.manifest.version or "0.0.0",
-        dir = mod.dir, Reload = function() pending[mod.id] = true end,
+        dir = mod.dir, side = sides.side_of(mod.manifest), Reload = function() pending[mod.id] = true end,
+        Side = function(side)
+            if side ~= nil and type(side) ~= "string" then error("mod.Side expects \"host\", \"client\" or \"both\", got " .. type(side), 2) end
+            return sides.can_run(side or sides.side_of(mod.manifest))
+        end,
         OnUnload = function(fn)
             if type(fn) ~= "function" then error("mod.OnUnload expects a function, got " .. type(fn), 2) end
             local list = mod.unloading
@@ -282,6 +287,15 @@ local function load_mod(mod)
             return false
         end
     end
+    if not mod.exmod then
+        local main = mod.manifest.main or "init.lua"
+        if not mod.files[main] then
+            -- a folder still being written: the watcher looks for the file and loads the mod when it is there
+            mod.status, mod.error = "failed", main .. " is not in its folder yet. The mod loads when the file appears."
+            core_log:warn("%s: %s", mod.id, mod.error)
+            return false
+        end
+    end
     mod.scope = scope.new(mod.id)
     mod.unloading = {}
     mod.env = make_env(mod)
@@ -396,7 +410,6 @@ function loader.sync()
         current[note] = true
     end
     noted = current
-    watch.track(found)
     local disabled = switched_off()
     local known, changed = preferences.known, false
     local first = looks == 0
@@ -449,6 +462,7 @@ function loader.sync()
         end
         mod.dir, mod.manifest, mod.files, mod.depends = entry.dir, manifest, files, depends
         mod.exmod, mod.bare = entry.exmod, entry.bare
+        if not entry.exmod then entry.main = type(manifest.main) == "string" and manifest.main or "init.lua" end
         if mod.exmod and manifest.name == nil then manifest.name = mod.id end
         mod.fresh = not known[entry.id] or nil
         mod.enabled = (known[entry.id] and not disabled[entry.id]) and true or false
@@ -459,6 +473,7 @@ function loader.sync()
             core_log:error("%s: %s", mod.id, manifest_error)
         end
     end
+    watch.track(found)
     for id, mod in pairs(mods) do
         if not seen[id] then
             unload(mod, "removed")
@@ -597,6 +612,7 @@ function loader.list()
             id = id, name = mod.manifest.name or id, version = mod.manifest.version, status = mod.status, enabled = mod.enabled,
             fresh = mod.fresh, waiting = mod.held_back, kind = mod.exmod and "exmod" or "lua", note = mod.note,
             error = mod.error, generation = mod.generation, owned = mod.scope and mod.scope:size() or 0,
+            side = sides.side_of(mod.manifest), features = sides.features_of(mod.manifest),
             loadMs = mod.load_seconds and mod.load_seconds * 1000 or nil,
         }
     end

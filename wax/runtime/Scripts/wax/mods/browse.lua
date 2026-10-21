@@ -6,6 +6,7 @@ local log = Wax.import("core.log").channel("wax.browse")
 local scope = Wax.import("core.scope")
 local sched = Wax.import("core.sched")
 local storage = Wax.import("core.storage")
+local sides = Wax.import("mods.sides")
 
 local task = sched.task
 local browse = {}
@@ -39,7 +40,12 @@ local function entry_of(raw)
     for _, other in ipairs(type(latest.dependencies) == "table" and latest.dependencies or {}) do
         if type(other) == "string" and other:match(ID) and #needs < 16 then needs[#needs + 1] = other end
     end
+    -- where it runs, as the catalogue says; features as lines "host: ..." or tables { name, side }
+    -- an older catalogue sends no side: then none is shown
+    local side = sides.SIDES[raw.side] and raw.side or ""
+    local features = sides.features_of({ features = type(latest.features) == "table" and latest.features or nil })
     return {
+        side = side, features = features,
         id = raw.id, name = text_of(raw.name) ~= "" and raw.name:sub(1, 80) or raw.id, summary = text_of(raw.summary):sub(1, 300),
         author = text_of(raw.author):sub(1, 60), category = text_of(raw.category):sub(1, 40), tags = tags,
         needs_wax = text_of(raw.needs_wax):sub(1, 20), reviewed = raw.reviewed == true,
@@ -176,7 +182,8 @@ local function matches(entry, words)
     return true
 end
 
--- The mods that fit: query = { text, category, tag, sort, have }. have is "all", "new" (not here yet) or "here".
+-- The mods that fit: query = { text, category, tag, side, sort, have }. have is "all", "new" (not here yet) or "here"; side is
+-- "host", "client" or "both" to keep only mods listed under it.
 function browse.find(query, list)
     query = query or {}
     local words = {}
@@ -188,6 +195,7 @@ function browse.find(query, list)
             fits = false
             for _, tag in ipairs(entry.tags) do fits = fits or tag == query.tag end
         end
+        if fits and query.side and query.side ~= "any" then fits = entry.side == query.side end
         if fits and query.have and query.have ~= "all" then
             local here = Wax.mods and Wax.mods.get(entry.id) ~= nil
             fits = (query.have == "here") == here
@@ -353,7 +361,10 @@ function browse.vote(id, vote)
         voting[id] = nil
         local now = by_id[id]
         if ok and type(answer.votes) == "table" then
+            -- the catalogue's answer is the truth: its counts, and the vote it holds for this address
             if now then now.up, now.down = tonumber(answer.votes.up) or now.up, tonumber(answer.votes.down) or now.down end
+            local held = tonumber(answer.mine)
+            if held == 1 or held == -1 then kept[id] = held elseif held == 0 then kept[id] = nil end
             storage.save("wax", "votes", kept)
         else
             -- the vote did not arrive: the numbers and the mark go back to what they were
@@ -392,7 +403,7 @@ function browse.detail(id)
     return nil
 end
 
-local function bring(shared, entry)
+local function bring(shared, entry, options)
     local id, version = entry.id, entry.version
     if Wax.mods.get(id) then shared.fail("it is already in the mods folder") end
     local base = ("/api/mods/%s/files/%s"):format(id, shared.encode(version))
@@ -431,8 +442,9 @@ local function bring(shared, entry)
     if not shared.write(shared.net .. "/" .. stage .. "/" .. shared.origin, ("id=%s\nversion=%s\n"):format(id, version)) then
         shared.fail("the download could not be marked as coming from the catalogue")
     end
-    -- a mod the player did not have is new: it stays switched off until they switch it on
-    if not shared.write(shared.net .. "/" .. stage .. "/" .. shared.mark, "new\n") then
+    -- a mod the player did not have is new: it stays switched off until they switch it on. The one exception is a mod the host of the
+    -- session requires with the player's setting on "Install and enable": it is switched on by mods.required right after
+    if not options.required and not shared.write(shared.net .. "/" .. stage .. "/" .. shared.mark, "new\n") then
         shared.fail("the download could not be marked as a new mod")
     end
     shared.pause()
@@ -443,7 +455,9 @@ local function bring(shared, entry)
 end
 
 -- Adds a listed mod to the mods folder, switched off. The page asks the player first. Returns false and why when it cannot start.
-function browse.add(id)
+-- options: { required = true (no "new" mark: the host requires it and the setting says to switch it on), done = function(ok, why) }
+function browse.add(id, options)
+    options = options or {}
     local entry = by_id[id]
     local _, shared = updater()
     if not entry or entry.version == "" then return false, "the catalogue does not list it" end
@@ -457,10 +471,12 @@ function browse.add(id)
     changed()
     local previous = scope.enter(nil)
     task.label(task.spawn(function()
-        local ok, why = shared.attempt(bring, shared, entry)
+        local ok, why = shared.attempt(bring, shared, entry, options)
         adding[id] = nil
         local ui = Wax.ui
-        if ok then
+        if ok and options.required then
+            log:info("%s %s was added from the catalogue: the host requires it", id, entry.version)
+        elseif ok then
             log:info("%s %s was added from the catalogue, switched off", id, entry.version)
             if ui and ui.Notify then
                 pcall(ui.Notify, ("%s was added. It is switched off until you enable it on the Mods page."):format(entry.name),
@@ -468,13 +484,14 @@ function browse.add(id)
             end
         else
             log:warn("%s could not be added: %s", id, tostring(why))
-            if ui and ui.Notify then
+            if ui and ui.Notify and not options.required then
                 pcall(ui.Notify, tostring(why), { title = "Could not add " .. entry.name, kind = "bad", seconds = 10 })
             end
             -- what was downloaded is not left lying about
             if shared.attempt(shared.fetch, { { "-", "stage/" .. id } }) then os.remove(shared.net .. "/stage/" .. id .. ".status") end
         end
         changed()
+        if options.done then pcall(options.done, ok, why) end
     end), "browse add " .. id)
     scope.leave(previous)
     return true

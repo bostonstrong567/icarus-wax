@@ -130,6 +130,21 @@ local commands = {
         if not (mods and mods.added) then return refuse("not-ready", "not ready: Wax has not started in the game yet") end
         local mod, problem = mods.added(id)
         if not mod then return refuse("no-mod", tostring(problem)) end
+        -- a dedicated server has no Mods page where anyone could switch the mod on, so one added this way runs
+        local mode = wax.mode
+        if type(mode) == "table" and mode.HasScreen == false and not mod.enabled and mods.set_enabled then
+            local on, why = mods.set_enabled(id, true)
+            if on then
+                mod.enabled, mod.fresh, mod.switched_on = true, false, true
+                -- loaded now rather than at the next frame, so the answer says how the load went
+                if pcall(mods.sync) and mods.get then
+                    local loaded = mods.get(id)
+                    if loaded then mod.status = loaded.status end
+                end
+            else
+                mod.problem = tostring(why)
+            end
+        end
         return { ok = true, values = { mod }, output = {} }
     end },
 }

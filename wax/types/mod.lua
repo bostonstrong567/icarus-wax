@@ -6,6 +6,10 @@
 ---@field version? string "0.0.0" when omitted.
 ---@field main? string Entry file inside the mod's folder. "init.lua" when omitted.
 ---@field dependencies? string[] Ids of mods that load first. Each can then be reached with require("@Id").
+---@field key? string The key that shows and hides the mod's windows, such as "F6". ui.Window takes it when given no key of its own.
+---@field keys? string[] The mod's other keys, one line each: "F10: Show or hide the pins". The name after the colon is the one given to ui.Bind.
+---@field side? "host"|"client"|"both" Where the mod's features run: on the host (the game that owns the world, or a dedicated server), on each player's own game, or both. "both" when omitted. The catalogue reads it from the code when it is missing. A mod of the host side shows greyed on a client's Mods page, with a tip, and is never refused.
+---@field features? string[] The mod's features with their sides, one line each: "host: Craft from containers", "client: Push all". Each is listed on the mod's card, greyed on a game it cannot run on.
 
 ---A file or folder of the mod, as `mod.Utils` or `mod.extras.Utils` gives it. Pass it to require.
 ---@class WaxFile
@@ -18,6 +22,8 @@
 ---@field version string
 ---@field dir string Path of the mod's folder.
 ---@field Reload fun() Loads the mod again at the start of the next frame, as a saved file does.
+---@field side "host"|"client"|"both" Where the mod runs, as its mod.lua says ("both" when it says nothing).
+---@field Side fun(side?: "host"|"client"|"both"): boolean Whether a feature of that side can work on this game: "host" is true on the host of the world and on a dedicated server, "client" on any game with a screen, "both" always. With no argument it answers for the mod's own side. Use it to grey a control with ui.NeedsHost, never to refuse an action: the game answers for itself.
 ---@field Content WaxContent? The game content the mod brings in content/<Id>.pak: models, textures, blueprints. Nil for a mod without that file.
 ---@field OnUnload fun(fn: fun(why: "reload"|"off"|"removed"|"failed"|"shutdown")): fun() Runs `fn` once when the mod is about to unload, before anything of the mod is taken away: its windows, tasks, connections and table changes are all still there. `why` is "reload" when the mod loads again straight after, "off" when the player switched it off, "removed" when its folder went, "failed" when the mod raised an error while it loaded, and "shutdown" when Wax itself stops. Several run newest first, and one that raises an error is logged and stops none of the others. `fn` must return at once: it cannot wait. Use it for what Wax cannot undo for you, such as a change made to the world. It does not run when the game closes or the map changes. Returns a function that takes `fn` off again.
 mod = {}

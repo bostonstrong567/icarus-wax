@@ -30,7 +30,9 @@ local COLORS = { "Red", "Orange", "Yellow", "Green", "Cyan", "Blue", "Purple", "
 local PASS, MATERIAL = "HighlightablePostProcess", "PPI_OutlineColored"
 local BRIGHTNESS = 1.5      -- above 1 the outline glows, but much higher and every colour drifts toward white
 local CHECKED_PER_FRAME, PASS_EVERY = 2, 30
-local NAMES = { "Add", "Remove", "Clear", "GetAll", "Configure", "Look", "Colors" }
+-- The material stops drawing past its "Distance" parameter (1400 units, 14 metres, in the game's own copy).
+local DISTANCE, METRE, GAME_RANGE, RANGE_LIMITS = "Distance", 100, 14, { 1, 5000 }
+local NAMES = { "Add", "Remove", "Clear", "GetAll", "Configure", "GetRange", "Look", "Colors" }
 
 local marks = {}            -- actor address -> mark
 local order = {}            -- the same marks as a list
@@ -39,8 +41,9 @@ local mesh_class, part_class, library = nil, nil, nil
 local by_actor = {}         -- actor address -> { [mark] = true }, for when the actor ends play
 local custom = false        -- true while Wax's copy of the outline material is in place
 local painted = {}          -- what was last written to the copy
-local settings = { fill = 0.25, width = 1 }
-local warned_full = false
+local settings = { fill = 0.25, width = 1, range = nil }
+local game_range = nil      -- metres, read from the game's own material; GAME_RANGE until then
+local warned_full, warned_tags = false, false
 local stale = false         -- set when a mark went away, so the colours are worked out again on the next frame
 
 local function parse(color, level)
@@ -119,6 +122,16 @@ local function is_copy(material)
     return parent:IsValid() and parent:GetFName():ToString() == MATERIAL
 end
 
+-- How far the game's own outline reaches, read once from its material.
+local function learn_range(original)
+    if game_range then return end
+    local ok, units = pcall(function() return original:K2_GetScalarParameterValue(FName(DISTANCE)) end)
+    if ok and type(units) == "number" and units > 0 then game_range = units / METRE end
+end
+
+-- Metres an outline can be seen from: what Configure set, else the game's own.
+function M.range() return settings.range or game_range or GAME_RANGE end
+
 -- The copies of the outline material on the player's character, read fresh each time. The first draws the lines.
 -- A second one draws the tint when a tint has a colour of its own. `install` puts them there.
 local function pass_copies(install, tinted)
@@ -137,12 +150,14 @@ local function pass_copies(install, tinted)
     local original, copy = material, nil
     if material:GetFName():ToString() == MATERIAL then
         if not install then return nil end
+        learn_range(material)
         copy = library:CreateDynamicMaterialInstance(component, material, FName("None"), 0)
         if not copy:IsValid() then return nil end
         first.Object = copy
         painted = {}
     elseif is_copy(material) then
         original, copy = material.Parent, material
+        learn_range(original)
     else
         return nil
     end
@@ -210,9 +225,11 @@ local function paint(copy, second, taken)
     end
     write(copy, "a.fill", "number", "FillAlpha", second and 0 or settings.fill)
     write(copy, "a.width", "number", "OutlineThickness", settings.width)
+    write(copy, "a.range", "number", DISTANCE, M.range() * METRE)
     if second then
         write(second, "b.fill", "number", "FillAlpha", settings.fill)
         write(second, "b.width", "number", "OutlineThickness", 0)
+        write(second, "b.range", "number", DISTANCE, M.range() * METRE)
     end
 end
 
@@ -373,6 +390,36 @@ function Look:Set(options)
     stale = true
 end
 
+-- A mark's Tag option: a text, or a table of tag options. Returns the tag options, or nil for none.
+local function tag_options(value, level)
+    if value == nil or value == false then return nil end
+    if type(value) == "string" or type(value) == "number" then return { text = tostring(value) } end
+    if type(value) == "table" then
+        local out = {}
+        for key, item in pairs(value) do out[key] = item end
+        out.text = out.text == nil and "" or tostring(out.text)
+        return out
+    end
+    error("Tag is the text of a tag, such as \"Wolf\", or a table such as { text = \"Wolf\", color = \"Red\" }", level + 1)
+end
+
+-- Puts a tag over the mark's actor. Without an explicit `within` it shows exactly as far as the outline does.
+local function give_tag(mark, options)
+    if mark.Tag then
+        mark.Tag:Remove()
+        mark.Tag = nil
+    end
+    if not options then return end
+    if options.within == nil then options.outline = true end
+    local ok, tag = pcall(function() return Wax.import("gui.tags").create(mark.Instance, options) end)
+    if ok then
+        mark.Tag = tag
+    elseif not warned_tags then
+        warned_tags = true
+        log:warn("no tag could be put over %s: %s", tostring(mark.Instance), tostring(tag))
+    end
+end
+
 local Mark = {}
 Mark.__index = Mark
 
@@ -380,6 +427,10 @@ Mark.__index = Mark
 function Mark:Remove()
     if not self.Active then return end
     self.Active = false
+    if self.Tag then
+        self.Tag:Remove()
+        self.Tag = nil
+    end
     unlist(self)
     if self.owner and self.slot_in_owner then self.owner:remove(self.slot_in_owner) end
     if self.actor then
@@ -399,6 +450,14 @@ function Mark:Set(options)
     end
     read_options(self.look, options, 2)
     self.Color, self.Fill = self.look.Color, self.look.Fill
+    if options.Tag ~= nil and self.Active then
+        local wanted = tag_options(options.Tag, 2)
+        if wanted and self.Tag and type(options.Tag) ~= "table" then
+            self.Tag:Set(wanted.text)
+        else
+            give_tag(self, wanted)
+        end
+    end
     if self.Active and self.actor then sync() end
 end
 
@@ -408,7 +467,10 @@ local Highlight = { Colors = table.move(COLORS, 1, #COLORS, 1, {}) }
 
 -- Raises for options that cannot be used, so a mistake is reported where it was written.
 function Highlight:Check(options, level)
-    if getmetatable(options) ~= Look then read_options({}, options, (level or 1) + 1) end
+    if getmetatable(options) ~= Look then
+        read_options({}, options, (level or 1) + 1)
+        if type(options) == "table" then tag_options(options.Tag, (level or 1) + 1) end
+    end
 end
 
 -- A colour and fill that many outlines share. Changing it with :Set changes all of them at once.
@@ -416,8 +478,9 @@ function Highlight:Look(options)
     return new_look(options, 2)
 end
 
--- Outlines an actor. Options: Color (a name, "#rrggbb" or { R, G, B }), Fill (tint the model too, default true) and
--- FillColor (the tint, when it is not the outline's colour). A look made with game.Highlight:Look works too.
+-- Outlines an actor. Options: Color (a name, "#rrggbb" or { R, G, B }), Fill (tint the model too, default true),
+-- FillColor (the tint, when it is not the outline's colour) and Tag (a text over the actor, shown as far as the
+-- outline is). A look made with game.Highlight:Look works too.
 function Highlight:Add(target, options)
     local whole = instance.is_instance(target) and target:IsA("Actor")
     if not whole and not (instance.is_instance(target) and target:IsA("PrimitiveComponent")) then
@@ -426,6 +489,7 @@ function Highlight:Add(target, options)
     local mark = setmetatable({ Instance = target, Active = true, previous = {} }, Mark)
     mark.look, mark.shared = new_look(options, 2), getmetatable(options) == Look
     mark.Color, mark.Fill = mark.look.Color, mark.look.Fill
+    local wanted_tag = not mark.shared and type(options) == "table" and tag_options(options.Tag, 2) or nil
     mark.address = instance.address(target)
     if whole then
         mark.actor, mark.actor_address = target.Raw, mark.address
@@ -447,6 +511,7 @@ function Highlight:Add(target, options)
     order[#order + 1] = mark
     mark.owner, mark.slot_in_owner = scope.own(function() mark:Remove() end)
     sync()
+    if wanted_tag then give_tag(mark, wanted_tag) end
     return mark
 end
 
@@ -469,19 +534,25 @@ function Highlight:GetAll()
     return out
 end
 
--- Settings shared by every outline: Fill (how strongly a filled model is tinted, 0 to 1) and Width (line width, 1 to 4).
+-- Settings shared by every outline: Fill (how strongly a filled model is tinted, 0 to 1), Width (line width, 1 to 4)
+-- and Range (metres an outline is seen from; false goes back to the game's own, 14).
 function Highlight:Configure(options)
-    if type(options) ~= "table" then error("Configure expects a table such as { Fill = 0.3, Width = 2 }", 2) end
-    for key, limits in pairs({ Fill = { "fill", 0, 1 }, Width = { "width", 1, 4 } }) do
+    if type(options) ~= "table" then error("Configure expects a table such as { Fill = 0.3, Width = 2, Range = 120 }", 2) end
+    for key, limits in pairs({ Fill = { "fill", 0, 1 }, Width = { "width", 1, 4 }, Range = { "range", RANGE_LIMITS[1], RANGE_LIMITS[2] } }) do
         local value = options[key]
-        if value ~= nil then
+        if value == false and key == "Range" then
+            settings.range = nil
+        elseif value ~= nil then
             if type(value) ~= "number" then error(key .. " is a number", 2) end
             settings[limits[1]] = math.max(limits[2], math.min(limits[3], value))
         end
     end
     sync()
-    return { Fill = settings.fill, Width = settings.width }
+    return { Fill = settings.fill, Width = settings.width, Range = M.range() }
 end
+
+-- How far an outline can be seen from, in metres.
+function Highlight:GetRange() return M.range() end
 
 setmetatable(Highlight, {
     __index = function(_, key)

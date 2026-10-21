@@ -16,6 +16,12 @@ function Control:SetVisible(shown) end
 ---@param enabled boolean
 function Control:SetEnabled(enabled) end
 
+---Help shown while the mouse rests on the control. It needs a part that reports the mouse, which buttons, toggles, sections and
+---key boxes have: for a control without one it answers false and shows nothing. nil or "" takes the tip away.
+---@param text string?
+---@return boolean shown
+function Control:SetTip(text) end
+
 ---@class WaxLabelOptions: WaxOptions
 ---@field dim? boolean Uses the theme's secondary text colour.
 ---@field color? WaxColor

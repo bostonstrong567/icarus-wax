@@ -4,6 +4,7 @@ local Wax = ...
 local ui = Wax.import("gui.init")
 local style = Wax.import("gui.style")
 local foreign = Wax.import("mods.foreign")
+local sides = Wax.import("mods.sides")
 local log = Wax.import("core.log")
 local perf = Wax.import("core.perf")
 local scope = Wax.import("core.scope")
@@ -31,6 +32,7 @@ local SCAN_EVERY = 20       -- refreshes between two looks at the mods folder wh
 local LEVEL_COLOR = { error = "bad", warn = "warn", info = "text", debug = "dim", trace = "dim" }
 local window, mods_page, mods_note, console, opened, status
 local mod_rows, mods_signature, mod_filter, scan_tick, log_lines = {}, nil, "", 0, 0
+local required_box = nil             -- the mods the host requires and this game lacks, listed above the cards
 local mods_open = {}        -- mod id -> whether the user left its card open, for this session
 local filters = { error = true, warn = true, info = true }
 local search, follow = "", true
@@ -326,6 +328,14 @@ local function mod_list_signature(list, updates, keyed)
     end
     parts[#parts + 1] = "keys" .. ui.Keys.BindsStamp()
     parts[#parts + 1] = "other:" .. foreign.signature()
+    parts[#parts + 1] = "side:" .. tostring(sides.authority()) .. ":" .. sides.kind()
+    local required = Wax.required
+    if required then
+        local names = {}
+        for _, entry in ipairs(required.pending()) do names[#names + 1] = entry.id .. (entry.busy and "+" or "") end
+        for _, entry in ipairs(required.required_list()) do names[#names + 1] = "!" .. entry.id end
+        parts[#parts + 1] = "required:" .. table.concat(names, ",")
+    end
     return table.concat(parts, "|")
 end
 
@@ -487,12 +497,35 @@ local function rebuild_mods(list, updates, keyed)
         row.control:Destroy()
     end
     mod_rows = {}
+    if required_box then
+        required_box.control:Destroy()
+        required_box = nil
+    end
     if panel.updates then panel.updates.buttons = {} end
+    local authority, kind = sides.authority(), sides.kind()
+    local hosting = kind == "host" or kind == "server"
     in_core_scope(function()
+        -- what the host of this session requires and this game does not have: offered here when the setting is "Ask", and what could not be put in
+        local required = Wax.required
+        local waiting = required and required.pending() or {}
+        if #waiting > 0 then
+            local box = mods_page:Section("Mods this server requires", { open = true })
+            box:Label("The host asks every player to have these. A mod put in from here comes from the Wax catalogue, signed, and is switched on at once.",
+                { dim = true, size = style.theme.small_size })
+            for _, entry in ipairs(waiting) do
+                local line = box:Row()
+                line:Label(entry.id .. (entry.version and ("  " .. entry.version) or "") .. "  " .. entry.why, { size = style.theme.small_size })
+                local button = line:Button(entry.busy and "Putting in ..." or "Install", function() required.install_pending(entry.id) end,
+                    { icon = "download", stretch = false })
+                if entry.busy then button:SetEnabled(false) end
+            end
+            required_box = box
+        end
         for _, mod in ipairs(list) do
             local healthy, off = mod.status == "loaded", mod.status == "disabled"
             local newer = updates and updates.available[mod.id]
             local updating = newer and updates.installing[mod.id]
+            local needs_host = mod.side == "host" and not authority
             -- cards start closed, so the list stays short. One with a problem or an update to put in starts open, and a closed one says its state
             local open = mods_open[mod.id]
             if open == nil then open = mod.error ~= nil or mod.waiting ~= nil or mod.fresh == true or (newer ~= nil and not updating) end
@@ -501,9 +534,11 @@ local function rebuild_mods(list, updates, keyed)
             if newer then badge, tone = newer .. " available", style.theme.accent
             elseif off then badge, tone = mod.fresh and "New" or "Off", mod.fresh and style.theme.warn or style.theme.dim
             elseif not healthy then badge, tone = mod.status, style.theme.bad
+            elseif needs_host then badge, tone = "Needs the host", style.theme.warn
             else badge, tone = "On", style.theme.good end
             local title = ("%s  %s"):format(mod.name, mod.version or "")
             local section = mods_page:Section(title, { open = open, fit = true, badge = badge, badge_color = tone })
+            if needs_host then section.control:SetTip(sides.NEEDS_HOST) end
             section:Field("Status", healthy and "loaded" or (off and (mod.fresh and "new, switched off" or "switched off") or mod.status))
                 :SetColor(healthy and style.theme.good or (off and (mod.fresh and style.theme.warn or style.theme.dim) or style.theme.bad))
             if mod.kind == "exmod" then section:Field("Kind", "Table mod (EXMOD)") end
@@ -533,7 +568,25 @@ local function rebuild_mods(list, updates, keyed)
                     section:Label(mod.content.reason, { color = state == "off" and style.theme.bad or style.theme.warn, size = style.theme.small_size })
                 end
             end
-            section:Toggle("Enabled", not off, function(on) Wax.mods.set_enabled(mod.id, on) end)
+            -- where the mod runs, and each feature with its own side: one this game cannot run is greyed, never refused
+            if mod.side and mod.side ~= "both" or (mod.features and #mod.features > 0) then
+                section:Field("Runs on", sides.WORDS[mod.side] or "Host + client")
+            end
+            if needs_host then section:Label(sides.NEEDS_HOST, { color = style.theme.warn, size = style.theme.small_size }) end
+            for _, feature in ipairs(mod.features or {}) do
+                local line = section:Row()
+                line:Label(feature.name)
+                local can = sides.can_run(feature.side, authority)
+                line:Badge(sides.WORDS[feature.side] or "", { color = can and style.theme.dim or style.theme.warn })
+                if not can then line.control:SetEnabled(false) end
+            end
+            local switch = section:Toggle("Enabled", not off, function(on) Wax.mods.set_enabled(mod.id, on) end)
+            if needs_host then switch:SetTip(sides.NEEDS_HOST) end
+            -- the host decides which mods a joining player is asked to have
+            if hosting and Wax.required and mod.kind ~= "exmod" then
+                local asked = section:Toggle("Required to join", Wax.required.is_required(mod.id), function(on) Wax.required.set_required(mod.id, on) end)
+                asked:SetTip("Players who join are told to have this mod. Their game puts it in from the Wax catalogue when their own setting allows, and the game lets them join either way.")
+            end
             local row = { control = section.control, section = section, built_open = open, mod = mod, visible = true, title = title }
             add_grip(row)
             -- a mod that came from the catalogue: whether a newer version of it is put in by itself
@@ -799,17 +852,21 @@ local keys_due = false
 local function refresh_keys()
     keys_due = false
     local warn, clashing = style.theme.warn, ui.Keys.Clashing()
+    -- a key the game acts on as well is drawn as a clash, and the box says what the game does with it
+    local function mark(control, id, key)
+        control:SetTone(clashing(id, key) and warn or nil)
+        local action = ui.Keys.GameKey(key)
+        control:SetTip(action and ("%s is the game's %s key."):format(key, action) or nil)
+    end
     for _, row in ipairs(mod_rows) do
         local id = row.mod.id
-        if row.keybind and not row.keybind.destroyed then
-            row.keybind:SetTone(clashing(id, row.keybind:Get()) and warn or nil)
-        end
+        if row.keybind and not row.keybind.destroyed then mark(row.keybind, id, row.keybind:Get()) end
         if row.binds and next(row.binds) then
             for _, bound in ipairs(ui.Keys.Binds(id)) do
                 local control = row.binds[bound.Name]
                 if control and not control.destroyed then
                     if control:Get() ~= bound.Key then control:Set(bound.Key) end
-                    control:SetTone(clashing(id, bound.Key) and warn or nil)
+                    mark(control, id, bound.Key)
                 end
             end
         end
@@ -1097,6 +1154,18 @@ function panel.start()
         local settings_page = window:Page("Settings", { icon = "settings", bottom = true })
         settings_page:Title("Settings", "These are remembered the next time you play.")
         ui.AddSettings(settings_page)
+        if Wax.required then
+            local required = Wax.required
+            local names = {}
+            for index, mode in ipairs(required.MODES) do names[index] = required.MODE_WORDS[mode] end
+            settings_page:Dropdown("Mods a server requires", names, required.MODE_WORDS[required.mode()], function(choice)
+                for _, mode in ipairs(required.MODES) do
+                    if required.MODE_WORDS[mode] == choice then required.set_mode(mode) end
+                end
+            end)
+            settings_page:Label("When you join a world whose host requires mods: put them in from the Wax catalogue and switch them on, ask you first on the Mods page, or do nothing. A mod that is not in the catalogue is named so you can ask the host for it. The game lets you join either way.",
+                { dim = true, size = style.theme.small_size })
+        end
         local leftovers = settings_page:Section("Saved data")
         leftovers:Label("A mod that was removed can leave its settings here. Erasing them forgets those settings. A mod that is still installed keeps its settings, including one that is switched off.")
         leftovers:Button("Erase leftover saves", function()
@@ -1144,7 +1213,7 @@ end
 -- Forgets the window without touching it (the game removed the interface).
 function panel.forget()
     window, opened, mod_rows, mods_signature, command_box, tab_key = nil, nil, {}, nil, nil, nil
-    held, sorting = nil, nil
+    held, sorting, required_box = nil, nil, nil
     if ghost then ghost:forget() end
     ghost = nil
     drag.forget()

@@ -175,7 +175,7 @@ end
 
 local Items = {}            -- game.Items itself holds nothing, so nothing of it can be replaced
 local api = {}
-local NAMES = { "Get", "Has", "GetNames", "Find", "Load" }
+local NAMES = { "Get", "Has", "GetNames", "Find", "Load", "Share" }
 
 -- Wraps a function of game.Items whose errors carry no position, so they point at the mod's line.
 local function public(name, fn)
@@ -949,6 +949,118 @@ local function resize(self, raw, wanted)
 end
 
 inventory_methods.Give, inventory_methods.Take, inventory_methods.Resize = give, take, resize
+
+-- moving stacks between inventories with the game's own transfer calls, which go through the server for a client too
+
+M.MOVE_WAIT = 2.5       -- seconds a move is watched for in a task before it is called done
+M.MOVE_STEP = 0.25      -- seconds between two looks
+
+local function controller_now()
+    local root = Wax.import("engine.game").root
+    local ok, player = pcall(function() return root.LocalPlayer end)
+    local raw = ok and player and player.Raw or nil
+    if not raw or not address_of(raw) then error("there is no player controller to send the move through", 0) end
+    return raw
+end
+
+local function other_inventory(target, what)
+    if instance.is_instance(target) and target:IsA(M.INVENTORY) then return target, target.Raw end
+    error(("%s expects an inventory as the other side, got %s"):format(what, described(target)), 0)
+end
+
+-- Watches an inventory for the change a move was asked for. Answers how many left (or came), and nothing when none did.
+local function watch(self, raw, key, before, wanted, sign)
+    if not co.isyieldable() then return nil, "asked" end
+    local waited, last, settled = 0, nil, 0
+    while waited < M.MOVE_WAIT do
+        sched.task.wait(M.MOVE_STEP)
+        waited = waited + M.MOVE_STEP
+        local now = (fresh(self, raw, "Move").by[key] or 0)
+        local moved = (now - before) * sign
+        if moved >= wanted then return moved end
+        settled = moved == last and settled + M.MOVE_STEP or 0
+        last = moved
+        if moved > 0 and settled >= 0.5 then return moved end
+    end
+    local moved = ((fresh(self, raw, "Move").by[key] or 0) - before) * sign
+    if moved > 0 then return moved end
+    return 0, "the game moved nothing"
+end
+
+local function transfer_all(from, to, name) controller_now():OnServer_TransferAllOfType(from, to, item_value(name)) end
+
+-- Every stack of an item in this inventory goes to another: the game's own "transfer all of a type". In a task it
+-- answers how many went, else nil and "asked".
+local function push(self, raw, item, target)
+    local key, facts = facts_for(item, "Push")
+    local _, other = other_inventory(target, "Push")
+    local before = fresh(self, raw, "Push").by[key] or 0
+    if before == 0 then return 0, ("this inventory holds no %s"):format(facts.Name) end
+    ask("transferring a type", transfer_all, raw, other, facts.Name)
+    return watch(self, raw, key, before, before, -1)
+end
+
+local function pull(self, raw, item, source)
+    local key, facts = facts_for(item, "Pull")
+    local from, other = other_inventory(source, "Pull")
+    local there = fresh(from, other, "Pull").by[key] or 0
+    if there == 0 then return 0, ("the other inventory holds no %s"):format(facts.Name) end
+    local before = fresh(self, raw, "Pull").by[key] or 0
+    ask("transferring a type", transfer_all, other, raw, facts.Name)
+    return watch(self, raw, key, before, there, 1)
+end
+
+-- Where in a target a stack of this item can go: a stack of it with room, else an empty slot. Counted from 1.
+local function room_in(target, other, name, most)
+    local copy = fresh(target, other, "Move")
+    local key = lower(name)
+    for _, record in ipairs(copy.list) do
+        if lower(record.Item) == key and record.Count < most then return record.Slot, most - record.Count end
+    end
+    for position = 1, copy.size do
+        if not copy.slots[position] then return position, most end
+    end
+    return nil
+end
+
+local function shift(from, from_slot, to, to_slot, amount)
+    controller_now():OnServer_ShiftItem(from, from_slot - 1, to, to_slot - 1, amount)
+end
+
+-- Some of one stack to another inventory, by the game's own "shift": the slot's stack goes onto a stack of the same
+-- item there, else into an empty slot. In a task it answers how many went, else nil and "asked".
+local function move(self, raw, slot, target, amount)
+    if math.type(slot) ~= "integer" or slot < 1 then error("Move expects a slot number, counted from 1", 0) end
+    local target_inventory, other = other_inventory(target, "Move")
+    local record = fresh(self, raw, "Move").at[slot]
+    if not record then return 0, ("slot %d is empty"):format(slot) end
+    local _, facts = facts_for(record.Item, "Move")
+    local wanted = amount == nil and record.Count or how_many(amount, "Move")
+    if wanted > record.Count then wanted = record.Count end
+    local most = math.type(facts.MaxStack) == "integer" and facts.MaxStack or 1
+    local to_slot, room = room_in(target_inventory, other, facts.Name, most)
+    if not to_slot then return 0, "no room there" end
+    if wanted > room then wanted = room end
+    local key = lower(record.Item)
+    local before = fresh(target_inventory, other, "Move").by[key] or 0
+    ask("shifting a stack", shift, raw, slot, other, to_slot, wanted)
+    return watch(target_inventory, other, key, before, wanted, 1)
+end
+
+-- Deals `total` of an item out over stations that all take it, as evenly as their room allows. Pure sums, for mods
+-- that fill several furnaces at once: stations are { stacks, size, used, accepts(item) }, nearest first.
+local function share(total, item, stations)
+    local name = type(item) == "table" and item.Item or item
+    local function facts(row)
+        local ok, told = pcall(function() return Items:Get(row) end)
+        return ok and told or nil
+    end
+    return Wax.import("world.share").spread(total, name, stations, facts)
+end
+
+inventory_methods.Push, inventory_methods.Pull, inventory_methods.Move = push, pull, move
+api.Share = public("Share", share)
+
 player_methods.Give, player_methods.Take = character_give, character_take
 
 -- For the module that hears the game's item events: the slot at `location` (counted from 0, as the game counts) of the

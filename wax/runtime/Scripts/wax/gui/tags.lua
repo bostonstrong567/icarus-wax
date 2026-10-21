@@ -15,6 +15,8 @@ local V = style.Visibility
 local METRE, SLOW_EVERY = 100, 10
 local CLOSE = 40            -- metres. Nearer than this a tag follows every frame, farther every other frame
 local LINE, LETTER, STACK = 15, 6.6, 6      -- a tag's height, the width of one letter, and how many may pile up
+local SMALLEST, FADE_FROM = 0.6, 0.8        -- a tag at the edge of its range is this big, and fades over the last fifth
+local OUTLINE_RANGE = 14    -- metres the game's outline reaches, until game.Highlight says otherwise
 local tags = {}             -- every tag that is showing or could show
 local by_address = {}       -- actor address -> { tags on it }
 local frames, screen_scale = 0, 1
@@ -60,10 +62,32 @@ function Tag:Set(text)
     kit.set_text(self.label, text)
 end
 
--- How near, in metres, the thing has to be for the tag to show.
+-- How near, in metres, the thing has to be for the tag to show. "outline" makes it show as far as outlines do.
 function Tag:SetRange(metres)
-    if type(metres) ~= "number" then error("SetRange expects a number of metres", 2) end
-    self.within, self.near = metres, true
+    if metres == "outline" then
+        self.outline, self.near = true, true
+        return
+    end
+    if type(metres) ~= "number" then error("SetRange expects a number of metres, or \"outline\"", 2) end
+    self.within, self.outline, self.near = metres, false, true
+end
+
+-- Metres this tag shows within.
+function Tag:GetRange() return self.outline and M.outline_range() or self.within end
+
+-- How far outlines reach now, asked of game.Highlight when it is running.
+function M.outline_range()
+    local highlight = Wax.modules["world.highlight"]
+    if type(highlight) == "table" and highlight.range then return highlight.range() end
+    return OUTLINE_RANGE
+end
+
+-- A tag's size and opacity at a distance: full size up close, SMALLEST at the edge, and fading out over the last fifth.
+function M.look(away, within)
+    local share = within > 0 and math.min(1, away / within) or 0
+    local factor = 1 - (1 - SMALLEST) * share
+    local alpha = share <= FADE_FROM and 1 or math.max(0, (1 - share) / (1 - FADE_FROM))
+    return factor, alpha
 end
 
 function Tag:SetColor(color)
@@ -81,7 +105,8 @@ local function place(tag, player, eye_x, eye_y, eye_z)
         x, y, z = at.X + tag.aside.X, at.Y + tag.aside.Y, at.Z + tag.aside.Z + tag.lift
     end
     local away = math.sqrt((x - eye_x) ^ 2 + (y - eye_y) ^ 2 + (z - eye_z) ^ 2) / METRE
-    if away > tag.within then
+    local within = tag.outline and M.outline_range() or tag.within
+    if away > within then
         hide(tag)
         return false
     end
@@ -91,6 +116,17 @@ local function place(tag, player, eye_x, eye_y, eye_z)
         return false
     end
     tag.x, tag.y, tag.away = screen.X / screen_scale, screen.Y / screen_scale, away
+    if tag.fade then
+        local factor, alpha = M.look(away, within)
+        if math.abs(factor - tag.factor) > 0.02 then
+            tag.factor = factor
+            tag.box:SetUserSpecifiedScale(style.scale * factor)
+        end
+        if math.abs(alpha - tag.alpha) > 0.02 then
+            tag.alpha = alpha
+            tag.box:SetRenderOpacity(alpha)
+        end
+    end
     return true
 end
 
@@ -105,13 +141,16 @@ local function arrange()
     table.sort(seen, nearer)
     local scale = style.scale
     for index, tag in ipairs(seen) do
-        local width, y, fits = #tag.text * LETTER * scale, tag.y, true
+        local line = LINE * scale * tag.factor
+        local width, y, fits = #tag.text * LETTER * scale * tag.factor, tag.y, true
+        tag.line = line
         for _ = 1, STACK do
             fits = true
             for other = 1, index - 1 do
                 local below = seen[other]
-                if below.put and math.abs(tag.x - below.x) < (width + below.width) / 2 and math.abs(y - below.put) < LINE * scale then
-                    y, fits = below.put - LINE * scale, false
+                local gap = math.max(line, below.line or line)
+                if below.put and math.abs(tag.x - below.x) < (width + below.width) / 2 and math.abs(y - below.put) < gap - 0.01 then
+                    y, fits = below.put - gap, false
                 end
             end
             if fits then break end
@@ -146,7 +185,8 @@ local function build(tag, options)
     tag.label, tag.box, tag.slot = label, box, slot
 end
 
--- options: text, color, size, within (metres, default 100), lift (how far above the thing's middle, in centimetres)
+-- options: text, color, size, within (metres, default 100), outline (show as far as outlines do, in place of within),
+-- fade (smaller and fainter with distance, default true), lift (how far above the thing's middle, in centimetres)
 function M.create(target, options)
     options = options or {}
     if type(options) ~= "table" then error("the tag options are a table such as { text = \"Wolf\" }", 2) end
@@ -178,8 +218,10 @@ function M.create(target, options)
     local tag = setmetatable({
         Instance = not spot and target or nil, actor = actor, spot = spot, aside = aside, address = address,
         text = tostring(options.text or ""), within = options.within or 100, lift = lift or 20,
+        outline = options.outline == true and options.within == nil, fade = options.fade ~= false, factor = 1, alpha = 1,
         shown = false, near = true, destroyed = false,
     }, Tag)
+    if options.within ~= nil and type(options.within) ~= "number" then error("within is a number of metres", 2) end
     style.build(tag, build, tag, options)
     tags[#tags + 1] = tag
     if tag.address then
@@ -224,7 +266,7 @@ end
 
 function M.rescale()
     for _, tag in ipairs(tags) do
-        if not tag.destroyed then tag.box:SetUserSpecifiedScale(style.scale) end
+        if not tag.destroyed then tag.box:SetUserSpecifiedScale(style.scale * tag.factor) end
     end
 end
 

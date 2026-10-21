@@ -286,6 +286,7 @@ function Creatures:Highlight(kind, options) end
 ---@field Color? string|{ R: number, G: number, B: number } A name from game.Highlight.Colors, "#rrggbb", or values from 0 to 1. "Red" when omitted.
 ---@field Fill? boolean Also tints the whole model. True when omitted.
 ---@field FillColor? string|{ R: number, G: number, B: number }|false The tint's colour when it is not the outline's. false goes back to the outline's colour.
+---@field Tag? string|WaxTagOptions|false A line of text over the actor (as ui.Tag makes), shown exactly as far as the outline is unless its own `within` is given. On Set, false takes it off.
 
 ---A colour and fill that many outlines share. Changing it changes all of them at once.
 ---@class WaxHighlightLook
@@ -299,6 +300,7 @@ function Look:Set(options) end
 ---@class WaxHighlightMark
 ---@field Instance WaxInstance
 ---@field Active boolean False once it was removed or its actor is gone.
+---@field Tag WaxTag? The tag over the actor, when the mark was given one. It goes with the mark.
 local Mark = {}
 
 ---Takes the outline off. Safe to call twice, and after the actor is gone.
@@ -341,10 +343,16 @@ function Highlight:GetAll() end
 ---@return WaxHighlightLook
 function Highlight:Look(options) end
 
----Settings every outline shares: Fill is how strongly a filled model is tinted (0 to 1), Width the line width (1 to 4).
----@param options { Fill?: number, Width?: number }
----@return { Fill: number, Width: number }
+---Settings every outline shares: Fill is how strongly a filled model is tinted (0 to 1), Width the line width (1 to 4),
+---Range how far away an outlined thing can be and still show, in metres (1 to 5000; the game's own 14 until set, and false goes back to it).
+---Tags made with a mark show exactly as far.
+---@param options { Fill?: number, Width?: number, Range?: number|false }
+---@return { Fill: number, Width: number, Range: number }
 function Highlight:Configure(options) end
+
+---How far away an outlined thing can be and still show, in metres: what Configure set, else the game's own 14.
+---@return number
+function Highlight:GetRange() end
 
 ---@alias WaxGameMember
 ---| "World"
@@ -363,6 +371,7 @@ function Highlight:Configure(options) end
 ---| "Data"
 ---| "MapChanged"
 ---| "IsHost"
+---| "Mode"
 ---| "Me"
 ---| "Items"
 ---| "Time"
@@ -381,6 +390,7 @@ function Highlight:Configure(options) end
 ---@field Viewport IcarusGameViewportClient The game viewport.
 ---@field MapName string? The name of the current world.
 ---@field InProspect boolean True while you are in a prospect.
+---@field Mode WaxMode How this copy of the game runs: a dedicated server, a host, a client or alone, and whether it has a screen.
 ---@field IsHost boolean True when this game runs the session's rules: you play alone or you are the host. False when you are a client in someone else's game, and while there is no world.
 ---@field Players WaxPlayers
 ---@field Creatures WaxCreatures
@@ -393,6 +403,7 @@ function Highlight:Configure(options) end
 ---@field Frame WaxFrameSignal Fires once every frame with the seconds since the frame before. For work that has to run every frame.
 ---@field Me WaxMe The local player's character, whichever one that is: its fields and functions, and signals for its health, food, level and the like. It is there with no character too, and says so.
 ---@field Items WaxItems The kinds of item the game has, and the facts of each: its shown name, weight, stack size, durability and picture.
+---@field Containers WaxContainers The structures around the player that hold items, nearest first, and what each one takes.
 ---@field Recipes WaxRecipes The game's crafting recipes: finding them, and changing what they take, what they give, how long they take and where they are made.
 ---@field Assets WaxAssets The game's assets by path, pictures from a mod's own files, materials made from the game's, and shapes made of numbers, each kept in memory for the mod that asked.
 ---@field Blueprints WaxBlueprints Things described in Lua and spawned: an actor of a class the game has, with parts, assets and functions of your own. The game does not save them.

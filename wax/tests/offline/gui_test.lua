@@ -1970,7 +1970,7 @@ t.test("a mod's named key runs on its key, can be changed by the player, and a c
     local opened, lit = 0, 0
     local open, light
     scope.run(codex.scope, function() open = ui.Bind("Open", "F10", function() opened = opened + 1 end, { label = "Open the panels" }) end)
-    scope.run(lamp.scope, function() light = ui.Bind("Light", "L", function() lit = lit + 1 end) end)
+    scope.run(lamp.scope, function() light = ui.Bind("Light", "N", function() lit = lit + 1 end) end)
     t.eq(open:Get(), "F10")
     press("F10")
     frames(1)
@@ -1981,6 +1981,11 @@ t.test("a mod's named key runs on its key, can be changed by the player, and a c
     t.eq(list[1].Key, "F10")
     t.eq(#ui.Keys.Binds(), 2)
     t.eq(#ui.Keys.Clashes(), 0)
+    -- a key the game acts on is a clash of its own, a plain key only
+    t.eq(ui.Keys.GameKey("P"), "Tech tree")
+    t.eq(ui.Keys.GameKey("Ctrl+P"), nil)
+    t.eq(ui.Keys.GameKey("N"), nil)
+    t.ok(ui.Keys.Clashing()("Codex", "P"), "a game key clashes whoever holds it")
     t.raises(function() scope.run(codex.scope, function() ui.Bind("Open", "F9", function() end) end) end, "already has a key named 'Open'")
     -- the same key as another mod's is taken, and both sides are told
     t.eq(ui.Keys.SetBind("Lamp", "Light", "F10"), true)
@@ -2026,7 +2031,7 @@ t.test("a key is chosen for an owner with ui.Keys.Set: one that is taken is give
     scope.run(garage.scope, function() garage_window = ui.Window({ title = "Garage" }) end)
     scope.run(radar.scope, function()
         radar_window = ui.Window({ title = "Radar", key = "K" })
-        ui.Hotkey("J", function() end)
+        ui.Hotkey("V", function() end)
     end)
     t.eq(ui.Keys.Get("Garage"), "F6", "the default it was given is remembered")
     local told = {}
@@ -2043,7 +2048,7 @@ t.test("a key is chosen for an owner with ui.Keys.Set: one that is taken is give
     t.ok(ui.Keys.Clashes("Garage")[1]:find("K is also used by Radar", 1, true), ui.Keys.Clashes("Garage")[1])
     ok, who = ui.Keys.Set("Garage", "F8")
     t.eq(who, "Wax")
-    ok, who = ui.Keys.Set("Garage", "J")
+    ok, who = ui.Keys.Set("Garage", "V")
     t.eq(who, "Radar", "a key another mod uses as a hotkey is named too")
     t.eq(ui.Keys.Set("Garage", "F6"), true)
     t.eq(#ui.Keys.Clashes(), 0)
@@ -4078,6 +4083,62 @@ t.test("ui.IsKeyDown says whether a key is held, counts Ctrl, Shift and Alt exac
     t.raises(function() ui.IsKeyDown(ui, "A") end, "key name")
     t.raises(function() ui.IsKeyDown("Meta+A") end, "key name")
     fake.react.IsInputKeyDown = nil
+    Wax.game = nil
+end)
+
+t.test("a tag shrinks and fades with distance, hides past its range, and can follow the outline's range", function()
+    local tags = Wax.import("gui.tags")
+    local factor, alpha = tags.look(0, 100)
+    t.eq(factor, 1)
+    t.eq(alpha, 1)
+    factor, alpha = tags.look(100, 100)
+    t.ok(math.abs(factor - 0.6) < 0.001, "smallest at the edge")
+    t.eq(alpha, 0, "gone at the edge")
+    factor, alpha = tags.look(90, 100)
+    t.ok(math.abs(alpha - 0.5) < 0.001, "half way through the fade")
+    Wax.game = { LocalPlayer = { Raw = fake.new_object("PlayerController") } }
+    fake.react.GetCameraLocation = function() return { X = 0, Y = 0, Z = 0 } end
+    fake.react.ProjectWorldLocationToScreen = function(_, _, out) out.X, out.Y = 400, 300 return true end
+    local host = scope.new("tags")
+    local near, far, off, plain, outlined
+    scope.run(host, function()
+        near = ui.Tag({ X = 500, Y = 0, Z = 0 }, { text = "Near" })
+        far = ui.Tag({ X = 9500, Y = 0, Z = 0 }, { text = "Far" })
+        off = ui.Tag({ X = 12000, Y = 0, Z = 0 }, { text = "Off" })
+        plain = ui.Tag({ X = 9500, Y = 0, Z = 0 }, { text = "Plain", fade = false })
+        outlined = ui.Tag({ X = 1000, Y = 0, Z = 0 }, { text = "Outlined", outline = true })
+    end)
+    t.eq(tags.count(), 5)
+    frames(12)
+    t.eq(near.shown, true)
+    t.ok(math.abs(near.factor - 0.98) < 0.001)
+    t.eq(near.alpha, 1)
+    t.eq(far.shown, true)
+    t.ok(far.put < outlined.put and outlined.put < near.put, "piled up, nearest lowest")
+    t.ok(math.abs(far.factor - 0.62) < 0.001, "a tag at 95 of 100 metres is small")
+    t.ok(math.abs(far.alpha - 0.25) < 0.001, "and faint")
+    t.ok(fake.count(far.box, "SetRenderOpacity") >= 1, "the opacity was written to the box")
+    t.eq(off.shown, false, "past its range")
+    t.eq(plain.factor, 1, "fade = false keeps the size")
+    t.eq(plain.alpha, 1)
+    t.eq(outlined.shown, true, "10 metres is inside the game's own 14")
+    t.eq(outlined:GetRange(), 14)
+    Wax.modules["world.highlight"] = { range = function() return 8 end }
+    frames(12)
+    t.eq(outlined.shown, false, "the outline's range shrank, so the tag went")
+    t.eq(outlined:GetRange(), 8)
+    outlined:SetRange(50)
+    frames(12)
+    t.eq(outlined.shown, true, "a range of its own again")
+    outlined:SetRange("outline")
+    frames(12)
+    t.eq(outlined.shown, false)
+    t.raises(function() outlined:SetRange("far") end, "number of metres")
+    t.raises(function() ui.Tag({ X = 0, Y = 0, Z = 0 }, { within = "far" }) end, "within is a number")
+    Wax.modules["world.highlight"] = nil
+    host:destroy()
+    t.eq(tags.count(), 0)
+    fake.react.GetCameraLocation, fake.react.ProjectWorldLocationToScreen = nil, nil
     Wax.game = nil
 end)
 

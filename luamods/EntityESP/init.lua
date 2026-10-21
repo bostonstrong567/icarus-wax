@@ -10,7 +10,7 @@ local function save() storage.Save("settings", settings) end
 
 local creature_look = game.Highlight:Look({ Color = settings.color, Fill = settings.fill, FillColor = settings.fill_color })
 local player_look = game.Highlight:Look({ Color = settings.player_color, Fill = settings.fill })
-game.Highlight:Configure({ Fill = settings.strength, Width = settings.width })
+game.Highlight:Configure({ Fill = settings.strength, Width = settings.width, Range = settings.range })
 
 local shown = {}        -- creature -> { mark, tag }
 local watching = {}     -- kind -> the watch that outlines it
@@ -264,8 +264,9 @@ tag_toggle("Name", "names")
 tag_toggle("Level", "level")
 tag_toggle("Health", "health")
 tag_toggle("Distance", "distance")
-tags_section:Slider("Show tags within (metres)", { min = 20, max = 400, value = settings.range, step = 10 }, function(value)
+tags_section:Slider("Show within (metres)", { min = 20, max = 400, value = settings.range, step = 10 }, function(value)
     settings.range = value
+    game.Highlight:Configure({ Range = value })
     for _, entry in pairs(shown) do
         if entry.tag then entry.tag:SetRange(value) end
     end

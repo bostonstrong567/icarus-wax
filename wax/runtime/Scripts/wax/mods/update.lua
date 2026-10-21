@@ -10,7 +10,9 @@ local json = Wax.import("data.json")
 local task = sched.task
 local update = {}
 
-local FIRST_SECONDS, EVERY_SECONDS, GAP_SECONDS = 20, 6 * 3600, 60
+local FIRST_SECONDS, GAP_SECONDS = 20, 60
+local EVERY_SECONDS, SERVER_EVERY_SECONDS = 6 * 3600, 10 * 60     -- a dedicated server has nobody to press "Check now"
+local LEAST_EVERY_SECONDS = 60
 local POLL_FRAMES = 30                      -- how often the answer to a request is looked for
 local MAX_FILES, MAX_BYTES = 500, 20 * 1024 * 1024
 local MAX_OUTPUT, MAX_FULL_PATH = 220, 255
@@ -25,8 +27,18 @@ update.loadlib = package.loadlib            -- replaced in tests
 update.time = os.time                       -- replaced in tests
 update.Changed = sched.Signal.new("update") -- fired whenever update.state() would answer differently
 
--- look: whether the catalogue is asked at all. mods: id -> that mod's own Auto Update switch. auto: what a mod without one gets
-local settings = { look = true, auto = true, last = 0, mods = {} }
+-- look: whether the catalogue is asked at all. mods: id -> that mod's own Auto Update switch. auto: what a mod without one gets.
+-- every: seconds between two looks; nil means the default for this kind of game
+local settings = { look = true, auto = true, last = 0, mods = {}, every = nil }
+
+-- Seconds between two looks at the catalogue: the setting, else ten minutes on a dedicated server and six hours in a game.
+local function every_seconds()
+    local wanted = tonumber(settings.every)
+    if wanted and wanted >= LEAST_EVERY_SECONDS then return wanted end
+    local mode = Wax.mode
+    if type(mode) == "table" and mode.IsServer then return SERVER_EVERY_SECONDS end
+    return EVERY_SECONDS
+end
 local available, queued, queue = {}, {}, {}
 local origins, roster = {}, nil             -- id -> the version its wax.origin gives, and the mods that were looked at for it
 local checking, problem, wanted, asked_at = false, nil, false, nil
@@ -591,7 +603,7 @@ local function loop()
         if present() ~= roster then scan() end
         local now = sched.clock()
         if settings.look and (wanted or now >= due) then
-            wanted, due, asked_at = false, now + EVERY_SECONDS, now
+            wanted, due, asked_at = false, now + every_seconds(), now
             look()
         end
         while settings.look and queue[1] and not dead do install(table.remove(queue, 1)) end
@@ -605,7 +617,16 @@ function update.state()
     for id in pairs(queued) do busy[id] = true end
     for id, version in pairs(origins) do mods[id] = { version = version, auto = auto_for(id) } end
     return { available = found, installing = busy, mods = mods, checking = checking, last = settings.last, look = settings.look,
-        auto = settings.auto, problem = problem, stopped = dead }
+        auto = settings.auto, every = every_seconds(), problem = problem, stopped = dead }
+end
+
+-- Seconds between two looks at the catalogue, at least a minute. nil goes back to the default for this kind of game.
+function update.set_every(seconds)
+    local asked = tonumber(seconds)
+    settings.every = asked and math.max(LEAST_EVERY_SECONDS, math.floor(asked)) or nil
+    storage.save("wax", "updates", settings)
+    changed()
+    return every_seconds()
 end
 
 -- Whether the catalogue is asked at all, for mods and for Wax itself. Switched off, no request is made and the helper is not loaded.
@@ -656,6 +677,7 @@ function update.start()
     settings.look = settings.look ~= false
     settings.auto = settings.auto ~= false
     settings.last = tonumber(settings.last) or 0
+    settings.every = tonumber(settings.every)
     local switches = {}
     for id, on in pairs(type(settings.mods) == "table" and settings.mods or {}) do
         if type(id) == "string" and type(on) == "boolean" then switches[id] = on end

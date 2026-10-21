@@ -50,6 +50,78 @@ function Items:Get(item) end
 ---@return boolean
 function Items:Has(name) end
 
+---A station a pull or a stash can fill, as game.Items:Share reads it.
+---@class WaxShareStation
+---@field stacks WaxItemStack[] What its input inventory holds, as List gives it.
+---@field size integer How many slots it has.
+---@field used integer How many of them hold something.
+---@field accepts? fun(item: string): boolean Nil takes every item.
+
+---Deals `total` of an item out over the stations of one kind, as evenly as their room allows, so they all work at once:
+---each gets up to the share that brings it level with the others, one that already holds more than its share gets
+---nothing until the rest catch up, and what the even split leaves over goes to the first (the nearest, when the list is
+---nearest first). Pure sums: nothing is moved. The stack size comes from Get.
+---@param total integer How many there are to deal out.
+---@param item string|WaxItemStack
+---@param stations WaxShareStation[]
+---@return table<integer, integer> given How many each station gets, by its index in the list; stations that get nothing are left out.
+---@return integer left What no station had room for.
+function Items:Share(total, item, stations) end
+
+---A structure near the player that holds items, as game.Containers:Nearby gives it.
+---@class WaxNearbyContainer
+---@field Row string Its item in D_ItemsStatic, such as "Kit_Stone_Furnace" or "Storage_Metal_Cupboard".
+---@field Name string The name the game shows for it.
+---@field Kind "storage"|"station"|"cargo" A station has an input inventory a processor works from; a cargo animal is a tamed creature with a cargo inventory (its Row is "cargo:<set-up row>", its Name "Cargo: <kind>"); everything else is storage.
+---@field Distance number Metres from the player.
+---@field Actor WaxInstance The structure itself.
+---@field Inventories WaxInventory[] Its inventories that take items: not the fuel slot, not a remove-only or client-side one.
+---@field Fuel WaxInventory[] Its fuel inventories.
+---@field Inputs WaxInventory? A station's input inventory.
+---@field Accepts fun(self: WaxNearbyContainer, item: string|WaxItemStack): boolean True when a stash or a pull of the item may go into it: for a station, when one of the recipes of its recipe set takes the item; for storage, when it has an inventory that takes items.
+---@field OwnedBy fun(self: WaxNearbyContainer, state: any): boolean For a cargo animal, true when it belongs to the player whose PlayerState is given (the game's own IsMountOwner); true for every structure.
+
+---@class WaxContainerKind
+---@field Row string
+---@field Name string
+---@field Kind "storage"|"station"|"cargo"
+---@field Count integer How many of the kind are in range.
+
+---@class WaxNearbyOptions
+---@field kind? "storage"|"station"|"cargo" Only structures of that kind.
+---@field holding? boolean Only structures with something in them.
+
+---The structures around the player that hold items: chests, cupboards, pouches, benches, furnaces and the like, kept
+---by a list that follows the world (nothing is looked for until the first call, and after it a structure joins the
+---moment it appears and leaves when it goes).
+---@class WaxContainers
+---@field Changed WaxSignal<fun()> Fires when a structure appeared or went away, and once on a map change.
+local Containers = {}
+
+---The structures within `range` metres that can hold items, nearest first.
+---@param range? number Metres. 30 when omitted.
+---@param options? WaxNearbyOptions
+---@return WaxNearbyContainer[]
+function Containers:Nearby(range, options) end
+
+---The kinds of structure in range and how many of each, by name.
+---@param range? number
+---@param options? WaxNearbyOptions
+---@return WaxContainerKind[]
+function Containers:Kinds(range, options) end
+
+---What a station of this item row can process: every input of the recipes in its recipe set, as { [name in lower case]
+---= the game's spelling }, read from D_ItemsStatic, D_Processing and D_ProcessorRecipes once a set. The first read of
+---the recipes pauses the task it is in; outside a task it answers nil and "reading" until a task has read them.
+---@param row string A structure's item row, such as "Kit_Stone_Furnace".
+---@return table<string, string>? accepted Nil for a structure that is no station, or while the recipes are still being read.
+---@return string? why "not a station" or "reading"; the recipe set's name when the first value is given.
+function Containers:Accepted(row) end
+
+---How many structures that hold items the list knows of, in the whole world.
+---@return integer
+function Containers:Count() end
+
 ---The name of every item, spelled and ordered as the game has them.
 ---@return string[]
 function Items:GetNames() end
@@ -155,6 +227,32 @@ function Inventory:Take(item, count) end
 ---@return integer size How many it has now.
 ---@return string? why Why not what was asked, in plain words: "slot 31 holds something, so 31 slots stay".
 function Inventory:Resize(slots) end
+
+---Every stack of an item in this inventory goes into another, by the game's own "transfer all of a type": the call its
+---own Transfer Like button makes, so it works in someone else's session as well. The stacks there are topped up first,
+---then free slots are filled. Inside a task it waits for the game, up to 2.5 seconds, and answers how many went; outside
+---a task it answers nil and "asked" at once.
+---@param item string|WaxItemStack|WaxItemFacts
+---@param target Inventory|WaxInventory The inventory it goes into.
+---@return integer? moved How many went. 0 when nothing did.
+---@return string? why "asked" outside a task, else why nothing went.
+function Inventory:Push(item, target) end
+
+---The same the other way: every stack of the item in `source` comes into this inventory.
+---@param item string|WaxItemStack|WaxItemFacts
+---@param source Inventory|WaxInventory
+---@return integer? moved
+---@return string? why
+function Inventory:Pull(item, source) end
+
+---Some of one stack to another inventory, by the game's own "shift": onto a stack of the same item there with room,
+---else into an empty slot. Inside a task it waits for the game and answers how many went; outside a task nil and "asked".
+---@param slot integer The slot of this inventory the stack is in, counted from 1.
+---@param target Inventory|WaxInventory
+---@param amount? integer How many of the stack. The whole stack when omitted. More than the room there is cut down.
+---@return integer? moved
+---@return string? why
+function Inventory:Move(slot, target, amount) end
 
 ---What Wax adds to a player's character for the things it carries: every Instance whose class is IcarusPlayerCharacter or
 ---is built on it, and game.Me. Each inventory is an Instance of the game's Inventory with what WaxInventory lists, and is

@@ -4,8 +4,8 @@ local Wax = ...
 
 local boot = {}
 
--- off until one start of the game with handles has been watched
-boot.HANDLES = false
+-- the engine's own "is it still there" answer for every Instance; on since 2026-10-21 after two crashes on freed widgets
+boot.HANDLES = true
 
 function boot.start()
     local log = Wax.import("core.log")
@@ -71,6 +71,12 @@ function boot.start()
             core_log:error("handles failed to start: %s", tostring(handle_err))
         end
         mods.provide("game", game.root)
+        -- a dedicated server has no screen: what draws is not started further down
+        local mode_ok, mode_err = xpcall(function() Wax.mode = Wax.import("engine.mode").start() end, debug.traceback)
+        if not mode_ok then
+            Wax.mode = nil
+            core_log:error("the kind of game could not be read: %s", tostring(mode_err))
+        end
         local needs_ok, needs_err = xpcall(function()
             Wax.needs = Wax.import("engine.needs")
             Wax.needs.start()
@@ -118,6 +124,8 @@ function boot.start()
         if not session_ok then core_log:error("game.Time, game.Weather and game.Prospect failed to start: %s", tostring(session_err)) end
         local items_ok, items_err = xpcall(function() Wax.import("world.items").start() end, debug.traceback)
         if not items_ok then core_log:error("game.Items failed to start: %s", tostring(items_err)) end
+        local containers_ok, containers_err = xpcall(function() Wax.import("world.containers").start() end, debug.traceback)
+        if not containers_ok then core_log:error("game.Containers failed to start: %s", tostring(containers_err)) end
         local creature_ok, creature_err = xpcall(function() Wax.import("world.creature").start() end, debug.traceback)
         if not creature_ok then core_log:error("the creature fields failed to start: %s", tostring(creature_err)) end
         local models_ok, models_err = xpcall(function() Wax.import("world.creature_models").start() end, debug.traceback)
@@ -179,13 +187,27 @@ function boot.start()
         Wax.selfupdate = nil
         core_log:error("the Wax updater failed to start: %s", tostring(self_err))
     end
+    local required_ok, required_err = xpcall(function()
+        Wax.required = Wax.import("mods.required")
+        Wax.required.start()
+    end, debug.traceback)
+    if not required_ok then
+        Wax.required = nil
+        core_log:error("required mods failed to start: %s", tostring(required_err))
+    end
 
     local ui = nil
-    local gui_ok, gui_err = xpcall(function()
-        ui = Wax.import("gui.init")
-        ui.start()
-    end, debug.traceback)
-    if gui_ok then
+    local has_screen = not Wax.mode or Wax.mode.HasScreen
+    local gui_ok, gui_err = false, nil
+    if has_screen then
+        gui_ok, gui_err = xpcall(function()
+            ui = Wax.import("gui.init")
+            ui.start()
+        end, debug.traceback)
+    end
+    if not has_screen then
+        core_log:info("no screen, so the interface is not started: this is a dedicated server")
+    elseif gui_ok then
         Wax.ui = ui
         mods.provide("ui", ui)
         local panel_ok, panel_err = xpcall(function()

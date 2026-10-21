@@ -27,7 +27,7 @@ Wax is for ICARUS on Steam, on Windows.
 
 ## Get Wax
 
-The extension needs Wax in your game. The latest release has the full zip (`Wax-0.3.15.zip`), a manual zip, and Wax Setup.
+The extension needs Wax in your game. The latest release has the full zip (`Wax-0.3.16.zip`), a manual zip, and Wax Setup.
 
 1. Open the [install page](https://wax-icarus.duckdns.org/docs/install/) and download the zip from the
    latest release.

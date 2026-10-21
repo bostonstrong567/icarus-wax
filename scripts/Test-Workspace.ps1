@@ -174,6 +174,7 @@ else {
         'watch'  = @('wax\tests\offline\watch_test.lua')
         'hooks'  = @('wax\tests\offline\hooks_test.lua')
         'handle' = @('wax\tests\offline\handle_test.lua')
+        'mode'   = @('wax\tests\offline\mode_test.lua')
         'character' = @('wax\tests\offline\character_test.lua')
         'stats'  = @('wax\tests\offline\stats_test.lua')
         'session' = @('wax\tests\offline\session_test.lua')
@@ -185,6 +186,7 @@ else {
         'blueprints' = @('wax\tests\offline\blueprints_test.lua')
         'content' = @('wax\tests\offline\content_test.lua', ($scratch -replace '\\', '/'))
         'browse' = @('wax\tests\offline\browse_test.lua')
+        'required' = @('wax\tests\offline\required_test.lua')
         'research' = @('wax\tests\offline\research_test.lua')
         'needs' = @('wax\tests\offline\needs_test.lua', ("$scratch\needs" -replace '\\', '/'))
         'explorer' = @('wax\tests\offline\explorer_test.lua')
@@ -221,6 +223,13 @@ else {
         'survival' = @('wax\tests\offline\survival_test.lua')
         'tames' = @('wax\tests\offline\tames_test.lua')
         'workshopprices' = @('wax\tests\offline\workshopprices_test.lua')
+        'quickstash' = @('wax\tests\offline\quickstash_test.lua')
+        'quickstash-pull' = @('wax\tests\offline\quickstash_pull_test.lua')
+        'quickstash-live' = @('wax\tests\offline\quickstash_live_test.lua')
+        'quickstash-nearby' = @('wax\tests\offline\quickstash_nearby_test.lua')
+        'share' = @('wax\tests\offline\share_test.lua')
+        'containers' = @('wax\tests\offline\containers_test.lua')
+        'gamebutton' = @('wax\tests\offline\gamebutton_test.lua')
         'mods'   = @('wax\tests\offline\mods_test.lua', ("$scratch\mods" -replace '\\', '/'))
         'held'   = @('wax\tests\offline\held_test.lua', ("$scratch\held" -replace '\\', '/'))
         'update' =@('wax\tests\offline\update_test.lua', ("$scratch\update" -replace '\\', '/'))
@@ -316,6 +325,21 @@ else {
         Report ok "extension tests: $passed passed"
     }
     $out | ForEach-Object { if ($_ -match '# SKIP (.+)$') { Report WARN "extension test skipped: $($Matches[1])" } }
+}
+
+Section 'Mod catalogue service'
+if (-not (Test-Path (Join-Path $Root 'wax\market\lib\app.mjs'))) { Report WARN 'wax\market not present' }
+elseif (-not (Get-Command node -ErrorAction SilentlyContinue)) { Report FAIL 'Node.js missing, cannot run the catalogue tests' }
+else {
+    Push-Location (Join-Path $Root 'wax\market')
+    try { $out = node --test --test-reporter=tap 'test/*.test.mjs' 2>&1 } finally { Pop-Location }
+    if ($LASTEXITCODE -ne 0) {
+        Report FAIL 'catalogue tests failed'
+        $out | Where-Object { $_ -match '^\s*not ok ' } | Select-Object -First 6 | ForEach-Object { Write-Host "         $_" }
+    } else {
+        $passed = "$($out | Where-Object { $_ -match '^# pass \d+' } | Select-Object -Last 1)" -replace '\D'
+        Report ok "catalogue tests: $passed passed"
+    }
 }
 
 Section 'Game class definitions'

@@ -601,6 +601,8 @@ function ui.GameScreen() end
 ---@field color? WaxColor|string
 ---@field size? number
 ---@field within? number Metres. Farther away than this the tag is not shown. Default 100.
+---@field outline? boolean True shows the tag exactly as far as game.Highlight draws outlines (game.Highlight:GetRange()), in place of `within`.
+---@field fade? boolean The tag gets smaller with distance and fades out over the last fifth of its range. True when omitted.
 ---@field lift? number How far above the thing's middle the tag sits, in centimetres. Worked out from the thing when omitted.
 
 ---A line of text that stays over something in the world.
@@ -616,9 +618,13 @@ function Tag:Set(text) end
 ---@param color WaxColor|string
 function Tag:SetColor(color) end
 
----Sets how near the thing has to be for the tag to show, in metres.
----@param metres number
+---Sets how near the thing has to be for the tag to show, in metres. "outline" makes it show as far as outlines do.
+---@param metres number|"outline"
 function Tag:SetRange(metres) end
+
+---How near the thing has to be for the tag to show, in metres.
+---@return number
+function Tag:GetRange() end
 
 ---Takes the tag off. Safe to call twice, and after the thing it was on is gone.
 function Tag:Remove() end
@@ -641,10 +647,57 @@ function ui.Notify(text, options) end
 ---@return WaxWindow[]
 function ui.Windows() end
 
+---@class WaxGameButtonRoom
+---@field box any A SizeBox of the row (one of the game's), such as the Type box beside Sort.
+---@field width number The width it gets instead of its own, in the game's units.
+
+---@class WaxGameButtonSpec
+---@field like any One of the game's own text buttons (a UMG_BasicButton_2_C, such as a Sort control's SortButton): its fill, font and colours are copied.
+---@field row any The HorizontalBox of the game's screen the button goes into, such as the row that holds Type and Sort.
+---@field caption string The words on it, such as "STASH". The game's font draws them in capitals.
+---@field width? number Its width in the game's units. 130 when omitted.
+---@field room? WaxGameButtonRoom[] Boxes of the row that give up width, so the row keeps its size.
+---@field grow? boolean True for a row of your own that may grow: the size check is skipped.
+
+---A button inside one of the game's own screens, built from the same parts as the game's buttons, with the game's fill,
+---font and colours. It can never widen the game's header: the row's size is read before and after, and when it would
+---change, everything is undone and an error says how much width the room entries still have to give up. The button is
+---removed when your mod unloads, and a mod that loads again first clears what an earlier life left behind.
+---@class WaxGameButton
+---@field Clicked WaxSignal<fun()> Fires on a click: the button pressed and released under the mouse.
+local GameButton = {}
+
+---Changes the words.
+---@param caption string
+function GameButton:SetCaption(caption) end
+
+---Takes it out of the game's screen and gives the room back.
+function GameButton:Remove() end
+
+---False once it was removed, or the game threw its screen away.
+---@return boolean
+function GameButton:Exists() end
+
+---A button inside one of the game's own screens, in the game's style. Find the screen's parts from the player's
+---`UserInterface.Menus`; the inventory card's Sort control is `UMG_MainInventory.UMG_Sort`, whose SortButton is the model
+---and whose row holds the Type box and Sort.
+---@param spec WaxGameButtonSpec
+---@param on_click? fun() Runs on a click, as a task.
+---@return WaxGameButton
+function ui.GameButton(spec, on_click) end
+
 ---@class WaxHotkeyOptions : WaxOptions
 ---@field in_menu? boolean Also reacts while the menu is open (off by default, so that typing in a box does not trigger it).
 ---@field typing? boolean Also reacts while a text box has the keyboard (for a key meant for the box, such as Tab).
 ---@field hover? boolean Makes it a key for the slot under the mouse: it only reacts while a slot is under it.
+
+---Greys a control that cannot work on this game and says why while the mouse rests on it: by default that the host or the
+---server has to run it. The control still takes clicks, so nothing is refused; what it does goes to the game, which answers.
+---Pair it with mod.Side: `if not mod.Side("host") then ui.NeedsHost(button) end`.
+---@param control WaxControl
+---@param text? string What the tip says instead.
+---@return WaxControl control The same control.
+function ui.NeedsHost(control, text) end
 
 ---A key that runs a function when it is pressed, as ui.Hotkey returns it.
 ---@class WaxHotkey

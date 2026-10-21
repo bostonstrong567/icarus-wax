@@ -31,7 +31,19 @@ local player_class = world.class("/Game/BP/BP_IcarusPlayerCharacterSurvival.BP_I
     { HighlightablePostProcess = "ObjectProperty" })
 local pass_class = world.class("/Script/Engine.PostProcessComponent", scene_class)
 world.static["/Script/Engine.Default__KismetMaterialLibrary"] = world.object("Default__KismetMaterialLibrary", {})
-local outline_material = world.object("PPI_OutlineColored", {})
+local outline_material = world.object("PPI_OutlineColored", { Distance = 1400 })
+
+-- A stand-in for the tag library: what game.Highlight asks of it, and nothing drawn.
+local made_tags = {}
+Wax.modules["gui.tags"] = {
+    create = function(target, options)
+        local tag = { Instance = target, options = options, text = options.text, removed = false }
+        function tag:Set(text) self.text = text end
+        function tag:Remove() self.removed = true end
+        made_tags[#made_tags + 1] = tag
+        return tag
+    end,
+}
 
 -- A player character carrying the game's outline pass. Returns the pawn and the slot the material sits in.
 local function player()
@@ -432,6 +444,51 @@ t.test("a new character gets the colours again, and the game's material comes ba
     frame()
     t.eq(new_slot.Object, outline_material)
     Highlight:Configure({ Fill = 0.25, Width = 1 })
+    world.possess(nil)
+    t.eq(errors(), 0)
+end)
+
+t.test("outlines reach as far as the game's material says until Range is set, and tags made with a mark follow", function()
+    local me, slot = player()
+    local wolf, _, mesh = creature(wolf_class, "Conifer_Wolf", { 0, 0, 0 })
+    frame()
+    t.eq(Highlight:GetRange(), 14, "the game's own 1400 units")
+    local mark = Highlight:Add(instance.wrap(wolf), { Color = "Green", Tag = "Wolf" })
+    frame()
+    local copy = slot.Object
+    t.ok(copy ~= outline_material)
+    t.eq(copy.Distance, 1400, "the copy keeps the game's reach until asked otherwise")
+    t.eq(#made_tags, 1)
+    t.eq(mark.Tag, made_tags[1])
+    t.eq(mark.Tag.options.outline, true, "a tag with no within of its own shows as far as the outline")
+    t.eq(mark.Tag.options.text, "Wolf")
+    t.eq(Highlight:Configure({ Range = 120 }).Range, 120)
+    t.eq(copy.Distance, 12000)
+    t.eq(Highlight:Configure({ Range = 99999 }).Range, 5000, "clamped")
+    t.eq(Highlight:Configure({ Range = false }).Range, 14, "back to the game's own")
+    t.eq(copy.Distance, 1400)
+    t.raises(function() Highlight:Configure({ Range = "far" }) end, "Range is a number")
+    mark:Set({ Tag = "Wolf  Lv 3" })
+    t.eq(#made_tags, 1, "a new text goes on the same tag")
+    t.eq(mark.Tag.text, "Wolf  Lv 3")
+    mark:Set({ Tag = { text = "Wolf", within = 300 } })
+    t.eq(#made_tags, 2, "a table of options makes the tag again")
+    t.eq(made_tags[1].removed, true)
+    t.eq(made_tags[2].options.outline, nil, "an explicit within is kept as it is")
+    t.eq(made_tags[2].options.within, 300)
+    mark:Set({ Tag = false })
+    t.eq(mark.Tag, nil)
+    t.eq(made_tags[2].removed, true)
+    t.raises(function() Highlight:Add(instance.wrap(wolf), { Tag = true }) end, "Tag is the text of a tag")
+    local tagged = Highlight:Add(instance.wrap(wolf), { Tag = { text = "Again", color = "Red" } })
+    t.eq(made_tags[3].options.color, "Red")
+    tagged:Remove()
+    t.eq(made_tags[3].removed, true, "the tag goes with the mark")
+    t.eq(tagged.Tag, nil)
+    Highlight:Clear()
+    frame()
+    t.eq(slot.Object, outline_material)
+    t.eq(mesh.CustomDepthStencilValue, 1)
     world.possess(nil)
     t.eq(errors(), 0)
 end)
