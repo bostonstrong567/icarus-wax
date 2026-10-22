@@ -52,6 +52,10 @@ end
 
 local function screen_there(handle)
     if handle == nil then return false end
+    if handle.watch_button ~= nil then
+        local ok, there = pcall(function() return handle.watch_button:Get():GetAddress() ~= 0 end)
+        if not (ok and there == true) then return false end
+    end
     if handle.watch == nil then return true end
     local ok, there = pcall(function() return handle.watch:Get():GetAddress() ~= 0 end)
     return ok and there == true
@@ -180,7 +184,9 @@ function M.create(spec, on_click)
 
     for _, entry in ipairs(handle.room) do entry.box:SetWidthOverride(entry.width) end
     copy_slot(outer_model, row:AddChildToHorizontalBox(outer))
-    handle.box, handle.button, handle.text = outer, press, text
+    handle.box, handle.button, handle.text, handle.fit = outer, press, text, fit
+    -- the button itself is watched too: a caller that forgets to Remove a button of a frame it threw away must not crash
+    handle.watch_button = weak_of(press)
 
     local after_w, after_h = size_of(row)
     if not spec.grow and before_w and after_w and (before_w ~= after_w or before_h ~= after_h) then
@@ -214,17 +220,28 @@ function M.create(spec, on_click)
 end
 
 -- A click is the button going down and coming up again under the mouse; the words turn dark under it as the game's do.
-local function step()
+local function drop(handle)
     for index = #live, 1, -1 do
-        local handle = live[index]
+        if live[index] == handle then table.remove(live, index) end
+    end
+end
+
+local function step()
+    -- a click's handler may remove buttons from the list, so the walk is over a copy
+    local walk = {}
+    for index = 1, #live do walk[index] = live[index] end
+    for index = #walk, 1, -1 do
+        local handle = walk[index]
         -- a closed screen is freed at the next collection: never touch its button again
         local ok, down, over = false, false, false
-        if screen_there(handle) then
+        if handle and handle.alive and screen_there(handle) then
             ok, down, over = pcall(function() return handle.button:IsPressed(), handle.button:IsHovered() end)
         end
         if not ok then
-            if handle then handle.alive = false end
-            table.remove(live, index)
+            if handle then
+                handle.alive = false
+                drop(handle)
+            end
         else
             if over ~= handle.over then
                 handle.over = over
